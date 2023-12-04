@@ -40,12 +40,12 @@ margin-top: -63px;"alt="bottomTree">
     <div style="float:left;padding-left: 20px;width: 25%;word-wrap: break-word;" class="footer-content-left">
       <p>
         <br>
-        Privacy Policy and TOS: <a href="https://jojoyou.org/legal/" target="_blank" style="text-decoration:none;color:#34A8AC;">Legal</a>
+        Privacy Policy and TOS: <a href="https://jojoyou.org/legal/" target="_blank" style="text-decoration:none;color:var(--linkColor);">Legal</a>
           <br>
-          Source code: <a href="https://codeberg.org/JojoYou/PriEco/src/branch/master" target="_blank" style="text-decoration:none;color:#34A8AC;">CodeBerg</a>
+          Source code: <a href="https://codeberg.org/JojoYou/PriEco/src/branch/master" target="_blank" style="text-decoration:none;color:var(--linkColor);">CodeBerg</a>
           <br>
           
-          Tor onion domain: <a href="http://priecovk7jsuh3tvkh62c6j4oep3l5bldigpzmay26rdpqz357t5dmad.onion/" target="_blank" style="text-decoration:none;color:#34A8AC;">Onion</a>
+          Tor onion domain: <a href="http://priecovk7jsuh3tvkh62c6j4oep3l5bldigpzmay26rdpqz357t5dmad.onion/" target="_blank" style="text-decoration:none;color:var(--linkColor);">Onion</a>
           <br><br>
         </p>
     </div>
