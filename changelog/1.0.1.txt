@@ -1,0 +1,37 @@
+Fixes:
+	Results from Bing
+
+New:
+	Shopping tab
+	Added changelog
+
+Speed:
+	image proxy with compression of images. Used for news
+
+Security:
+	Added Onion version
+	Added HSTS
+	Added DNSSEC
+
+Design:
+	Redesigned landing page
+	Darker dark results background
+	Different font style
+	YouTube, news and products:
+		Decreased size in web results.
+		Added redirect for more button
+	Summary:
+		changed icon
+		replaced animation
+		hide when "widgets" are off
+		made icon 0.5 opacity
+		added more data:
+			Images
+			IP
+			loading time
+			SSL
+	Wikipedia's signature brightness filter for dark mode
+	Footer version updated
+
+Crawler:
+	fixed issues

@@ -1,0 +1,11 @@
+/* TEAM */
+    Founder: Roman Lancos
+    Contact: jojoyou@jojoyou.org
+    From: Slovakia
+    
+/* THANKS */
+    Igor Lancos
+    Comment: Created first 3 PriEco's logos
+
+    xbdm 
+    Comment: Added docker support

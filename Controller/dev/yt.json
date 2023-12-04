@@ -1,0 +1,1712 @@
+{
+  "kind": "youtube#searchListResponse",
+  "etag": "Z93tqhFvCtOkdrRBCnTeyvGT25w",
+  "nextPageToken": "CDIQAA",
+  "regionCode": "BG",
+  "pageInfo": {
+    "totalResults": 1000000,
+    "resultsPerPage": 50
+  },
+  "items": [
+    {
+      "kind": "youtube#searchResult",
+      "etag": "fYjnvy56vDJokl53I4dxEDFE_0I",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "ELFqXML4w5g"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-27T13:36:35Z",
+        "channelId": "UCngIhBkikUe6e7tZTjpKK7Q",
+        "title": "Solana Price News Today - Elliott Wave Price Prediction &amp; Technical Analysis, Price Update!",
+        "description": "Solana Price News Today - Elliott Wave Price Prediction & Technical Analysis! In this video I talk about a technical analysis of the ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/ELFqXML4w5g/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/ELFqXML4w5g/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/ELFqXML4w5g/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "More Crypto Online",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-27T13:36:35Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "9w89qXShlE8X3fJRyeX5K2Z9ydM",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "-yNR61ISTd8"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-26T18:07:25Z",
+        "channelId": "UCngIhBkikUe6e7tZTjpKK7Q",
+        "title": "Solana Price News Today - Elliott Wave Price Prediction &amp; Technical Analysis, Price Update!",
+        "description": "Solana Price News Today - Elliott Wave Price Prediction & Technical Analysis! In this video I talk about a technical analysis of the ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/-yNR61ISTd8/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/-yNR61ISTd8/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/-yNR61ISTd8/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "More Crypto Online",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-26T18:07:25Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "KpgZ6B0y0HxDTsuY8qOahYxNJM8",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "mrWcxA8AS_I"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-27T01:58:20Z",
+        "channelId": "UCNiWWx4-m08k5-vYeCA4weQ",
+        "title": "Solana Attacked | Murdered &amp; Robbed BOTS 🚀 SOL to the MOON!",
+        "description": "solana #SOL #bots Videos: What It TAKES to be an Early Solana Validator   https://www.youtube.com/watch?v=_AdvuJ_0hEQ ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/mrWcxA8AS_I/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/mrWcxA8AS_I/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/mrWcxA8AS_I/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "CYBERENA Crypto",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-27T01:58:20Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "zR84bNtrVI5EQc9_ivxCM5LCvn4",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "m01JViMyjEE"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-18T15:15:12Z",
+        "channelId": "UCqK_GSMbpiV8spgD3ZGloSw",
+        "title": "Solana: Is SOL REALLY Worth It?! What You NEED To Know!",
+        "description": "Get The Hottest Crypto Deals http://www.coinbureau.com/deals Insider Info in my Socials ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/m01JViMyjEE/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/m01JViMyjEE/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/m01JViMyjEE/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Coin Bureau",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-18T15:15:12Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "y0P9QUHlTaEu-fdWBAPWpVvLwUE",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "1jzROE6EhxM"
+      },
+      "snippet": {
+        "publishedAt": "2021-09-13T18:33:37Z",
+        "channelId": "UCsYYksPHiGqXHPoHI-fm5sg",
+        "title": "What is Solana? SOL Explained with Animations",
+        "description": "Solana is a fast, cheap, and monstrous blockchain that's popped up lately. In this video, we talk about some technical stuff of ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/1jzROE6EhxM/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/1jzROE6EhxM/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/1jzROE6EhxM/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Whiteboard Crypto",
+        "liveBroadcastContent": "none",
+        "publishTime": "2021-09-13T18:33:37Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "fhn_8iJStQDpcZA__97iJ1L7t-8",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "yVVFYITnFag"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-26T12:51:13Z",
+        "channelId": "UCMItN7lN-cqZQBGmKrYUaXg",
+        "title": "Solana (SOL) Is It Over For Solana ??? Solana Price Prediction and Analysis",
+        "description": "Patreon ➔ https://www.patreon.com/CodexCrypto | Telegram ➔ https://t.me/Codex_Crypto | Email ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/yVVFYITnFag/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/yVVFYITnFag/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/yVVFYITnFag/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Codex Crypto",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-26T12:51:13Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "0tmQTmehnDNpPWBNwaLzUVEag6I",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "fkgizXg3oVQ"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-26T22:24:06Z",
+        "channelId": "UCccJ73p62TFlX1ImgWEdp4g",
+        "title": "🚨ESTO VA A SER MUY FUERTE ✅Análisis Criptomonedas (HOY) CARDANO | BITCOIN | ETHEREUM | SOLANA",
+        "description": "El PRECIO de BITCOIN y las CRIPTOMONEDAS pueden SUBIR! ¿El DINERO INTELIGENTE va a PROVOCAR una CÁIDA para ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/fkgizXg3oVQ/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/fkgizXg3oVQ/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/fkgizXg3oVQ/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Informe Crypto",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-26T22:24:06Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "b2xAYNpgwOYrcjUqZFFYDjtxWOI",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "ozu8GxxotMc"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-26T12:21:04Z",
+        "channelId": "UCngIhBkikUe6e7tZTjpKK7Q",
+        "title": "Solana Price News Today - Elliott Wave Price Prediction &amp; Technical Analysis, Price Update!",
+        "description": "Solana Price News Today - Elliott Wave Price Prediction & Technical Analysis! In this video I talk about a technical analysis of the ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/ozu8GxxotMc/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/ozu8GxxotMc/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/ozu8GxxotMc/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "More Crypto Online",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-26T12:21:04Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "pUmfvJSVvJ_lJhd486iv68J_-2k",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "86jht7szxgQ"
+      },
+      "snippet": {
+        "publishedAt": "2022-04-16T14:49:08Z",
+        "channelId": "UCqK_GSMbpiV8spgD3ZGloSw",
+        "title": "Solana: SOL Potential in 2022!? This You NEED To Know!! ☀️",
+        "description": "Insider Info in my Socials https://guy.coinbureau.com/socials/ Get The Hottest Crypto Deals ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/86jht7szxgQ/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/86jht7szxgQ/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/86jht7szxgQ/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Coin Bureau",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-04-16T14:49:08Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "7f_pvPVECZJoag62rSAaPu6YWuI",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "dDGarcu5er4"
+      },
+      "snippet": {
+        "publishedAt": "2022-06-24T22:51:36Z",
+        "channelId": "UCrM7B7SL_g1edFOnmj-SDKg",
+        "title": "Solana Unveils Web3 Mobile Phone",
+        "description": "Solana Labs Co-Founder Anatoly Yakovenko joins Emily Chang to discuss their announcement of a new Web3-focused Android ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/dDGarcu5er4/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/dDGarcu5er4/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/dDGarcu5er4/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Bloomberg Technology",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-06-24T22:51:36Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "g_PoIApDFdTPK_oKIvuUgwfi8oc",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "KB398OC2Ozo"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-24T17:20:01Z",
+        "channelId": "UCi7egjf0JDHuhznWugXq4hA",
+        "title": "The Solana Killers Have Arrived",
+        "description": "Protect your crypto assets by using Guardio (and get 50% off): https://guard.io/coinsider I recently discovered 2 projects that ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/KB398OC2Ozo/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/KB398OC2Ozo/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/KB398OC2Ozo/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Coinsider",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-24T17:20:01Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "v1-1KO-dU1JGNMn9ls3k0qZdYS8",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "_QUb8zdo3Xc"
+      },
+      "snippet": {
+        "publishedAt": "2022-06-11T15:46:11Z",
+        "channelId": "UCqK_GSMbpiV8spgD3ZGloSw",
+        "title": "Solana vs. Near: Which is BEST!? Complete Comparison!!",
+        "description": "Get The Hottest Crypto Deals https://guy.coinbureau.com/deals/ Insider Info in my Socials ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/_QUb8zdo3Xc/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/_QUb8zdo3Xc/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/_QUb8zdo3Xc/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Coin Bureau",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-06-11T15:46:11Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "EXAVv6eE8X_5yHPhM0c9BzfS1HU",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "Q5P0rT_vdp0"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-27T05:16:14Z",
+        "channelId": "UCRzdYjloQI7VJYax6GsX8ZQ",
+        "title": "🚨 Solana Fundamentals Update | Is Solana Truly Centralized? Future Of Solana Crypto",
+        "description": "Solana Fundamentals Update | Is Solana Truly Centralized? Future Of Solana Crypto My OFFICIAL Telegram: ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/Q5P0rT_vdp0/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/Q5P0rT_vdp0/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/Q5P0rT_vdp0/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Shivam Chhuneja",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-27T05:16:14Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "l6F7qAVy7jMvU8HDaFOirbR25oI",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "-4P3M5XJ-NY"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-26T19:53:51Z",
+        "channelId": "UCz28r8vkhJD9WhP5wmjefSw",
+        "title": "$9 Solana Is Programmed !!!",
+        "description": "Solana SOL Coin: $9 Solana Is Programmed !!! - Crypto Technical Analysis and Price Prediction #solana #sol #solusd #bitcoin ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/-4P3M5XJ-NY/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/-4P3M5XJ-NY/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/-4P3M5XJ-NY/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "CowboyTrades",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-26T19:53:51Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "pFRPuK-UwV1OxuDl497csTL6eBE",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "_yc-uepKysM"
+      },
+      "snippet": {
+        "publishedAt": "2021-11-01T08:17:32Z",
+        "channelId": "UCjFCzjkgSShdRZIVJx3SSlQ",
+        "title": "De ce nu am cumpărat Solana! Unde se îndreaptă?",
+        "description": "SCOALA DE ANTREPRENORIAT : https://www.notorius.ro 6 ebook-uri de educație financiară cu 40% reducere: ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/_yc-uepKysM/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/_yc-uepKysM/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/_yc-uepKysM/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Cristian Chifoi",
+        "liveBroadcastContent": "none",
+        "publishTime": "2021-11-01T08:17:32Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "fyPfJFcGDM30ii8awM9BE6KdDBQ",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "E3of55kqO8s"
+      },
+      "snippet": {
+        "publishedAt": "2022-06-21T21:30:00Z",
+        "channelId": "UCQglaVhGOBI0BR5S6IJnQPg",
+        "title": "SOLANA - THE NEXT TERRA LUNA? (DANGER BEWARE)",
+        "description": "Get up to $100 & Trade Crypto with zero fees on FTX. Use my referral code JUNG: https://ftx.us/partners/jung Join Our Crypto ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/E3of55kqO8s/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/E3of55kqO8s/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/E3of55kqO8s/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Brian Jung",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-06-21T21:30:00Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "EjKQfRb6TwOKnB5lRgj6FV4PJKQ",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "4UlNOR8x1Z0"
+      },
+      "snippet": {
+        "publishedAt": "2022-05-24T15:00:03Z",
+        "channelId": "UCi7egjf0JDHuhznWugXq4hA",
+        "title": "The Future of Solana $SOL",
+        "description": "2021 was undeniably the year of Solana… $SOL rocketed literally 100x from the beginning of the year to All Time Highs. But 2022 ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/4UlNOR8x1Z0/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/4UlNOR8x1Z0/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/4UlNOR8x1Z0/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Coinsider",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-05-24T15:00:03Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "8XmIVFIA5HOUXP7rPGrvqyC6pLU",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "MrvxoKCnLFw"
+      },
+      "snippet": {
+        "publishedAt": "2022-03-28T21:54:32Z",
+        "channelId": "UCxdWHEhEPiYhCADMrn4PdhQ",
+        "title": "Why You Need 83 Solana Today! | Solana (SOL) Staking and Price",
+        "description": "Whether you're asking \"What is Solana?\" or you're a holder of the SOL token, this full deep dive into Solana will try to answer all ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/MrvxoKCnLFw/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/MrvxoKCnLFw/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/MrvxoKCnLFw/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Fin Tek",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-03-28T21:54:32Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "YQ9OKO6ASOm6lEYdoLdVWNsgQOo",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "5LrS4fQsx84"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-26T18:04:58Z",
+        "channelId": "UCrOnXMyvzsmXFolJOZTh61g",
+        "title": "Solana Cryptocurrency: Solana&#39;s correction is LOOKING GOOD. Price Targets and AREAS to WATCH FOR!",
+        "description": "In this video, I determine if Solana is almost done with its correction and the price targets to watch out for. IMO, Solana's correction ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/5LrS4fQsx84/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/5LrS4fQsx84/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/5LrS4fQsx84/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": " Greg | Love it! Killit@Crypto ",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-26T18:04:58Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "LYi2nDfacCGe94shcoEougCYJFI",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "j3I9FaMk8oQ"
+      },
+      "snippet": {
+        "publishedAt": "2022-02-23T15:30:16Z",
+        "channelId": "UCi7egjf0JDHuhznWugXq4hA",
+        "title": "Why I Gave Up on Solana (It&#39;s Broken)",
+        "description": "Solana has been experiencing issue after issue in the past few months. I'm talking about long outages or severe network ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/j3I9FaMk8oQ/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/j3I9FaMk8oQ/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/j3I9FaMk8oQ/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Coinsider",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-02-23T15:30:16Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "KV7_8GqZD7EWIUdWUFo96cMusys",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "DotkdatXVtE"
+      },
+      "snippet": {
+        "publishedAt": "2022-07-09T10:58:00Z",
+        "channelId": "UCqk5lDhLwRE8Bzz-2d5_AIQ",
+        "title": "SAM BANKMAN-FRIED ... STILL BULLISH ON SOLANA! .... with RAUL PAL",
+        "description": "Recorded on July 5, 2022. Excerpt taken from REAL VISION CRYPTO interview. Check out the FULL EPISODE here: ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/DotkdatXVtE/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/DotkdatXVtE/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/DotkdatXVtE/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Mr Solana",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-07-09T10:58:00Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "JWRLn36H3idRm5_LcF8V0LlRfWE",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "Z2nRIq7V1KI"
+      },
+      "snippet": {
+        "publishedAt": "2022-06-05T14:52:32Z",
+        "channelId": "UCw5rpSpBwDr_yi-FCJY-ULA",
+        "title": "Vrátí se Solana na $200? 🛑 Moje pozice &amp; technická analýza",
+        "description": "Discord: https://discord.gg/AmFGKQKGPq Binance: https://www.binance.com/en/futures/ref/cryptochaser Postupovat na ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/Z2nRIq7V1KI/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/Z2nRIq7V1KI/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/Z2nRIq7V1KI/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Crypto Chaser",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-06-05T14:52:32Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "vlghoQqysObNyFgGxaqhqYBODys",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "v1WHk2P_6cU"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-04T11:05:00Z",
+        "channelId": "UCR93yACeNzxMSk6Y1cHM2pw",
+        "title": "Solana Wallet HACK: What We Know So Far!! 🤔",
+        "description": "Get The Hottest Crypto Deals https://www.coinbureau.com/deals Insider Info in Guy's Socials ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/v1WHk2P_6cU/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/v1WHk2P_6cU/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/v1WHk2P_6cU/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Coin Bureau Clips",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-04T11:05:00Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "8epEEVVUxnodLIzHxzY7-FEOh-o",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "SIBb2mSYDnE"
+      },
+      "snippet": {
+        "publishedAt": "2022-05-28T00:10:47Z",
+        "channelId": "UCNiWWx4-m08k5-vYeCA4weQ",
+        "title": "Solana Will 20x Next Bull Cycle | PT $500 to $1,000 in 18 months",
+        "description": "solana #sol #quic CYBERENA - Learn the Reality of 10x'ing Your Wealth in Relatively Short Term in Stocks & Crypto via ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/SIBb2mSYDnE/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/SIBb2mSYDnE/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/SIBb2mSYDnE/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "CYBERENA Crypto",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-05-28T00:10:47Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "6RwU-zSON8DaNAiLkm9KV-vnT-U",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "c9YCiThMKKI"
+      },
+      "snippet": {
+        "publishedAt": "2022-05-27T20:17:03Z",
+        "channelId": "UCH6KS5IiLfTyunVHPCDYT8Q",
+        "title": "Will I continue to DCA into Solana?",
+        "description": "CryptoDCA #DCAIntoCrypto #Solana Tradingview referral link $30 off: tradingview.com/?offer_id=10&aff_id=27663 FTX ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/c9YCiThMKKI/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/c9YCiThMKKI/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/c9YCiThMKKI/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "InvestAnswers Clips",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-05-27T20:17:03Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "c1eP4fcoZlcbjBPT0hNcAsIODA0",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "CJvvqi6khec"
+      },
+      "snippet": {
+        "publishedAt": "2022-06-04T18:50:34Z",
+        "channelId": "UCUr_YzOB7pp50F4r1KJ7Dag",
+        "title": "Why You Need 0.44 Bitcoin, 5 Ethereum, 4600 Cardano, Or 46 Solana!",
+        "description": "FTX App (code \"myff\"): https://link.blockfolio.com/9dzp/f7spnaax FTX US Exchange (Advanced): https://ftx.us/#a=17412649 Put ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/CJvvqi6khec/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/CJvvqi6khec/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/CJvvqi6khec/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "My Financial Friend",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-06-04T18:50:34Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "ROnm-eiaPknH5qOGJvtP7gK4WGU",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "8ggiwQUehq4"
+      },
+      "snippet": {
+        "publishedAt": "2022-07-16T01:57:39Z",
+        "channelId": "UCJWJCqZGhQzbWv72PQbgI5g",
+        "title": "Solana EXPLOSION Coming! ($110 Million Investment Made)",
+        "description": "Solana news has been super bullish! It may be the most undervalued crypto right now. We'll cover Solana News, Price and chart ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/8ggiwQUehq4/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/8ggiwQUehq4/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/8ggiwQUehq4/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Investing Nerd",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-07-16T01:57:39Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "m09yBSGTYV-YBX8kwtDgs9ZAKRE",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "jOcxGzxmwCE"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-11T22:56:20Z",
+        "channelId": "UCdGbXe7EKikvFUccJeB9-iQ",
+        "title": "Here&#39;s Why Solana Looks Poised for Its Biggest Move in Months | Prepare",
+        "description": "Here's Why Solana Looks Poised for Its Biggest Move in Months | Prepare ▻ Receive up to $4000 USD with Bybit: ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/jOcxGzxmwCE/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/jOcxGzxmwCE/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/jOcxGzxmwCE/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Justin Bennett",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-11T22:56:20Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "qWu_Sac--wAZF5YTbp9Bn6F9_Lo",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "w_se_Ot0JNg"
+      },
+      "snippet": {
+        "publishedAt": "2022-06-03T16:14:33Z",
+        "channelId": "UCEjgpiDPhTErrJm6zeNeAAw",
+        "title": "Is Solana Finally Dead?",
+        "description": "Solana has shut down multiple times over the past year. Is Solana finally dead? Have investors had enough? Will developers ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/w_se_Ot0JNg/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/w_se_Ot0JNg/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/w_se_Ot0JNg/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "The Bitcoin Express",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-06-03T16:14:33Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "CLRRSRF_U4UKyNTGkeGHCwHksEI",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "lD4Uq34L4Xs"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-24T14:58:35Z",
+        "channelId": "UCNc4FB7ylWM0LBx0rx8SyZA",
+        "title": "SOLANA: URGENT!! BREAKOUT IMMINENT?!?! (sol price prediction)",
+        "description": "FREE BONUS MONEY DOWN BELOW BitGet https://partner.bitget.com/bg/CryptoDubai UP TO *$4163 BONUS* ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/lD4Uq34L4Xs/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/lD4Uq34L4Xs/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/lD4Uq34L4Xs/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Crypto Dubai ",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-24T14:58:35Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "1XxODOfG4odMv-b9YvPSNFGP2Ak",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "fqoO_E5dgxM"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-26T19:00:28Z",
+        "channelId": "UCXpF7QiJoSANyg853iSYwjQ",
+        "title": "Solana apresenta TVL errado e cria um problemão",
+        "description": "O desenvolvedor Ian Macalinao fraudou o TVL dos seus protocolos Defi e consequentemente da Solana e hypou os preços.",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/fqoO_E5dgxM/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/fqoO_E5dgxM/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/fqoO_E5dgxM/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Mychel - Blue Consult",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-26T19:00:28Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "5P8iBa6ovDnWKF60Vb3gDsz8vUk",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "kfTUK9RxklM"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-27T05:00:14Z",
+        "channelId": "UCZMeRQyofiRmEtlE5CvLvfg",
+        "title": "Ethereum cancellerà Cardano e Solana? ed Altre News",
+        "description": "Ferie agostane quasi al termine, e dunque abbiamo davanti agli occhi il momento giusto per cominciare a fare considerazioni ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/kfTUK9RxklM/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/kfTUK9RxklM/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/kfTUK9RxklM/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Bitcoin & Crypto Strategy con Maury",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-27T05:00:14Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "lkWZMdwi1ZzI-daQvX1m42m8hWk",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "c185doREJUc"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-13T00:30:11Z",
+        "channelId": "UCUBwBSeW51ZflGMPE-2kjwA",
+        "title": "Solana Price Predictions 2023",
+        "description": "All Social Media Links & Promo Codes! https://linktr.ee/ryanmatta ✓ Binance US Best Kadena to buy Kadena ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/c185doREJUc/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/c185doREJUc/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/c185doREJUc/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Ryan Matta",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-13T00:30:11Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "h-uocHJMcAwlbVihdHMWl6m4Hp8",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "UQL3cdlL8gs"
+      },
+      "snippet": {
+        "publishedAt": "2022-07-14T20:10:00Z",
+        "channelId": "UC4VPa7EOvObpyCRI4YKRQRw",
+        "title": "Solana vs. Tesla: Better Investment? w/ @InvestAnswers",
+        "description": "On this episode, we're pitting two of James (InvestAnswers) favorite investment portfolio holds against each other: Solana (SOL) ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/UQL3cdlL8gs/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/UQL3cdlL8gs/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/UQL3cdlL8gs/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Paul Barron Network",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-07-14T20:10:00Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "yckcxEl3AHsotWSazIhbs13_JMg",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "T6kjeBpkqh4"
+      },
+      "snippet": {
+        "publishedAt": "2022-07-22T11:37:48Z",
+        "channelId": "UC3UNMFu3nRgbtXGVH1M24eA",
+        "title": "UNBOXING SOLANA&#39;S BARBIE DREAM HOUSE (NAGLARO ANG MAG-INA 🤣)",
+        "description": "Thank you for watching! Please subscribe if you enjoyed our videos and like them as well! Don't forget to click the bell icon as well ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/T6kjeBpkqh4/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/T6kjeBpkqh4/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/T6kjeBpkqh4/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "The Goriows",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-07-22T11:37:48Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "oFNhRGXx9T_MatSply7BVWWvgig",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "x-yefAfXYNc"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-03T21:59:04Z",
+        "channelId": "UClgJyzwGs-GyaNxUHcLZrkg",
+        "title": "Solana Crypto Hack Exposed",
+        "description": "Solana #Layer1 #Security #SolanaHack #Phantom #Slope #therealstory DISCLAIMER: The information contained in this video is ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/x-yefAfXYNc/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/x-yefAfXYNc/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/x-yefAfXYNc/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "InvestAnswers",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-03T21:59:04Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "omMYd2jep91HQiJc_FEkA_Hmas4",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "WpUILlv9yRc"
+      },
+      "snippet": {
+        "publishedAt": "2021-09-10T21:15:01Z",
+        "channelId": "UCHqubNRiGzQbmKAG9MEbCnw",
+        "title": "How Much Will 1000 Solana Be Worth By 2025?",
+        "description": "In this video we talk about solana's price in 2025, we go through what makes the network valuable as well as discuss different ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/WpUILlv9yRc/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/WpUILlv9yRc/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/WpUILlv9yRc/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Sean Benson",
+        "liveBroadcastContent": "none",
+        "publishTime": "2021-09-10T21:15:01Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "zYB-8s_dAo-zHlwXeRUQP-RJm3k",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "enAoz-87D7A"
+      },
+      "snippet": {
+        "publishedAt": "2021-12-02T18:51:58Z",
+        "channelId": "UCqK_GSMbpiV8spgD3ZGloSw",
+        "title": "Solana: Could SOL Hit $1,000?! DEEP DIVE!! ☀️",
+        "description": "Insider Info in my Socials https://guy.coinbureau.com/socials/ Get The Hottest Crypto Deals ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/enAoz-87D7A/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/enAoz-87D7A/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/enAoz-87D7A/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Coin Bureau",
+        "liveBroadcastContent": "none",
+        "publishTime": "2021-12-02T18:51:58Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "3qAcOhKLo_ghCrRCl9PdJukFj8M",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "U68D5jT5rQ8"
+      },
+      "snippet": {
+        "publishedAt": "2022-01-20T18:29:09Z",
+        "channelId": "UCsqemzGBSJryRUmjp2M_jjQ",
+        "title": "كيف تربح من مجال Nft  وعلاش Solana أحسن  من Ethereum بالنسبة للمبتدئين ( شرح شامل ) @Kasmi Youness",
+        "description": "فيديو على حياتو كاملة : https://youtu.be/GfUKcH2n_sQ قناة يونس قسمي بالعربية: https://www.youtube.com/kasmiyounessvlogs ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/U68D5jT5rQ8/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/U68D5jT5rQ8/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/U68D5jT5rQ8/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Jamal Alpha",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-01-20T18:29:09Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "kjjAhgPrkASoMd-GkgZwHpESGJs",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "a7uNhIy-mpw"
+      },
+      "snippet": {
+        "publishedAt": "2022-06-23T20:03:24Z",
+        "channelId": "UC9AdQPUe4BdVJ8M9X7wxHUA",
+        "title": "The Saga Begins - June 23 - NYC",
+        "description": "",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/a7uNhIy-mpw/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/a7uNhIy-mpw/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/a7uNhIy-mpw/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Solana",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-06-23T20:03:24Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "SiWA7JMKppDqowq8SEmB7vgzv08",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "Dih6KiEhp2U"
+      },
+      "snippet": {
+        "publishedAt": "2020-12-18T09:00:09Z",
+        "channelId": "UCQZTHprHDV56SHy1zxgI7SQ",
+        "title": "Solana - Far Away (feat. Joeboy) [Official Video] #emPawa30 Artist",
+        "description": "Download & Stream Here: https://empawaafrica.lnk.to/FarAway Supported by YouTube Music Lyrics Solana pon the bad girl thing ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/Dih6KiEhp2U/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/Dih6KiEhp2U/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/Dih6KiEhp2U/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "emPawa Africa",
+        "liveBroadcastContent": "none",
+        "publishTime": "2020-12-18T09:00:09Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "fuRISbHctoQbGvoYwmaGJc-nmz0",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "NYxPZvEWY3c"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-24T05:07:18Z",
+        "channelId": "UCisi-ZYIW6uIU8-vkwrVRcA",
+        "title": "SOLANA (SOL) Ausfälle und Hacks! SOL PAY und SAGA kommen!",
+        "description": "Solana ist berühmt für seine Netzwerkausfälle. Doch es stehen einige Neuigkeiten und Verbesserungen an. Wird Solana noch ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/NYxPZvEWY3c/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/NYxPZvEWY3c/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/NYxPZvEWY3c/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Qualitiycoin",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-24T05:07:18Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "pvI2wuWiWtFwHF-h8Ly3GUEv9f0",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "eGoweQ5AxxQ"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-03T15:17:58Z",
+        "channelId": "UCrp_UI8XtuYfpiqluWLD7Lw",
+        "title": "Solana hack targets thousands of wallets draining over $5 million",
+        "description": "CNBC's Kate Rooney reports on a hack within Solana. For access to live and exclusive video from CNBC subscribe to CNBC ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/eGoweQ5AxxQ/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/eGoweQ5AxxQ/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/eGoweQ5AxxQ/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "CNBC Television",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-03T15:17:58Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "oMliU_x_FGXCBgbSkTnGfnTJNlw",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "Y993XPNcbLo"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-26T07:55:28Z",
+        "channelId": "UCVswsmtPyKgVz9eMqSnWpwA",
+        "title": "Satoshi btc mining important information | Core mining | btcs mining | core coin | solana price",
+        "description": "Core chain metamask testnet participate full detail video https://youtu.be/4t0WI4-BE6s Binance Register link     ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/Y993XPNcbLo/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/Y993XPNcbLo/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/Y993XPNcbLo/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Carry Up",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-26T07:55:28Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "dVz7mwerh1hCMwGiaOWB8DvPvaw",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "hQfBQN1ML3U"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-03T03:15:01Z",
+        "channelId": "UCVVX-7tHff75fRAEEEnZiAQ",
+        "title": "Solana Holders Beware! Live SOL Exploit Explained (URGENT Warning)",
+        "description": "Solana is currently being hacked, with user funds being drained from the SOL Phantom wallet. Here are the details. Certik ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/hQfBQN1ML3U/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/hQfBQN1ML3U/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/hQfBQN1ML3U/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Miles Deutscher",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-03T03:15:01Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "Zyn8MZjbOWlrebu3iDIpQi7ztNU",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "5osCjmv4pPk"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-23T17:00:06Z",
+        "channelId": "UCR2VLqPLXuketd6IHCcJ6rw",
+        "title": "SOLANA GROS COUP A JOUR 💎 JOUE SON AVENIR DANS LES PROCHAINS MOIS 🔥#solana #sol #crypto #analyse",
+        "description": "trading #blockchain #nft.",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/5osCjmv4pPk/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/5osCjmv4pPk/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/5osCjmv4pPk/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Crypto pour Tous",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-23T17:00:06Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "_VUpIpyq_spqBdWREwWwHDSo-tc",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "aLW7UNYI0wI"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-05T07:30:00Z",
+        "channelId": "UCVVX-7tHff75fRAEEEnZiAQ",
+        "title": "The Future of Solana (SOL) | Sam Bankman-Fried&#39;s Bold Statement",
+        "description": "Sam Bankman-Fried (SBF) has a bold take after Solana is in the news again following the recent SOL Slope wallet exploit.",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/aLW7UNYI0wI/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/aLW7UNYI0wI/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/aLW7UNYI0wI/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Miles Deutscher",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-05T07:30:00Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "d-F8Mzsv3erXBLEszWvcOkZVDIY",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "AaBvh3KVYrI"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-25T14:00:06Z",
+        "channelId": "UCAUCwQGOf_MeXt0LPUykxNQ",
+        "title": "SOLANA PRICE PREDICTION [ CAN THIS HAPPEN ? ]",
+        "description": "RECOMMENDED VIDEOS/PLAYLISTS VIDEO: For Dummies 2022, LONG WALKTHROUGH !! https://youtu.be/momY-9yMv48 ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/AaBvh3KVYrI/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/AaBvh3KVYrI/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/AaBvh3KVYrI/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Adam coins",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-25T14:00:06Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "AN15tvagwNS938dNP9yhlNxMQy4",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "DqjgGaSvy80"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-03T20:56:12Z",
+        "channelId": "UCQglaVhGOBI0BR5S6IJnQPg",
+        "title": "SELLING ALL MY SOLANA",
+        "description": "Sign up with Binance below: For non-US residents only: $600 sign-up bonus if you use my link - https://bit.ly/3ORHdna For US ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/DqjgGaSvy80/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/DqjgGaSvy80/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/DqjgGaSvy80/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Brian Jung",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-03T20:56:12Z"
+      }
+    },
+    {
+      "kind": "youtube#searchResult",
+      "etag": "HtKb_JVbsvhShJoQJ1HW-4AUpwQ",
+      "id": {
+        "kind": "youtube#video",
+        "videoId": "vupMgNZNKns"
+      },
+      "snippet": {
+        "publishedAt": "2022-08-24T15:48:40Z",
+        "channelId": "UCkY4NtMCGsIFs_suCm2jzkg",
+        "title": "#SOLANA #MATIC Video Przegląd -  Grać Na Spadki Czy Kupować?🤔 Co Nas Czeka?",
+        "description": "Edukacyjne Materiały: - Jak Wyznaczam Strefy - Jak Skutecznie Wyznaczam Analogie. - Skuteczna Formacja Odwrócenia Trendu ...",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/vupMgNZNKns/default.jpg",
+            "width": 120,
+            "height": 90
+          },
+          "medium": {
+            "url": "https://i.ytimg.com/vi/vupMgNZNKns/mqdefault.jpg",
+            "width": 320,
+            "height": 180
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/vupMgNZNKns/hqdefault.jpg",
+            "width": 480,
+            "height": 360
+          }
+        },
+        "channelTitle": "Finansowy Umysł",
+        "liveBroadcastContent": "none",
+        "publishTime": "2022-08-24T15:48:40Z"
+      }
+    }
+  ]
+}

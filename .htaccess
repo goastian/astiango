@@ -1,0 +1,9 @@
+
+<Files 403.shtml>
+order allow,deny
+allow from all
+</Files>
+
+deny from 101.128.0.0/16
+deny from 192.142.227.143
+deny from 84.252.92.142

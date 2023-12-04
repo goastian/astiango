@@ -1,0 +1,130 @@
+<div class="output" id="colorOutput" style="margin-bottom: 15px;border-radius: 20px;padding: 10px;">
+    <div style="display: flex;flex-wrap: wrap;flex-direction: row;justify-content: space-around;">
+        <div>
+            <div id="color-indicator"></div>
+            <div id="color-picker"></div>
+        </div>
+        <div>
+            <div class="setChooseChecked col output" style="margin-left: unset; clear: unset; float: unset;">
+                <p class="colTit">Hex</p>
+                <p id="color-hex">#ffffff</p>
+            </div>
+            <div class="setChooseChecked col output" style="margin-left: unset; clear: unset; float: unset;">
+                <p class="colTit">RGB</p>
+                <p id="color-rgba">255, 255, 255</p>
+            </div>
+            <div class="setChooseChecked col output" style="margin-left: unset; clear: unset; float: unset;">
+                <p class="colTit">HSL</p>
+                <p id="color-hsl">0, 0%, 100%</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .col {
+        padding: 5px;
+        border-radius: 20px;
+        width: 270px;
+        display: flex;
+        justify-content: space-between;
+        margin-top: 15px;
+    }
+
+    .colTit {
+        color: #999f;
+        user-select: none;
+    }
+
+    .IroHandle, #colorOutput {
+        transition: all 0s ease-in-out;
+    }
+</style>
+
+<script src="/View/html/color.js"></script>
+<script>
+
+    let colorOutput = document.getElementById('colorOutput');
+    const tempElement = document.createElement('div');
+    tempElement.className = colorOutput.className;
+    document.body.appendChild(tempElement);
+    const computedStyle = getComputedStyle(tempElement);
+    const backgroundColor = computedStyle.backgroundColor;
+    document.body.removeChild(tempElement);
+
+    let colorIndicator = document.getElementById('color-indicator');
+
+    let colorHex = document.getElementById('color-hex');
+    let colorRGBA = document.getElementById('color-rgba');
+    let colorHSL = document.getElementById('color-hsl');
+
+    let colorPicker = new iro.ColorPicker("#color-picker", {
+        width: 180, color: backgroundColor
+    });
+
+
+    const hexColor = rgbToHex(backgroundColor);
+
+    const hslColor = rgbToHsl(backgroundColor);
+
+    function rgbToHex(rgb) {
+        const rgbArray = rgb.match(/\d+/g);
+        const r = parseInt(rgbArray[0]).toString(16).padStart(2, '0');
+        const g = parseInt(rgbArray[1]).toString(16).padStart(2, '0');
+        const b = parseInt(rgbArray[2]).toString(16).padStart(2, '0');
+        return `#${r}${g}${b}`;
+    }
+
+    function rgbToHsl(rgb) {
+        const rgbArray = rgb.match(/\d+/g);
+        const r = parseInt(rgbArray[0]) / 255;
+        const g = parseInt(rgbArray[1]) / 255;
+        const b = parseInt(rgbArray[2]) / 255;
+
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        let h, s, l;
+
+        if (max === min) {
+            h = 0;
+        } else if (max === r) {
+            h = ((g - b) / (max - min)) % 6;
+        } else if (max === g) {
+            h = (b - r) / (max - min) + 2;
+        } else {
+            h = (r - g) / (max - min) + 4;
+        }
+
+        h = Math.round(h * 60);
+        if (h < 0) h += 360;
+
+        l = (max + min) / 2;
+
+        if (max === min) {
+            s = 0;
+        } else if (l <= 0.5) {
+            s = (max - min) / (max + min);
+        } else {
+            s = (max - min) / (2 - max - min);
+        }
+
+        s = Math.round(s * 100);
+        l = Math.round(l * 100);
+
+        return `hsl(${h}, ${s}%, ${l}%)`;
+    }
+
+
+
+    colorHex.textContent = hexColor;
+    colorRGBA.textContent = backgroundColor.replace('rgb(', '').replace(')', '');
+    colorHSL.textContent = hslColor.replace('hsl(', '').replace(')', '');
+
+    colorPicker.on('color:change', function (color) {
+        colorIndicator.style.backgroundColor = color.hexString,
+            colorHex.textContent = color.hexString,
+            colorRGBA.textContent = color.rgbString.replace('rgb(', '').replace(')', ''),
+            colorHSL.textContent = color.hslString.replace('hsl(', '').replace(')', ''),
+            colorOutput.style.backgroundColor = color.hexString
+    });
+</script>

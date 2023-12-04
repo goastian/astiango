@@ -1,0 +1,136 @@
+html, .copyQuery, #addShortcutBtn:hover, #sumResOut {
+  background-color: #f2f4f7;
+  color: black;
+}
+body {
+  background-color: #edeff7;
+}
+.searchBox{
+  border: solid 1px #eee;
+}
+.searchButton{
+  border: solid 1px #eee;
+  border-left: none;
+}
+.searchBox:focus{
+  box-shadow: 0 0 5px 5px #eee;
+}
+.searchBox:focus ~ .searchButton{
+  box-shadow: 4px 0px 5px 5px #eee;
+}.searchBox:hover{
+  box-shadow: 0 0 5px 5px #eee;
+}
+.searchBox:hover ~ .searchButton{
+  box-shadow: 4px 0px 5px 5px #eee;
+}
+.settingButton {
+  color: #4b4b4b;
+}
+.output {
+  background-color: var(--result-bg);
+}
+.snippet {
+  color: #616366;
+}
+.answer {
+  background-color: var(--result-bg);
+}
+.weatherBtnActive{
+  box-shadow: rgb(233, 233, 237) -4px -2px 8px, rgba(149, 162, 211, 0.8) 4px 2px 8px;
+}
+.relSea{
+  background-image: linear-gradient(to right, rgba(250, 251, 255, 1), rgba(250, 251, 255, 1), rgba(250, 251, 255, 0.5)), var(--rel-img);
+}
+.topbg {
+  background-color: rgba(250, 251, 255, 0.75);
+}
+.whiteAblackBg{
+  background-color: white;
+}
+.addShortcut{
+  border: solid 10px #f2f4f7;
+}
+.mobileBottomBar {
+  background-color: rgba(250, 251, 255, 0.75);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid #dae0e8;
+}
+.scrollSearchBackground {
+  background-color: rgba(250, 251, 255, 0.75);
+}
+.share-icon-border {
+  filter: brightness(0) invert(0);
+}
+.footer {
+  background-color: #fff;
+}
+.quickSet {
+  color: #6a6a6a;
+  background-color: #f2f4f7;
+}
+.autocomplete-items div {
+  background-color: #ffffff;
+  color: black;
+}
+
+#sidebar {
+  background-color: var(--sidebar-bg-color-light);
+  color: black;
+}
+.title {
+  background-color: #fff;
+  color: black;
+  box-shadow: 0 5px 5px #ece9e9;
+}
+.setGroup, .showtime{
+  background-color: white;
+}
+.themeMenu, .setBtn{
+  background-color: #e9e9ed;
+}
+.bigimgout{
+  background-color: var(--sidebar-bg-color-light);
+  color: black;
+}
+
+.setChooseChecked{
+  box-shadow: -4px -2px 8px #e9e9ed,4px 2px 8px rgba(149,162,211,0.8);
+}
+.autocom-box {
+  background-color: white;
+  color: black;
+}
+.suggestion:hover {
+  background-color: #e2e3ea;
+}
+.active {
+  background-color: #e2e3ea;
+}
+.tree-btn p {
+  color: #616366;
+}
+.tree-container {
+  background-color: #fafbff;
+}
+.tree-containerMobile {
+  background-color: #fafbff;
+}
+.feedback {
+  background-color: #fafbff;
+}
+.imgtoolsOption {
+  color: #6a6a6a;
+  background-color: #f2f4f7;
+}
+.imgoutlink {
+  color: black;
+}
+.findelsewhere button {
+  background-color: white;
+}
+.nextPage button {
+  background-color: white;
+}
+.videossearch {
+  background-color: white;
+}

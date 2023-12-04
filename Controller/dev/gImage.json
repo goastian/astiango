@@ -1,0 +1,252 @@
+{
+    "kind": "customsearch#search",
+    "url": {
+      "type": "application/json",
+      "template": "https://www.googleapis.com/customsearch/v1?q={searchTerms}&num={count?}&start={startIndex?}&lr={language?}&safe={safe?}&cx={cx?}&sort={sort?}&filter={filter?}&gl={gl?}&cr={cr?}&googlehost={googleHost?}&c2coff={disableCnTwTranslation?}&hq={hq?}&hl={hl?}&siteSearch={siteSearch?}&siteSearchFilter={siteSearchFilter?}&exactTerms={exactTerms?}&excludeTerms={excludeTerms?}&linkSite={linkSite?}&orTerms={orTerms?}&relatedSite={relatedSite?}&dateRestrict={dateRestrict?}&lowRange={lowRange?}&highRange={highRange?}&searchType={searchType}&fileType={fileType?}&rights={rights?}&imgSize={imgSize?}&imgType={imgType?}&imgColorType={imgColorType?}&imgDominantColor={imgDominantColor?}&alt=json"
+    },
+    "queries": {
+      "request": [
+        {
+          "title": "Google Custom Search - iPhone",
+          "totalResults": "92650000000",
+          "searchTerms": "iPhone",
+          "count": 10,
+          "startIndex": 1,
+          "inputEncoding": "utf8",
+          "outputEncoding": "utf8",
+          "safe": "active",
+          "cx": "e474d743192034a5b",
+          "gl": "all",
+          "hl": "all",
+          "searchType": "image"
+        }
+      ],
+      "nextPage": [
+        {
+          "title": "Google Custom Search - iPhone",
+          "totalResults": "92650000000",
+          "searchTerms": "iPhone",
+          "count": 10,
+          "startIndex": 11,
+          "inputEncoding": "utf8",
+          "outputEncoding": "utf8",
+          "safe": "active",
+          "cx": "e474d743192034a5b",
+          "gl": "all",
+          "hl": "all",
+          "searchType": "image"
+        }
+      ]
+    },
+    "context": {
+      "title": "Gimg"
+    },
+    "searchInformation": {
+      "searchTime": 0.654251,
+      "formattedSearchTime": "0.65",
+      "totalResults": "92650000000",
+      "formattedTotalResults": "92,650,000,000"
+    },
+    "items": [
+      {
+        "kind": "customsearch#result",
+        "title": "Identify your iPhone model - Apple Support",
+        "htmlTitle": "Identify your \u003cb\u003eiPhone\u003c/b\u003e model - Apple Support",
+        "link": "https://support.apple.com/library/content/dam/edam/applecare/images/en_US/iphone/iphone-14-pro-max-colors.png",
+        "displayLink": "support.apple.com",
+        "snippet": "Identify your iPhone model - Apple Support",
+        "htmlSnippet": "Identify your \u003cb\u003eiPhone\u003c/b\u003e model - Apple Support",
+        "mime": "image/png",
+        "fileFormat": "image/png",
+        "image": {
+          "contextLink": "https://support.apple.com/en-us/HT201296",
+          "height": 700,
+          "width": 904,
+          "byteSize": 629984,
+          "thumbnailLink": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSy2mK3o7T58mdPvCPWrzDFEhuWkzT7F2TTJtcF9sSuRGnol9iSNc8Emg&s",
+          "thumbnailHeight": 114,
+          "thumbnailWidth": 147
+        }
+      },
+      {
+        "kind": "customsearch#result",
+        "title": "Refurbished iPhone 13 Pro Max 128GB - Graphite (Unlocked) - Apple",
+        "htmlTitle": "Refurbished \u003cb\u003eiPhone\u003c/b\u003e 13 Pro Max 128GB - Graphite (Unlocked) - Apple",
+        "link": "https://store.storeimages.cdn-apple.com/4982/as-images.apple.com/is/refurb-iphone-13-pro-max-graphite-2023?wid=1144&hei=1144&fmt=jpeg&qlt=90&.v=1679072989055",
+        "displayLink": "www.apple.com",
+        "snippet": "Refurbished iPhone 13 Pro Max 128GB - Graphite (Unlocked) - Apple",
+        "htmlSnippet": "Refurbished \u003cb\u003eiPhone\u003c/b\u003e 13 Pro Max 128GB - Graphite (Unlocked) - Apple",
+        "mime": "image/",
+        "fileFormat": "image/",
+        "image": {
+          "contextLink": "https://www.apple.com/shop/product/FLKL3LL/A/refurbished-iphone-13-pro-max-128gb-graphite-unlocked",
+          "height": 1144,
+          "width": 1144,
+          "byteSize": 111403,
+          "thumbnailLink": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQxGiZ8u48jT4qgw_P1Jz_9Ub8khOXP2vhJuG3P-iUotZzSrY2CbclQrFg&s",
+          "thumbnailHeight": 150,
+          "thumbnailWidth": 150
+        }
+      },
+      {
+        "kind": "customsearch#result",
+        "title": "Identify your iPhone model - Apple Support",
+        "htmlTitle": "Identify your \u003cb\u003eiPhone\u003c/b\u003e model - Apple Support",
+        "link": "https://support.apple.com/library/content/dam/edam/applecare/images/en_US/iphone/iphone-14-pro-colors.png",
+        "displayLink": "support.apple.com",
+        "snippet": "Identify your iPhone model - Apple Support",
+        "htmlSnippet": "Identify your \u003cb\u003eiPhone\u003c/b\u003e model - Apple Support",
+        "mime": "image/png",
+        "fileFormat": "image/png",
+        "image": {
+          "contextLink": "https://support.apple.com/en-us/HT201296",
+          "height": 656,
+          "width": 900,
+          "byteSize": 603628,
+          "thumbnailLink": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSj2zS0bdNSpFNbFyNSdThhdQz6EoEoZNFefD8zAD_OGT7euM6JSRtqow&s",
+          "thumbnailHeight": 106,
+          "thumbnailWidth": 146
+        }
+      },
+      {
+        "kind": "customsearch#result",
+        "title": "Refurbished iPhone 12 128GB - Purple (Unlocked) - Apple",
+        "htmlTitle": "Refurbished \u003cb\u003eiPhone\u003c/b\u003e 12 128GB - Purple (Unlocked) - Apple",
+        "link": "https://store.storeimages.cdn-apple.com/4982/as-images.apple.com/is/refurb-iphone-12-purple-2021?wid=1144&hei=1144&fmt=jpeg&qlt=90&.v=1635202738000",
+        "displayLink": "www.apple.com",
+        "snippet": "Refurbished iPhone 12 128GB - Purple (Unlocked) - Apple",
+        "htmlSnippet": "Refurbished \u003cb\u003eiPhone\u003c/b\u003e 12 128GB - Purple (Unlocked) - Apple",
+        "mime": "image/",
+        "fileFormat": "image/",
+        "image": {
+          "contextLink": "https://www.apple.com/shop/product/FJNF3LL/A/refurbished-iphone-12-128gb-purple-unlocked",
+          "height": 1144,
+          "width": 1144,
+          "byteSize": 99031,
+          "thumbnailLink": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQRIgRSqbSXqmbHr91YGsM6JANuNlZawEOdkB64MbT0RmccbJShTVk3ldA&s",
+          "thumbnailHeight": 150,
+          "thumbnailWidth": 150
+        }
+      },
+      {
+        "kind": "customsearch#result",
+        "title": "Apple introduces iPhone 14 and iPhone 14 Plus - Apple",
+        "htmlTitle": "Apple introduces \u003cb\u003eiPhone\u003c/b\u003e 14 and \u003cb\u003eiPhone\u003c/b\u003e 14 Plus - Apple",
+        "link": "https://www.apple.com/newsroom/images/product/iphone/standard/Apple-iPhone-14-iPhone-14-Plus-hero-220907_Full-Bleed-Image.jpg.large.jpg",
+        "displayLink": "www.apple.com",
+        "snippet": "Apple introduces iPhone 14 and iPhone 14 Plus - Apple",
+        "htmlSnippet": "Apple introduces \u003cb\u003eiPhone\u003c/b\u003e 14 and \u003cb\u003eiPhone\u003c/b\u003e 14 Plus - Apple",
+        "mime": "image/jpeg",
+        "fileFormat": "image/jpeg",
+        "image": {
+          "contextLink": "https://www.apple.com/newsroom/2022/09/apple-introduces-iphone-14-and-iphone-14-plus/",
+          "height": 810,
+          "width": 1440,
+          "byteSize": 95245,
+          "thumbnailLink": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQQU2zYHlD_YMItscTHt3-lQIUl60VgSIhZMmF7bwuuaeDAAtJNwOgURw&s",
+          "thumbnailHeight": 84,
+          "thumbnailWidth": 150
+        }
+      },
+      {
+        "kind": "customsearch#result",
+        "title": "Buy iPhone 12 128GB Purple - Apple",
+        "htmlTitle": "Buy \u003cb\u003eiPhone\u003c/b\u003e 12 128GB Purple - Apple",
+        "link": "https://store.storeimages.cdn-apple.com/4982/as-images.apple.com/is/iphone-12-finish-select-202207-purple_FMT_WHH?wid=1280&hei=492&fmt=p-jpg&qlt=80&.v=1662150034211",
+        "displayLink": "www.apple.com",
+        "snippet": "Buy iPhone 12 128GB Purple - Apple",
+        "htmlSnippet": "Buy \u003cb\u003eiPhone\u003c/b\u003e 12 128GB Purple - Apple",
+        "mime": "image/",
+        "fileFormat": "image/",
+        "image": {
+          "contextLink": "https://www.apple.com/shop/buy-iphone/iphone-12/6.1-inch-display-128gb-purple-unlocked",
+          "height": 492,
+          "width": 1280,
+          "byteSize": 15035,
+          "thumbnailLink": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRRXGQVWLFJrV3bEpMtZMdV1Hz4KCfRtVzdtFzylbV50miVltIb4_r3cg&s",
+          "thumbnailHeight": 58,
+          "thumbnailWidth": 150
+        }
+      },
+      {
+        "kind": "customsearch#result",
+        "title": "Review of Apple's iPhone 14 and iPhone 14 Pro: They're leaning ...",
+        "htmlTitle": "Review of Apple&#39;s \u003cb\u003eiPhone\u003c/b\u003e 14 and \u003cb\u003eiPhone\u003c/b\u003e 14 Pro: They&#39;re leaning ...",
+        "link": "https://techcrunch.com/wp-content/uploads/2022/09/Apple-iphone-14-Pro-review-1.jpeg",
+        "displayLink": "techcrunch.com",
+        "snippet": "Review of Apple's iPhone 14 and iPhone 14 Pro: They're leaning ...",
+        "htmlSnippet": "Review of Apple&#39;s \u003cb\u003eiPhone\u003c/b\u003e 14 and \u003cb\u003eiPhone\u003c/b\u003e 14 Pro: They&#39;re leaning ...",
+        "mime": "image/jpeg",
+        "fileFormat": "image/jpeg",
+        "image": {
+          "contextLink": "https://techcrunch.com/2022/09/14/review-apple-iphone-14-pro/",
+          "height": 3024,
+          "width": 4032,
+          "byteSize": 3692204,
+          "thumbnailLink": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTr7z6as7otsPd8PdnwRwo3yJLh0rXgmuIOqYvgIBqm4iWjt8cuJ1oo&s",
+          "thumbnailHeight": 113,
+          "thumbnailWidth": 150
+        }
+      },
+      {
+        "kind": "customsearch#result",
+        "title": "How to add and edit widgets on your iPhone - Apple Support",
+        "htmlTitle": "How to add and edit widgets on your \u003cb\u003eiPhone\u003c/b\u003e - Apple Support",
+        "link": "https://support.apple.com/library/content/dam/edam/applecare/images/en_US/iOS/ios16-iphone13-pro-widgets-home-screen.png",
+        "displayLink": "support.apple.com",
+        "snippet": "How to add and edit widgets on your iPhone - Apple Support",
+        "htmlSnippet": "How to add and edit widgets on your \u003cb\u003eiPhone\u003c/b\u003e - Apple Support",
+        "mime": "image/png",
+        "fileFormat": "image/png",
+        "image": {
+          "contextLink": "https://support.apple.com/en-us/HT207122",
+          "height": 1294,
+          "width": 640,
+          "byteSize": 316902,
+          "thumbnailLink": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRiMWaobdsPTtHd0S1rqeoexD2n7-zBNjI3hOjyunsaft1YgoFL0titEQ&s",
+          "thumbnailHeight": 150,
+          "thumbnailWidth": 74
+        }
+      },
+      {
+        "kind": "customsearch#result",
+        "title": "iPhone - Wikipedia",
+        "htmlTitle": "\u003cb\u003eiPhone\u003c/b\u003e - Wikipedia",
+        "link": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/IPhone_14_Pro_vector_%28blue%29.svg/800px-IPhone_14_Pro_vector_%28blue%29.svg.png",
+        "displayLink": "en.wikipedia.org",
+        "snippet": "iPhone - Wikipedia",
+        "htmlSnippet": "\u003cb\u003eiPhone\u003c/b\u003e - Wikipedia",
+        "mime": "image/png",
+        "fileFormat": "image/png",
+        "image": {
+          "contextLink": "https://en.wikipedia.org/wiki/IPhone",
+          "height": 1622,
+          "width": 800,
+          "byteSize": 50302,
+          "thumbnailLink": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRbwCVJOi7BAt9vF2-tO8Jr4gs6TPHPVQv6MZPHKU7UhzptWh9dCKg1bQ&s",
+          "thumbnailHeight": 150,
+          "thumbnailWidth": 74
+        }
+      },
+      {
+        "kind": "customsearch#result",
+        "title": "Close an app on your iPhone or iPod touch - Apple Support",
+        "htmlTitle": "Close an app on your \u003cb\u003eiPhone\u003c/b\u003e or iPod touch - Apple Support",
+        "link": "https://support.apple.com/library/content/dam/edam/applecare/images/en_US/iOS/ios16-iphone13-pro-close-app-blue-dot-animation.gif",
+        "displayLink": "support.apple.com",
+        "snippet": "Close an app on your iPhone or iPod touch - Apple Support",
+        "htmlSnippet": "Close an app on your \u003cb\u003eiPhone\u003c/b\u003e or iPod touch - Apple Support",
+        "mime": "image/gif",
+        "fileFormat": "image/gif",
+        "image": {
+          "contextLink": "https://support.apple.com/en-us/HT201330",
+          "height": 1294,
+          "width": 640,
+          "byteSize": 2623118,
+          "thumbnailLink": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTJL0Yqzkqc1rF7ToudUq0y4KpSWQ6_K7amJ1NM6Fj2TLtCGQYLemdK3A&s",
+          "thumbnailHeight": 150,
+          "thumbnailWidth": 74
+        }
+      }
+    ]
+  }

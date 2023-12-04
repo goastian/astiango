@@ -1,0 +1,232 @@
+:root{
+  --linkColor: #8ab4f8;
+  --result-bg: #202124;
+}
+html, .copyQuery, #addShortcutBtn:hover, #sumResOut {
+  background-color: #181a1b;
+  color: white;
+}
+.filterImage{
+  -webkit-filter: brightness(0) invert(1);
+  filter: brightness(0) invert(1);
+}
+.settingButton,.sx-search-sug-link span,.sx-kp-tab-content {
+  color: white;
+}
+.output {
+  background-color: var(--result-bg);
+}
+.snippet {
+  color: #bdc2ca;
+}
+.answer {
+  background-color: var(--result-bg);
+}
+.ad{
+  filter: brightness(0.2);
+}
+.shortcutElemenet{
+  background-color: #181a1b;
+  border: solid 10px #181a1b;
+  color:white;
+}
+.addShortcut{
+  border: solid 10px #181a1b;
+}
+.shortcutEditBtn, .calculator button, .revertLocLang{
+  color: white;
+}
+.shortcutForm{
+  background-color: #181a1b;
+  color: white;
+}
+.shortcutForm form input{
+  color: white;
+  background-color: black;
+}
+.display #screen{
+  color: white;
+  background-color: #0001;
+}
+.weatherCsetting{
+  color: white;
+}
+.weatherBtnActive{
+  box-shadow: rgb(42, 44, 45) -4px -2px 8px, rgba(0, 0, 0, 0.6) 4px 2px 8px;
+}
+.topbg {
+  background-color:  var(--result-bg);
+}
+.searchBox {
+  background-color: #181a1b;
+  color: white;
+  border: solid 1px #111;
+}
+.searchButton {
+  background-color: #181a1b;
+  color: white;
+  border: solid 1px #111;
+  border-left: none;
+}
+.searchBox:focus{
+  box-shadow: 0 0 50px 5px #111;
+}
+.searchBox:focus ~ .searchButton{
+  box-shadow: 4px 0px 50px 5px #111;
+}.searchBox:hover{
+  box-shadow: 0 0 50px 5px #111;
+}
+.searchBox:hover ~ .searchButton{
+  box-shadow: 4px 0px 50px 5px #111;
+}
+.searchButton img {
+  -webkit-filter: brightness(0) invert(1);
+  filter: brightness(0) invert(1);
+}
+.mobileBottomBar {
+  background-color: rgba(42, 45, 45, 0.75);
+  backdrop-filter: blur(20px);
+}
+.scrollSearchBackground {
+  background-color: rgba(32,33,36, 0.75);
+}
+.searchButtonMain {
+  background-color: #181a1b;
+  color: white;
+}
+.searchBoxMain {
+  background-color: #181a1b;
+  color: white;
+}
+.delQueryBtn{
+  filter: brightness(0) invert(1);
+}
+.quickSet {
+  background-color: #2a2c2d;
+  color: white;
+}
+.menu-btn {
+  -webkit-filter: brightness(0) invert(1);
+  filter: brightness(0) invert(1);
+}
+.footer {
+  background-color: #2a2c2e;
+}
+.footer button {
+  color: white;
+}
+.share-icon-border {
+  filter: brightness(0) invert(0.75);
+}
+.setBut {
+  -webkit-filter: brightness(0) invert(1);
+  filter: brightness(0) invert(1);
+}
+.share-container {
+  background-color: #2a2c2d;
+  color: white;
+}
+.autocomplete-items div {
+  background-color: #181a1b;
+  color: white;
+}
+#sidebar {
+  background-color: var(--sidebar-bg-color-dark);
+  color: #fbfbfb;
+}
+.setGroup, .showtime{
+  background-color: #353333;
+}
+.close-menu-btn img {
+  filter: brightness(0) invert(1);
+}
+.title {
+  background-color: #353333;
+  color: white;
+  box-shadow: 0 5px 5px #202324;
+}
+.title img{
+  filter: brightness(0) invert(1);
+}
+.bigimgout{
+  background-color: var(--sidebar-bg-color-dark);
+  color: white;
+}
+.setChooseChecked{
+  box-shadow: -4px -2px 8px #2a2c2d,4px 2px 8px rgba(0, 0, 0, 0.6);
+}
+.autocom-box {
+  background-color: #323232;
+  color: white;
+}
+.suggestion:hover {
+  background-color: #222;
+}
+.active {
+  background-color: #222;
+}
+.suggestion img, .rsImg {
+  filter: brightness(0%) invert(100%);
+}
+.tree-btn {
+  filter: brightness(0) invert(1);
+}
+.tree-btnMobile {
+  filter: brightness(0) invert(1);
+}
+.tree-container {
+  background-color: #2a2c2d;
+}
+.tree-containerMobile {
+  background-color: #2a2c2d;
+}
+.form-items select, .langSave  {
+  background-color: #2a2c2d;
+  color: white;
+}
+.themeMenu{
+  background-color: #2a2c2d;
+}
+.feedback, .setBtn, .fedImp {
+  background-color: #2a2c2d;
+  color: white;
+}
+.feedbackMenuLabel {
+  filter: brightness(0) invert(0.75);
+}
+.feedbackMenuLabelMobile {
+  filter: brightness(0) invert(0.75);
+}
+.imgtoolsOption, .whiteAblackBg {
+  background-color: #2a2c2d;
+  color: white;
+}
+.relSea{
+  background-image: linear-gradient(to right, rgba(32,33,36, 1), rgba(32,33,36, 1), rgba(32,33,36, 0.5)), var(--rel-img);
+}
+.imgoutlink, .socialBtn, .rnInp {
+  color: white;
+}
+.redirectMe{
+  color: white;
+}
+.icnSet {
+  filter: brightness(0) invert(1);
+}
+.findelsewhere button {
+  background-color: #2a2c2d;
+  color: white;
+}
+#map{
+  filter: brightness(0.7);
+}
+.nextPage button {
+  background-color: #2a2c2d;
+  color: white;
+}
+.videossearch {
+  background-color: var(--result-bg);;
+}
+.sx-overflow-gradient{
+  display: none;
+}

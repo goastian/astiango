@@ -1,0 +1,78 @@
+body {
+  margin: 0;
+  padding: 0;
+  background-image: url("imgs/bg.webp");
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  width: 100vw;
+  font-family: sans-serif;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.container {
+  width: clamp(10px, 51%, 91%);
+  max-width: 680px;
+  margin: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  backdrop-filter: blur(3px);
+  padding: 70px;
+  border-radius: 20px;
+  border: solid 2px gray;
+}
+
+h1 {
+  font-size: 20px;
+  margin-bottom: 30px;
+}
+
+a {
+  text-decoration: none;
+  color: rgb(240, 240, 240);
+}
+
+.share-button {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  padding: 10px;
+  background-color: #34a8ac;
+  color: white;
+  border-radius: 200px;
+  cursor: pointer;
+}
+.tile {
+  width: 100%;
+  background-color: #282b2b;
+  margin: 7px;
+  border-radius: 20px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.tile:hover {
+  transition: cubic-bezier(0.07, 1.41, 0.82, 1.41) 0.2s;
+  transform: scale(1.02);
+}
+
+.tile-share-button {
+  margin: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+  background-color: rgb(52, 52, 52);
+}
+
+.tile-share-button svg {
+  margin-left: 12px;
+  margin-top: 10px;
+}
+
+.icon {
+  margin: 4px 8px;
+  width: 44px;
+  height: 44px;
+}

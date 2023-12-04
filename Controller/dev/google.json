@@ -1,0 +1,511 @@
+{
+  "kind": "customsearch#search",
+  "url": {
+    "type": "application/json",
+    "template": "https://www.googleapis.com/customsearch/v1?q={searchTerms}&num={count?}&start={startIndex?}&lr={language?}&safe={safe?}&cx={cx?}&sort={sort?}&filter={filter?}&gl={gl?}&cr={cr?}&googlehost={googleHost?}&c2coff={disableCnTwTranslation?}&hq={hq?}&hl={hl?}&siteSearch={siteSearch?}&siteSearchFilter={siteSearchFilter?}&exactTerms={exactTerms?}&excludeTerms={excludeTerms?}&linkSite={linkSite?}&orTerms={orTerms?}&relatedSite={relatedSite?}&dateRestrict={dateRestrict?}&lowRange={lowRange?}&highRange={highRange?}&searchType={searchType}&fileType={fileType?}&rights={rights?}&imgSize={imgSize?}&imgType={imgType?}&imgColorType={imgColorType?}&imgDominantColor={imgDominantColor?}&alt=json"
+  },
+  "queries": {
+    "request": [
+      {
+        "title": "Google Custom Search - solana",
+        "totalResults": "62400000",
+        "searchTerms": "solana",
+        "count": 10,
+        "startIndex": 1,
+        "inputEncoding": "utf8",
+        "outputEncoding": "utf8",
+        "safe": "off",
+        "cx": "459c5f91d322c97d1"
+      }
+    ],
+    "nextPage": [
+      {
+        "title": "Google Custom Search - solana",
+        "totalResults": "62400000",
+        "searchTerms": "solana",
+        "count": 10,
+        "startIndex": 11,
+        "inputEncoding": "utf8",
+        "outputEncoding": "utf8",
+        "safe": "off",
+        "cx": "459c5f91d322c97d1"
+      }
+    ]
+  },
+  "context": {
+    "title": "JYSSearch"
+  },
+  "searchInformation": {
+    "searchTime": 0.416301,
+    "formattedSearchTime": "0.42",
+    "totalResults": "62400000",
+    "formattedTotalResults": "62,400,000"
+  },
+  "items": [
+    {
+      "kind": "customsearch#result",
+      "title": "Solana",
+      "htmlTitle": "\u003cb\u003eSolana\u003c/b\u003e",
+      "link": "https://solana.com/",
+      "displayLink": "solana.com",
+      "snippet": "Solana is a high-performance blockchain supporting builders around the world creating crypto apps that scale today.",
+      "htmlSnippet": "\u003cb\u003eSolana\u003c/b\u003e is a high-performance blockchain supporting builders around the world creating crypto apps that scale today.",
+      "cacheId": "67tWwmZhWc0J",
+      "formattedUrl": "https://solana.com/",
+      "htmlFormattedUrl": "https://\u003cb\u003esolana\u003c/b\u003e.com/",
+      "pagemap": {
+        "cse_thumbnail": [
+          {
+            "src": "https://encrypted-tbn1.gstatic.com/images?q=tbn:ANd9GcQU7InDZ0TRsNGS4LCjUZFYo28V6-KmM50uy1TOvPWb9Ftp048P7mLaxGDD",
+            "width": "310",
+            "height": "163"
+          }
+        ],
+        "metatags": [
+          {
+            "og:image": "https://solana.com/sharing-card.png",
+            "next-head-count": "20",
+            "og:type": "website",
+            "twitter:card": "summary",
+            "twitter:title": "Scalable Blockchain Infrastructure: Billions of transactions & counting",
+            "viewport": "width=device-width",
+            "twitter:description": "Solana is a high-performance blockchain supporting builders around the world creating crypto apps that scale today.",
+            "og:title": "Scalable Blockchain Infrastructure: Billions of transactions & counting | Solana: Build crypto apps that scale",
+            "og:description": "Solana is a high-performance blockchain supporting builders around the world creating crypto apps that scale today.",
+            "twitter:creator": "@solana",
+            "twitter:image": "https://solana.com/sharing-card.png"
+          }
+        ],
+        "cse_image": [
+          {
+            "src": "https://solana.com/sharing-card.png"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "customsearch#result",
+      "title": "Solana price today, SOL to USD live, marketcap and chart ...",
+      "htmlTitle": "\u003cb\u003eSolana\u003c/b\u003e price today, SOL to USD live, marketcap and chart ...",
+      "link": "https://coinmarketcap.com/currencies/solana/",
+      "displayLink": "coinmarketcap.com",
+      "snippet": "Get the latest Solana price, SOL market cap, trading pairs, charts and data today from the world's number one cryptocurrency price-tracking website.",
+      "htmlSnippet": "Get the latest \u003cb\u003eSolana\u003c/b\u003e price, SOL market cap, trading pairs, charts and data today from the world&#39;s number one cryptocurrency price-tracking website.",
+      "cacheId": "tx7h2f4cDKIJ",
+      "formattedUrl": "https://coinmarketcap.com/currencies/solana/",
+      "htmlFormattedUrl": "https://coinmarketcap.com/currencies/\u003cb\u003esolana\u003c/b\u003e/",
+      "pagemap": {
+        "cse_thumbnail": [
+          {
+            "src": "https://encrypted-tbn2.gstatic.com/images?q=tbn:ANd9GcSz9KhVaTrqaQddQd-d678FQOq7taCFg1AlTePChxKj9oBjy9PscMkxpZwK",
+            "width": "225",
+            "height": "225"
+          }
+        ],
+        "metatags": [
+          {
+            "apple-itunes-app": "app-id=1282107098",
+            "og:image": "https://s2.coinmarketcap.com/static/img/coins/200x200/5426.png",
+            "og:type": "website",
+            "twitter:card": "summary_large_image",
+            "og:image:width": "200",
+            "og:site_name": "CoinMarketCap",
+            "og:title": "Solana price today, SOL to USD live, marketcap and chart | CoinMarketCap",
+            "og:image:height": "200",
+            "og:image:type": "image/png",
+            "og:description": "Get the latest Solana price, SOL market cap, trading pairs, charts and data today from the world’s number one cryptocurrency price-tracking website",
+            "twitter:image": "https://s2.coinmarketcap.com/static/img/coins/200x200/5426.png",
+            "next-head-count": "63",
+            "viewport": "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, shrink-to-fit=no",
+            "og:url": "https://coinmarketcap.com/currencies/solana/"
+          }
+        ],
+        "cse_image": [
+          {
+            "src": "https://s2.coinmarketcap.com/static/img/coins/200x200/5426.png"
+          }
+        ],
+        "table": [
+          {
+            "about": "Solana Price Today"
+          },
+          {
+            "about": "Solana Market Cap"
+          },
+          {
+            "about": "Solana Price Yesterday"
+          },
+          {
+            "about": "Solana Price History"
+          },
+          {
+            "about": "Solana Supply"
+          },
+          {
+            "about": "Solana Price Today"
+          },
+          {
+            "about": "Solana Market Cap"
+          },
+          {
+            "about": "Solana Price Yesterday"
+          },
+          {
+            "about": "Solana Price History"
+          },
+          {
+            "about": "Solana Supply"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "customsearch#result",
+      "title": "Solana (SOL) Price, Charts, and News | Coinbase: solana price ...",
+      "htmlTitle": "\u003cb\u003eSolana\u003c/b\u003e (SOL) Price, Charts, and News | Coinbase: \u003cb\u003esolana\u003c/b\u003e price ...",
+      "link": "https://www.coinbase.com/price/solana",
+      "displayLink": "www.coinbase.com",
+      "snippet": "Solana is a decentralized computing platform that uses SOL to pay for transactions. Solana aims to improve blockchain scalability by using a combination of ...",
+      "htmlSnippet": "\u003cb\u003eSolana\u003c/b\u003e is a decentralized computing platform that uses SOL to pay for transactions. \u003cb\u003eSolana\u003c/b\u003e aims to improve blockchain scalability by using a combination of&nbsp;...",
+      "cacheId": "5oVnnoJCoOoJ",
+      "formattedUrl": "https://www.coinbase.com/price/solana",
+      "htmlFormattedUrl": "https://www.coinbase.com/price/\u003cb\u003esolana\u003c/b\u003e",
+      "pagemap": {
+        "metatags": [
+          {
+            "apple-itunes-app": "app-id=886427730",
+            "twitter:app:id:googleplay": "com.coinbase.android",
+            "og:type": "website",
+            "twitter:card": "summary_large_image",
+            "twitter:title": "Solana (SOL) Price, Charts, and News | Coinbase: solana price, solana, sol price",
+            "og:title": "Solana (SOL) Price, Charts, and News | Coinbase: solana price, solana, sol price",
+            "twitter:app:id:ipad": "886427730",
+            "twitter:app:name:googleplay": "Coinbase - Buy/Sell cryptocurrency",
+            "twitter:app:id:iphone": "886427730",
+            "twitter:creator": "@coinbase",
+            "og:description": "March 4, 2022 - The current price of Solana is $87.52 per (SOL / USD). Solana is 66.35% below the all time high of $260.06. The current circulating supply is 317,424,279.824 SOL. Discover new cryptocurrencies to add to your portfolio.",
+            "twitter:site": "@coinbase",
+            "twitter:app:name:ipad": "Coinbase - Buy/Sell cryptocurrency",
+            "viewport": "width=device-width, initial-scale=1.0",
+            "twitter:description": "March 4, 2022 - The current price of Solana is $87.52 per (SOL / USD). Solana is 66.35% below the all time high of $260.06. The current circulating supply is 317,424,279.824 SOL. Discover new cryptocurrencies to add to your portfolio.",
+            "twitter:app:name:iphone": "Coinbase - Buy/Sell cryptocurrency"
+          }
+        ],
+        "listitem": [
+          {
+            "item": "Price charts",
+            "name": "Price charts",
+            "position": "1"
+          },
+          {
+            "item": "Solana price",
+            "name": "Solana price",
+            "position": "2"
+          },
+          {
+            "item": "Pawtocol$0.10UPI+8,895.03% views",
+            "name": "Pawtocol",
+            "value": "$0.10"
+          },
+          {
+            "item": "Orca$2.47ORCA+624.36% views",
+            "name": "Orca",
+            "value": "$2.47"
+          },
+          {
+            "item": "Ethereum Name Service$15.32ENS+472.13% views",
+            "name": "Ethereum Name Service",
+            "value": "$15.32"
+          },
+          {
+            "item": "SHPING$0.02SHPING+442.4% views",
+            "name": "SHPING",
+            "value": "$0.02"
+          },
+          {
+            "item": "Pluton$8.10PLU+363.98% views",
+            "name": "Pluton",
+            "value": "$8.10"
+          },
+          {
+            "item": "Enzyme$51.33MLN+265.71% views",
+            "name": "Enzyme",
+            "value": "$51.33"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "customsearch#result",
+      "title": "Solana (@solana) | Twitter",
+      "htmlTitle": "\u003cb\u003eSolana\u003c/b\u003e (@\u003cb\u003esolana\u003c/b\u003e) | Twitter",
+      "link": "https://mobile.twitter.com/solana?lang=en",
+      "displayLink": "mobile.twitter.com",
+      "snippet": "The latest Tweets from Solana (@solana). The world's most performant global state machine ◎ Fast transactions with fast finality & censorship-resistance ...",
+      "htmlSnippet": "The latest Tweets from \u003cb\u003eSolana\u003c/b\u003e (@\u003cb\u003esolana\u003c/b\u003e). The world&#39;s most performant global state machine ◎ Fast transactions with fast finality &amp; censorship-resistance&nbsp;...",
+      "cacheId": "A0lG2dZdhRIJ",
+      "formattedUrl": "https://mobile.twitter.com/solana?lang=en",
+      "htmlFormattedUrl": "https://mobile.twitter.com/\u003cb\u003esolana\u003c/b\u003e?lang=en",
+      "pagemap": {
+        "cse_thumbnail": [
+          {
+            "src": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTFZCV2ZDS4w_-V2962YADuRUW4dU6beDbaV4aveQ74aP6eUd-B2szzDcip",
+            "width": "225",
+            "height": "225"
+          }
+        ],
+        "xfn": [
+          {}
+        ],
+        "metatags": [
+          {
+            "msapplication-tilecolor": "#00aced",
+            "al:android:url": "twitter://user?screen_name=solana",
+            "al:ios:app_name": "Twitter",
+            "swift-page-section": "profile",
+            "al:android:package": "com.twitter.android",
+            "swift-page-name": "profile",
+            "msapplication-tileimage": "//abs.twimg.com/favicons/win8-tile-144.png",
+            "al:ios:url": "twitter://user?screen_name=solana",
+            "al:ios:app_store_id": "333903271",
+            "al:android:app_name": "Twitter",
+            "facebook-domain-verification": "moho2ug7zs57jijiywrewd8wb5a08h"
+          }
+        ],
+        "cse_image": [
+          {
+            "src": "https://pbs.twimg.com/profile_images/1472933274209107976/6u-LQfjG_400x400.jpg"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "customsearch#result",
+      "title": "Solana Center for Environmental Innovation |",
+      "htmlTitle": "\u003cb\u003eSolana\u003c/b\u003e Center for Environmental Innovation |",
+      "link": "https://www.solanacenter.org/",
+      "displayLink": "www.solanacenter.org",
+      "snippet": "We provide community education and professional services to reduce waste, conserve water, and build healthy soil. Latest from Solana Center. Quarterly ...",
+      "htmlSnippet": "We provide community education and professional services to reduce waste, conserve water, and build healthy soil. Latest from \u003cb\u003eSolana\u003c/b\u003e Center. Quarterly&nbsp;...",
+      "cacheId": "G7MJrmmD_qYJ",
+      "formattedUrl": "https://www.solanacenter.org/",
+      "htmlFormattedUrl": "https://www.\u003cb\u003esolana\u003c/b\u003ecenter.org/",
+      "pagemap": {
+        "cse_thumbnail": [
+          {
+            "src": "https://encrypted-tbn2.gstatic.com/images?q=tbn:ANd9GcTEu2bR-kmEHhvQeP1AjQEZQTJrQo8CdwLxp_mR6TQXqQp0I9cMXlv5DtY",
+            "width": "600",
+            "height": "78"
+          }
+        ],
+        "metatags": [
+          {
+            "msapplication-config": "/sites/all/themes/solana/images/favicons/browserconfig.xml",
+            "og:type": "website",
+            "theme-color": "#000000",
+            "og:site_name": "Solana Center for Environmental Innovation",
+            "handheldfriendly": "true",
+            "viewport": "width=device-width",
+            "og:title": "Solana Center for Environmental Innovation",
+            "mobileoptimized": "width",
+            "og:url": "https://www.solanacenter.org/"
+          }
+        ],
+        "cse_image": [
+          {
+            "src": "https://www.solanacenter.org/sites/all/themes/solana/images/bg-mission-blue.png"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "customsearch#result",
+      "title": "Solana: Sustainable Footwear",
+      "htmlTitle": "\u003cb\u003eSolana\u003c/b\u003e: Sustainable Footwear",
+      "link": "https://wearesolana.com/",
+      "displayLink": "wearesolana.com",
+      "snippet": "Solana's exclusive take on espadrilles, impeccably crafted using sustainable materials. Shop our unique collection today!",
+      "htmlSnippet": "\u003cb\u003eSolana&#39;s\u003c/b\u003e exclusive take on espadrilles, impeccably crafted using sustainable materials. Shop our unique collection today!",
+      "cacheId": "lSVSGHOL4KkJ",
+      "formattedUrl": "https://wearesolana.com/",
+      "htmlFormattedUrl": "https://weare\u003cb\u003esolana\u003c/b\u003e.com/",
+      "pagemap": {
+        "cse_thumbnail": [
+          {
+            "src": "https://encrypted-tbn2.gstatic.com/images?q=tbn:ANd9GcQ8a0QNRTf8K9CyluTiPqRmaG5WyWOZNE5QEvpOi_RkD_QgmQoQAki9VSs",
+            "width": "311",
+            "height": "162"
+          }
+        ],
+        "organization": [
+          {
+            "logo": "https://cdn.shopify.com/s/files/1/0037/6881/1638/files/solana-shoes-logo_170x.png?v=1592251876",
+            "url": "https://wearesolana.com/"
+          }
+        ],
+        "metatags": [
+          {
+            "p:domain_verify": "8b2552aff21e18b957c5eac9c76c4551",
+            "og:image": "https://cdn.shopify.com/s/files/1/0037/6881/1638/files/Untitled_design_38_da76ccb5-c3b4-4909-9e6e-549783ad5b9a.png?v=1615864439",
+            "theme-color": "#3c4091",
+            "og:type": "website",
+            "twitter:card": "summary_large_image",
+            "twitter:title": "Sustainable Footwear | Solana",
+            "og:image:width": "1200",
+            "og:site_name": "Solana",
+            "og:title": "Sustainable Footwear | Solana",
+            "shopify-checkout-api-token": "856fa6e2b8bb87e373ac9d03be0fdef0",
+            "og:image:height": "628",
+            "og:description": "Solana's exclusive take on espadrilles, impeccably crafted using sustainable materials. Shop our unique collection today!",
+            "og:image:secure_url": "https://cdn.shopify.com/s/files/1/0037/6881/1638/files/Untitled_design_38_da76ccb5-c3b4-4909-9e6e-549783ad5b9a.png?v=1615864439",
+            "twitter:site": "@",
+            "viewport": "width=device-width,initial-scale=1",
+            "og:id": "https://wearesolana.com/",
+            "twitter:description": "Solana's exclusive take on espadrilles, impeccably crafted using sustainable materials. Shop our unique collection today!",
+            "shopify-digital-wallet": "/3768811638/digital_wallets/dialog",
+            "og:url": "https://wearesolana.com/"
+          }
+        ],
+        "cse_image": [
+          {
+            "src": "https://cdn.shopify.com/s/files/1/0037/6881/1638/files/Untitled_design_38_da76ccb5-c3b4-4909-9e6e-549783ad5b9a.png?v=1615864439"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "customsearch#result",
+      "title": "City of Solana Beach, California",
+      "htmlTitle": "City of \u003cb\u003eSolana\u003c/b\u003e Beach, California",
+      "link": "https://www.ci.solana-beach.ca.us/",
+      "displayLink": "www.ci.solana-beach.ca.us",
+      "snippet": "The Official Website for the City of Solana Beach, California.",
+      "htmlSnippet": "The Official Website for the City of \u003cb\u003eSolana\u003c/b\u003e Beach, California.",
+      "cacheId": "w0yBVlE20DwJ",
+      "formattedUrl": "https://www.ci.solana-beach.ca.us/",
+      "htmlFormattedUrl": "https://www.ci.\u003cb\u003esolana\u003c/b\u003e-beach.ca.us/",
+      "pagemap": {
+        "cse_thumbnail": [
+          {
+            "src": "https://encrypted-tbn2.gstatic.com/images?q=tbn:ANd9GcTzMKVyb9hYEwynjc9KstfxXnfTBy-__mYQFpUcMQovhG21ZNYSeYnDsA",
+            "width": "412",
+            "height": "122"
+          }
+        ],
+        "metatags": [
+          {
+            "og:type": "article",
+            "viewport": "width=device-width, initial-scale=1.0, maximum-scale=5.0, minimum-scale=0.8, user-scalable=yes",
+            "og:title": "Welcome to Solana Beach",
+            "og:description": "The charming, seaside community of Solana Beach&nbsp;is nestled along the northern coast of San Diego County and is approximately a 30-minute drive from downtown San Diego. Its primary access routes include Interstate 5, Highway 101, Lomas Santa Fe Drive, and Via de la Valle. The City is home to a vibrant train station that serves both Amtrak and the Coaster, one of only three in San Diego County.\n\nThe City lives up to its name with temperatures that average 62 degrees in the wintertime and 77 degrees in the summertime. It offers 1.7 miles of coastline for swimming and surfing. Most days, you will see locals drop by to watch the sunset at the award-winning Fletcher Cove Park.\nSolana Beach is a favorite destination for those looking to enjoy the beach, eclectic shops, great dining, golfing, nightlife, and nearby hiking."
+          }
+        ],
+        "cse_image": [
+          {
+            "src": "https://www.ci.solana-beach.ca.us/vertical/Sites/%7B840804C2-F869-4904-9AE3-720581350CE7%7D/uploads/CM_COSBPano(1)_Web.jpg"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "customsearch#result",
+      "title": "Explorer | Solana",
+      "htmlTitle": "Explorer | \u003cb\u003eSolana\u003c/b\u003e",
+      "link": "https://explorer.solana.com/",
+      "displayLink": "explorer.solana.com",
+      "snippet": "Look up transactions and accounts on the various Solana clusters.",
+      "htmlSnippet": "Look up transactions and accounts on the various \u003cb\u003eSolana\u003c/b\u003e clusters.",
+      "cacheId": "3i38KzqQ30IJ",
+      "formattedUrl": "https://explorer.solana.com/",
+      "htmlFormattedUrl": "https://explorer.\u003cb\u003esolana\u003c/b\u003e.com/",
+      "pagemap": {
+        "metatags": [
+          {
+            "theme-color": "#000000",
+            "viewport": "width=device-width,initial-scale=1"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "customsearch#result",
+      "title": "What is Solana? A Scalable, Decentralized Network for Dapps ...",
+      "htmlTitle": "What is \u003cb\u003eSolana\u003c/b\u003e? A Scalable, Decentralized Network for Dapps ...",
+      "link": "https://decrypt.co/resources/what-is-solana-a-scalable-decentralized-network-for-dapps",
+      "displayLink": "decrypt.co",
+      "snippet": "May 14, 2021 ... Dapp platform Solana is aiming to succeed where Ethereum currently struggles, competing on throughput and a unique consensus mechanism.",
+      "htmlSnippet": "May 14, 2021 \u003cb\u003e...\u003c/b\u003e Dapp platform \u003cb\u003eSolana\u003c/b\u003e is aiming to succeed where Ethereum currently struggles, competing on throughput and a unique consensus mechanism.",
+      "cacheId": "-nLWYX6jumgJ",
+      "formattedUrl": "https://decrypt.co/.../what-is-solana-a-scalable-decentralized-network-for- dapps",
+      "htmlFormattedUrl": "https://decrypt.co/.../what-is-\u003cb\u003esolana\u003c/b\u003e-a-scalable-decentralized-network-for- dapps",
+      "pagemap": {
+        "cse_thumbnail": [
+          {
+            "src": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQusHB6ohR0h5BRLAYRbHYX2r5rnZzrHN2o6W07a1mUmkuDYxNgTr9Mpy4",
+            "width": "318",
+            "height": "159"
+          }
+        ],
+        "metatags": [
+          {
+            "og:image": "https://cdn.decrypt.co/resize/1024/height/512/wp-content/uploads/2021/05/Solana-gID_6-pID_4.png",
+            "theme-color": "#000",
+            "article:published_time": "2021-05-14T15:34:42",
+            "twitter:card": "summary_large_image",
+            "og:site_name": "Decrypt",
+            "og:description": "Solana boasts impressive speeds and a burgeoning dapp ecosystem, but it's still on the proving grounds.",
+            "article:publisher": "https://www.facebook.com/decryptmedia",
+            "twitter:image": "https://cdn.decrypt.co/resize/1024/height/512/wp-content/uploads/2021/05/Solana-gID_6-pID_4.png",
+            "next-head-count": "48",
+            "twitter:site": "@decryptmedia",
+            "article:modified_time": "2021-05-14T18:47:50",
+            "news_keywords": "SOL, solana, Tower",
+            "og:type": "article",
+            "og:image:alt": "SOL solana Tower",
+            "article:section": "Learn",
+            "twitter:title": "What is Solana? A Scalable, Decentralized Network for Dapps - Decrypt",
+            "msvalidate.01": "DD213A13BA0ECDFE934884391A9E8039",
+            "author": "Decrypt / Daniel Phillips",
+            "og:title": "What is Solana? A Scalable, Decentralized Network for Dapps - Decrypt",
+            "article:tag": "SOL",
+            "fb:app_id": "2105710919682357",
+            "apple-mobile-web-app-status-bar-style": "black-translucent",
+            "viewport": "minimum-scale=1, initial-scale=1, width=device-width, shrink-to-fit=no",
+            "twitter:description": "Solana boasts impressive speeds and a burgeoning dapp ecosystem, but it's still on the proving grounds.",
+            "og:locale": "en_US",
+            "og:url": "https://decrypt.co/resources/what-is-solana-a-scalable-decentralized-network-for-dapps"
+          }
+        ],
+        "cse_image": [
+          {
+            "src": "https://cdn.decrypt.co/resize/1024/height/512/wp-content/uploads/2021/05/Solana-gID_6-pID_4.png"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "customsearch#result",
+      "title": "Solana Docs: Homepage",
+      "htmlTitle": "\u003cb\u003eSolana\u003c/b\u003e Docs: Homepage",
+      "link": "https://docs.solana.com/",
+      "displayLink": "docs.solana.com",
+      "snippet": "Validate transactions, secure the network, and earn rewards. Create an SPL Token. Launch your own SPL Token, Solana's equivalent of ERC-20.",
+      "htmlSnippet": "Validate transactions, secure the network, and earn rewards. Create an SPL Token. Launch your own SPL Token, \u003cb\u003eSolana&#39;s\u003c/b\u003e equivalent of ERC-20.",
+      "cacheId": "-psZxT5EVr4J",
+      "formattedUrl": "https://docs.solana.com/",
+      "htmlFormattedUrl": "https://docs.\u003cb\u003esolana\u003c/b\u003e.com/",
+      "pagemap": {
+        "metatags": [
+          {
+            "viewport": "width=device-width,initial-scale=1",
+            "og:title": "Homepage | Solana Docs",
+            "docsearch:docusaurus_tag": "default",
+            "docsearch:language": "en",
+            "og:url": "https://docs.solana.com/",
+            "og:description": "Solana Documentation"
+          }
+        ]
+      }
+    }
+  ]
+}

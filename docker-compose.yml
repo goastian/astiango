@@ -1,0 +1,11 @@
+version: '3.7'
+
+services:
+ prieco:
+  build:
+      context: .
+      dockerfile: Dockerfile
+  container_name: prieco
+  hostname: prieco
+  ports:
+     - 8009:8009
