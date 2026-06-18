@@ -1,12 +1,12 @@
-# Stract Crawler
+# AstianGO Crawler
 
-Stract is an [open source](https://github.com/StractOrg/stract/) web search engine. StractBot is the name of our crawler that collects pages from the web in order to build the index.
-It is written in Rust and the source code can be found [here](https://github.com/StractOrg/stract/tree/main/crates/core/src/crawler).
-The crawler uses the user agent `Mozilla/5.0 (compatible; StractBot/0.2; open source search engine; +https://stract.com/webmasters)`.
+Stract is an [open source](https://github.com/StractOrg/stract/) web search engine. AstianGOBot is the name of our crawler that collects pages from the web in order to build the index.
+It is written in Rust and the source code can be found [here](https://github.com/goastian/astiango/tree/main/crates/core/src/crawler).
+The crawler uses the user agent `Mozilla/5.0 (compatible; AstianGOBot/0.2; open source search engine; +https://stract.com/webmasters)`.
 
 ## Politeness
 
-StractBot is a polite crawler. It respects the [robots.txt](https://en.wikipedia.org/wiki/Robots.txt) file of the website it is crawling and tries to not overload the server.
+AstianGOBot is a polite crawler. It respects the [robots.txt](https://en.wikipedia.org/wiki/Robots.txt) file of the website it is crawling and tries to not overload the server.
 
 ### Waiting Time Calculation
 
@@ -32,20 +32,20 @@ If the crawler hasn't received any 429 responses from a server, it may gradually
 
 ### Robots.txt
 
-The crawler looks for the token StractBot in the [robots.txt](https://www.robotstxt.org/about.html) file to determine which pages (if any) it is allowed to crawl.
+The crawler looks for the token AstianGOBot in the [robots.txt](https://www.robotstxt.org/about.html) file to determine which pages (if any) it is allowed to crawl.
 
 If you want to restrict access to part of your site, add the following to your robots.txt file
 
 ```
-User-agent: StractBot
+User-agent: AstianGOBot
 Disallow: /private
 ```
 
-This will ensure that StractBot doesn't access any page with the '/private' prefix.
-You can also restrict StractBot from accessing any page on your site
+This will ensure that AstianGOBot doesn't access any page with the '/private' prefix.
+You can also restrict AstianGOBot from accessing any page on your site
 
 ```
-User-agent: StractBot
+User-agent: AstianGOBot
 Disallow: /
 ```
 
