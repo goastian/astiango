@@ -11,7 +11,7 @@
 </p>
 <br />
 
-AstianGO is a private, open, and transparent search engine. hosted at [astiango.com](https://astiango.com/). AstianGO intends to continue using the Stract base.
+AstianGO is a private, open, and transparent search engine. hosted at [astiango.com](https://astiango.com/). AstianGO intends to continue using the Stract base. Special thanks to [Mikkel Denker](https://github.com/mikkeldenker) for allowing us to continue his creation.
 
 <br />
 <p align="center">
