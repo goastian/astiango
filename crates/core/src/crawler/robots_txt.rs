@@ -277,10 +277,10 @@ mod tests {
 
     #[test]
     fn simple() {
-        let ua_token = "StractBot";
+        let ua_token = "AstianGOBot";
         let robots_txt = RobotsTxt::parse(
             ua_token,
-            r#"User-agent: StractBot
+            r#"User-agent: AstianGOBot
             Disallow: /test"#,
         )
         .unwrap();
@@ -291,10 +291,10 @@ mod tests {
 
     #[test]
     fn lowercase() {
-        let ua_token = "StractBot";
+        let ua_token = "AstianGOBot";
         let robots_txt = RobotsTxt::parse(
             ua_token,
-            r#"User-agent: stractbot
+            r#"User-agent: astiangobot
             Disallow: /test"#,
         )
         .unwrap();
@@ -305,10 +305,10 @@ mod tests {
 
     #[test]
     fn test_extra_newline() {
-        let ua_token = "StractBot";
+        let ua_token = "AstianGOBot";
         let robots_txt = RobotsTxt::parse(
             ua_token,
-            r#"User-agent: StractBot
+            r#"User-agent: AstianGOBot
 
 
             Disallow: /test"#,
@@ -321,12 +321,12 @@ mod tests {
 
     #[test]
     fn test_multiple_agents() {
-        let ua_token = "StractBot";
+        let ua_token = "AstianGOBot";
 
         let robots_txt = RobotsTxt::parse(
             ua_token,
             r#"User-Agent: GoogleBot
-User-Agent: StractBot
+User-Agent: AstianGOBot
 Disallow: /
 
 User-Agent: *
@@ -336,11 +336,11 @@ Allow: /"#,
 
         assert!(!robots_txt.is_allowed(&Url::parse("http://example.com/test").unwrap()));
 
-        let ua_token = "StractBot";
+        let ua_token = "AstianGOBot";
 
         let robots_txt = RobotsTxt::parse(
             ua_token,
-            r#"User-Agent: GoogleBot, StractBot
+            r#"User-Agent: GoogleBot, AstianGOBot
 Disallow: /
 
 User-Agent: *
@@ -353,7 +353,7 @@ Allow: /"#,
 
     #[test]
     fn test_sitemap() {
-        let ua_token = "StractBot";
+        let ua_token = "AstianGOBot";
         let robots_txt = RobotsTxt::parse(
             ua_token,
             r#"User-agent: *
@@ -379,11 +379,11 @@ SiTeMaP: http://example.com/sitemap.xml"#,
 
     #[test]
     fn wildcard() {
-        let ua_token = "StractBot";
+        let ua_token = "AstianGOBot";
 
         let robots_txt = RobotsTxt::parse(
             ua_token,
-            r#"User-agent: StractBot
+            r#"User-agent: AstianGOBot
 Disallow: /test/*
 "#,
         )
@@ -397,7 +397,7 @@ Disallow: /test/*
 
         let robots_txt = RobotsTxt::parse(
             ua_token,
-            r#"User-agent: StractBot
+            r#"User-agent: AstianGOBot
     Disallow: /test/*/bar
     "#,
         )
