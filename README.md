@@ -1,5 +1,7 @@
-<p align="center">
-  <img src="assets/big-logo.svg" height="120" />
+
+  <p align="center">
+  <img src="assets/screenshot.png" width="80%" />
+</p>
   <br />
   <br />
   <a target="_blank" href="https://docs.stract.com/">
@@ -13,11 +15,6 @@
 
 AstianGO is a private, open, and transparent search engine. hosted at [astiango.com](https://astiango.com/). AstianGO intends to continue using the Stract base. Special thanks to [Mikkel Denker](https://github.com/mikkeldenker) for allowing us to continue his creation.
 
-<br />
-<p align="center">
-  <img src="assets/screenshot.png" width="80%" />
-</p>
-<br />
 <br />
 
 # 💡 Features
