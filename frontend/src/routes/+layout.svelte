@@ -6,9 +6,9 @@
 </script>
 
 <svelte:head>
-  <title>{$page.data.globals?.title || 'Stract'}</title>
-  <meta property="og:title" content="Stract" />
-  <meta property="og:image" content="https://stract.com/images/biglogo-with-text.png" />
+  <title>{$page.data.globals?.title || 'AstianGO'}</title>
+  <meta property="og:title" content="AstianGO" />
+  <meta property="og:image" content="https://astiango.com/images/biglogo-with-text.png" />
   <meta name="viewport" content="width=device-width" />
 </svelte:head>
 
