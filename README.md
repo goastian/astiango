@@ -38,7 +38,7 @@ We recommend everyone to use the hosted version at [astiango.com](https://astian
 
 # ‍💼 License
 
-Stract is offered under the terms defined under the [LICENSE.md](LICENSE.md) file unless otherwise specified in the relevant subdirectory.
+AstianGO is offered under the terms defined under the [LICENSE.md](LICENSE.md) file unless otherwise specified in the relevant subdirectory.
 
 # 📬 Contact
 
