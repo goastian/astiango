@@ -1,6 +1,6 @@
 # AstianGO Crawler
 
-Stract is an [open source](https://github.com/StractOrg/stract/) web search engine. AstianGOBot is the name of our crawler that collects pages from the web in order to build the index.
+AstianGO is an [open source](https://github.com/goastian/astiango/) web search engine. AstianGOBot is the name of our crawler that collects pages from the web in order to build the index.
 It is written in Rust and the source code can be found [here](https://github.com/goastian/astiango/tree/main/crates/core/src/crawler).
 The crawler uses the user agent `Mozilla/5.0 (compatible; AstianGOBot/0.2; open source search engine; +https://stract.com/webmasters)`.
 
