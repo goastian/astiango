@@ -1,6 +1,6 @@
 import requests
 
-API = "https://stract.com/beta/api/search"
+API = "https://astiango.com/beta/api/search"
 # API = "http://localhost:3000/beta/api/search"
 NUM_RESULTS_PER_QUERY = 20
 

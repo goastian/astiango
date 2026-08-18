@@ -1,7 +1,7 @@
 import numpy as np
 import json
 import sqlite3
-import stract
+import astiango
 from scipy.optimize import differential_evolution
 import random
 from pprint import pprint
@@ -93,7 +93,7 @@ def eval_query(query, expected_urls, weights):
         coeffs = {id2feature[i]: w for i, w in enumerate(weights)}
         coeffs["lambda_mart"] = 1000.0
 
-    res = stract.search(query, signal_coefficients=coeffs)
+    res = astiango.search(query, signal_coefficients=coeffs)
     return sum([1 for r in res if r["url"] in expected_urls])
 
 

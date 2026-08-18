@@ -14,9 +14,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Main library for Stract.
+//! Main library for AstianGO.
 
-#![doc(html_logo_url = "https://stract.com/images/biglogo.svg")]
+#![doc(html_logo_url = "https://astiango.com/images/biglogo.svg")]
 #![warn(clippy::too_many_lines)]
 // pedantic stuff
 // #![warn(clippy::pedantic)]

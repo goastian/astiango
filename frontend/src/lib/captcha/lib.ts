@@ -5,7 +5,7 @@ import { readdirSync } from 'fs';
 import { AudioMixer } from './audioMixer';
 
 /// A collection of custom captchas. They can very easily be broken
-/// but hopefully stract is still small enough that very few will actually be
+/// but hopefully AstianGO is still small enough that very few will actually be
 /// bothered to put in the effort.
 
 const NUM_AUDIO_FILES = 5;

@@ -1,9 +1,9 @@
 <OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/" xmlns:moz="http://www.mozilla.org/2006/browser/search/">
-  <ShortName>Stract</ShortName>
+  <ShortName>AstianGO</ShortName>
   <Description>Open source search engine.</Description>
   <InputEncoding>UTF-8</InputEncoding>
-  <Image width="32" height="32" type="image/x-icon">https://stract.com/favicon.ico</Image>
-  <Url rel="results" type="text/html" template="https://stract.com/search?q={searchTerms}"/>
-  <Url rel="suggestions" type="application/x-suggestions+json" template="https://stract.com/beta/api/autosuggest/browser?q={searchTerms}"/>
-  <moz:SearchForm>https://stract.com/</moz:SearchForm>
+  <Image width="32" height="32" type="image/x-icon">https://astiango.com/favicon.ico</Image>
+  <Url rel="results" type="text/html" template="https://astiango.com/search?q={searchTerms}"/>
+  <Url rel="suggestions" type="application/x-suggestions+json" template="https://astiango.com/beta/api/autosuggest/browser?q={searchTerms}"/>
+  <moz:SearchForm>https://astiango.com/</moz:SearchForm>
 </OpenSearchDescription>

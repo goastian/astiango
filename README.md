@@ -4,10 +4,10 @@
 </p>
   <br />
   <br />
-  <a target="_blank" href="https://docs.stract.com/">
+  <a target="_blank" href="https://astiango.com/beta/api/docs/swagger">
     <img src="https://img.shields.io/badge/api-docs-0b7bff?labelColor=white" style="max-width: 100%;">
   </a>
-  <a target="_blank" href="https://stract.com/webmasters">
+  <a target="_blank" href="https://astiango.com/webmasters">
     <img src="https://img.shields.io/badge/webmaster-info-0b7bff?labelColor=white" style="max-width: 100%;">
   </a>
 </p>
@@ -20,7 +20,7 @@ AstianGO is a private, open, and transparent search engine. hosted at [astiango.
 # 💡 Features
 
 - Keyword search that respects your search query.
-- Fully independent search index [with our own crawler](https://stract.com/webmasters).
+- Fully independent search index [with our own crawler](https://astiango.com/webmasters).
 - Advanced query syntax (`site:`, `intitle:` etc.).
 - DDG-style [!bang syntax](https://duckduckgo.com/bang)
 - Wikipedia and stackoverflow sidebar
@@ -50,4 +50,3 @@ We truly stand on the shoulders of giants and this project would not have been e
 
 - The authors and contributors of Tantivy for providing the inverted index library on which AstianGO is built.
 - The commoncrawl organization for crawling the web and making the dataset readily available. Even though we have our own crawler now, commoncrawl has been a huge help in the early stages of development.
-

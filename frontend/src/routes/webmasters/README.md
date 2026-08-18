@@ -2,7 +2,7 @@
 
 AstianGO is an [open source](https://github.com/goastian/astiango/) web search engine. AstianGOBot is the name of our crawler that collects pages from the web in order to build the index.
 It is written in Rust and the source code can be found [here](https://github.com/goastian/astiango/tree/main/crates/core/src/crawler).
-The crawler uses the user agent `Mozilla/5.0 (compatible; AstianGOBot/0.2; open source search engine; +https://stract.com/webmasters)`.
+The crawler uses the user agent `Mozilla/5.0 (compatible; AstianGOBot/0.2; open source search engine; +https://astiango.com/webmasters)`.
 
 ## Politeness
 
@@ -53,4 +53,4 @@ The robots.txt file is cached for 1 hour, so changes to the file should be respe
 
 ## Contact us
 
-If you have any concerns or bad experiences with our crawler, please don't hesitate to reach out to us at [crawler@stract.com](mailto:crawler@stract.com). Chances are that others experience the same problems and we would love to fix them.
+If you have any concerns or bad experiences with our crawler, please don't hesitate to reach out to us at [contact@astian.org](mailto:contact@astian.org). Chances are that others experience the same problems and we would love to fix them.

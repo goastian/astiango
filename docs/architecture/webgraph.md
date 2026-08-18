@@ -6,7 +6,7 @@ The webgraph is stored in a tantivy index on disk, where each document represent
 ## Webgraph Uses
 The structure of the web can provide highly valuable information when detemining the relevance of a page to a user's search query. PageRank, which is a centrality meassure developed by Larry Page and Sergey Brin, was one of the primary reasons why Google provided much better search results than their competitors in the early days.
 
-Stract uses a similar centrality meassure called Harmonic Centrality which has been shown to satisfy some useful axioms for centrality ([paper](https://arxiv.org/abs/1308.2140)).
+AstianGO uses a similar centrality meassure called Harmonic Centrality which has been shown to satisfy some useful axioms for centrality ([paper](https://arxiv.org/abs/1308.2140)).
 
 ### Harmonic Centrality
 Harmonic centrality is a measure used to identify the importance of a node within a network. In the context of a webgraph, nodes (whether they be individual pages or entire hosts) that have a high harmonic centrality are ones that are, on average, closer to all other nodes in the network. The closeness of a node in this context refers to its average distance from all other nodes.

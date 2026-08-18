@@ -1,20 +1,20 @@
 # Background
 
-Stract is an open source company that tries to fix search.
+AstianGO is an open source project that tries to fix search.
 All our code is licensed under AGPLv3.
-The main idea is that if we ever do anything that's against the best interest of the users, someone else can take our code and do better. You can read more about the [thought process here](https://github.com/StractOrg/stract/discussions/150#discussioncomment-8476851) if you are interested.
+The main idea is that if we ever do anything that's against the best interest of the users, someone else can take our code and do better. You can read more about the [original Stract project's thought process](https://github.com/StractOrg/stract/discussions/150#discussioncomment-8476851) if you are interested.
 
 Please only contribute if you feel comfortable doing so.
 
-# Contributing to Stract
+# Contributing to AstianGO
 
-There are many ways to contribute to Stract.
+There are many ways to contribute to AstianGO.
 Code contribution are welcome of course, but also
 bug reports, feature request, and evangelizing are just as valuable.
 
 # Submitting a PR
 
-Check if your issue is already listed [github](https://github.com/StractOrg/stract/issues).
+Check if your issue is already listed on [GitHub](https://github.com/goastian/astiango/issues).
 If it is not, create your own issue. Please make sure that an issue exists before
 submitting a PR. This will allow us to discuss the issue and make sure that the
 PR is not a waste of your time.
@@ -27,14 +27,11 @@ keep it open, just write `See #<Issue Number>`.
 Feel free to send your contribution in an unfinished state to get early feedback.
 In that case, simply mark the PR with the tag [WIP] (standing for work in progress).
 
-# Signing the CLA
+# Contributor agreements
 
-Contributors are required to sign a Contributor License Agreement.
-The process is simple and fast. Upon your first pull request, you will be prompted to
-[sign our CLA by visiting this link](https://cla-assistant.io/StractOrg/stract).
-
-We ask you to sign the CLA as it makes it [easier for us to sue a competitor](https://softwareengineering.stackexchange.com/questions/168020/how-signing-out-a-cla-prevents-legal-issues-in-open-source-projects/168026#168026)
-if they take our code without making theirs open source, which would breach the AGPLv3 license.
+If a contributor agreement is required for your change, the maintainers will provide the
+AstianGO-specific process in the pull request. Do not use the legacy Stract CLA for new
+AstianGO contributions.
 
 # Development
 

@@ -1,5 +1,5 @@
+use astiango::webgraph::{centrality::harmonic::HarmonicCentrality, WebgraphBuilder};
 use criterion::{criterion_group, criterion_main, Criterion};
-use stract::webgraph::{centrality::harmonic::HarmonicCentrality, WebgraphBuilder};
 
 const WEBGRAPH_PATH: &str = "data/webgraph";
 

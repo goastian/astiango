@@ -167,10 +167,10 @@ impl From<SearchResult> for ApiSearchResult {
 
 /// Web Search
 ///
-/// The main search endpoint that powers Stract's web search functionality. It performs a full-text search
+/// The main search endpoint that powers AstianGO's web search functionality. It performs a full-text search
 /// across all pages in the index and returns the most relevant results.
 ///
-/// The endpoint supports the [optic syntax](https://github.com/StractOrg/sample-optics/blob/main/quickstart.optic)
+/// The endpoint supports the [optic syntax](https://github.com/goastian/sample-optics/blob/main/quickstart.optic)
 /// that can be used to customize the search results and perform advanced filtering.
 /// If the query matches the bang prefix `!`, the result will be a redirect to the bang target.
 /// For example, `!w cats` redirects to Wikipedia's page on cats.

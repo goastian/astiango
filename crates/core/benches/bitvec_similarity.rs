@@ -1,6 +1,6 @@
+use astiango::ranking::bitvec_similarity::BitVec;
 use criterion::{criterion_group, criterion_main, Criterion};
 use rand::Rng;
-use stract::ranking::bitvec_similarity::BitVec;
 
 fn random_bitvec(max_len: usize, max_id: usize) -> BitVec {
     let mut rng = rand::thread_rng();

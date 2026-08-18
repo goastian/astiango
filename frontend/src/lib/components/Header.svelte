@@ -22,7 +22,7 @@
   ] as const;
 
   const social = [
-    ['https://github.com/StractOrg/stract', 'Read the source code at GitHub', IconGitHub],
+    ['https://github.com/goastian/astiango', 'Read the source code at GitHub', IconGitHub],
   ] as const;
 </script>
 
@@ -53,7 +53,7 @@
 
   <div class="flex items-center justify-center">
     {#if showLogo}
-      <a href="/" class="w-20" title="Go to Stract's frontpage">
+      <a href="/" class="w-20" title="Go to AstianGO's frontpage">
         <BiglogoBeta />
       </a>
     {/if}

@@ -6,7 +6,7 @@ This is a tool used to visualise how changes to the ranking algorithm influences
 
 - Install the dependencies using `npm install .`
 - Start the server using `npm run dev -- --open`
-- In a new terminal tab, start Stract by running `just dev` in the root of the stract folder
+- In a new terminal tab, start AstianGO by running `just dev` in the repository root
 
 ## Usage
 

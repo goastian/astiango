@@ -8,7 +8,7 @@ import time
 import requests
 import random
 from db import Db
-import stract
+import astiango
 
 ELO_K = 32
 ELO_SCALE = 400
@@ -67,7 +67,7 @@ unannotated_queries = db.get_unannotated_queries()
 
 
 def add_results(qid, query):
-    results = stract.search(query)
+    results = astiango.search(query)
     time.sleep(1)
     db.insert_results(qid, results)
 

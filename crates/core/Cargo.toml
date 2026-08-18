@@ -1,9 +1,9 @@
 [package]
 authors = ['Stract <hello@stract.com>']
-default-run = "stract"
+default-run = "astiango"
 edition = "2021"
 license = "AGPL-3.0"
-name = "stract"
+name = "astiango"
 publish = false
 version = "0.1.0"
 
@@ -19,7 +19,7 @@ return_body = []
 serde = []
 
 [[bin]]
-name = "stract"
+name = "astiango"
 path = "src/main.rs"
 
 [dependencies]

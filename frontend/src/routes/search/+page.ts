@@ -41,7 +41,7 @@ export const load: PageLoad = async (req) => {
     params,
     results,
     globals: await globals({
-      title: `${params.query} – Stract`,
+      title: `${params.query} – AstianGO`,
       header: { divider: true },
     }),
   };

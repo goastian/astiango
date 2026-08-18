@@ -57,7 +57,7 @@ queries = set(
 )
 
 
-## exported from https://stract.com/explore
+## exported from https://astiango.com/explore
 nsfw_optic = """DiscardNonMatching;
 Rule {
 	Matches {
@@ -5068,7 +5068,7 @@ Like(Site("redtube.com"));
 def search(json):
     json["numResults"] = 50
     r = requests.post(
-        "https://stract.com/beta/api/search",
+        "https://astiango.com/beta/api/search",
         json=json,
     ).json()
 

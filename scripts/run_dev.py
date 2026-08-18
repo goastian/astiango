@@ -10,7 +10,7 @@ parser.add_argument("--release", action="store_true")
 args = parser.parse_args()
 
 if args.release:
-    os.environ["STRACT_CARGO_ARGS"] = "--release"
+    os.environ["ASTIANGO_CARGO_ARGS"] = "--release"
 
 processes = []
 

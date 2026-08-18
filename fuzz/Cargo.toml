@@ -1,6 +1,6 @@
 [package]
 edition = "2021"
-name = "stract-fuzz"
+name = "astiango-fuzz"
 publish = false
 version = "0.0.0"
 
@@ -10,7 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 robotstxt = {path = "../crates/robotstxt"}
-stract = {path = "../crates/core"}
+astiango = {path = "../crates/core"}
 
 [[bin]]
 bench = false

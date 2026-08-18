@@ -23,7 +23,7 @@ use tokio::sync::Mutex;
 
 use crate::distributed::member::{Member, Service};
 
-const CLUSTER_ID: &str = "stract-cluster";
+const CLUSTER_ID: &str = "astiango-cluster";
 const GOSSIP_INTERVAL: Duration = Duration::from_secs(1);
 const SERVICE_KEY: &str = "service";
 

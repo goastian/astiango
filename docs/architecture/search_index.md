@@ -40,4 +40,4 @@ The ranking happens in multiple stages. Some of these stages occur at the shard 
   3. If a lambdamart model has been defined, the best results from the linear regression stage gets passed into the lambdamart model.
 - Combining results from all shards
   1. Results from each shard are re-ranked using both the linear regression and lambdamart models. This ensures the scores can be properly compared and ordered.
-  2. Multiple ranking stages gets applied in the ranking [pipeline](https://github.com/StractOrg/stract/tree/main/crates/core/src/ranking/pipeline) until the top 20 results are found.
+  2. Multiple ranking stages gets applied in the ranking [pipeline](https://github.com/goastian/astiango/tree/main/crates/core/src/ranking/pipeline) until the top 20 results are found.

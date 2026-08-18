@@ -30,7 +30,7 @@ const config = {
 				'default-src': ['*'],
 				'script-src': ['self', 'wasm-unsafe-eval'],
 				'connect-src': ['*'],
-				'img-src': ['self', 'data:', 'stract.com', '0.0.0.0:3000', 'localhost:3000'],
+				'img-src': ['self', 'data:', 'astiango.com', '0.0.0.0:3000', 'localhost:3000'],
 				'style-src': ['self', 'unsafe-inline']
 			}
 		}

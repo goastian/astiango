@@ -43,7 +43,7 @@ fn counters(registry: &mut crate::metrics::PrometheusRegistry) -> Result<Counter
 
     let group = registry
         .new_group(
-            "stract_search_requests".to_string(),
+            "astiango_search_requests".to_string(),
             Some("Total number of incoming search requests.".to_string()),
         )
         .unwrap();
@@ -65,7 +65,7 @@ fn counters(registry: &mut crate::metrics::PrometheusRegistry) -> Result<Counter
 
     let group = registry
         .new_group(
-            "stract_explore_requests".to_string(),
+            "astiango_explore_requests".to_string(),
             Some("Total number of incoming requests to explore api.".to_string()),
         )
         .unwrap();
@@ -73,7 +73,7 @@ fn counters(registry: &mut crate::metrics::PrometheusRegistry) -> Result<Counter
 
     let group = registry
         .new_group(
-            "stract_daily_active_users".to_string(),
+            "astiango_daily_active_users".to_string(),
             Some("Approximate number of unique daily active users.".to_string()),
         )
         .unwrap();

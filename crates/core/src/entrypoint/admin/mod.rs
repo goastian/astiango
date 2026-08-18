@@ -21,7 +21,7 @@ use std::{
 
 use crate::{distributed::sonic, entrypoint::api, generic_query, Result};
 
-const CONFIG_FOLDER: &str = "~/.config/stract";
+const CONFIG_FOLDER: &str = "~/.config/astiango";
 const CONFIG_NAME: &str = "admin.toml";
 
 trait ExpandUser {

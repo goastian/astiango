@@ -15,20 +15,20 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use anyhow::{Context, Result};
+use astiango::config;
 use clap::{Parser, Subcommand};
 use serde::de::DeserializeOwned;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
-use stract::config;
 
 #[cfg(feature = "dev")]
-use stract::entrypoint::configure;
+use astiango::entrypoint::configure;
 
-use stract::entrypoint::{
+use astiango::entrypoint::{
     self, api, entity_search_server, safety_classifier, search_server, webgraph_server,
 };
-use stract::webgraph::WebgraphBuilder;
+use astiango::webgraph::WebgraphBuilder;
 use tracing_subscriber::prelude::*;
 
 #[cfg(not(target_env = "msvc"))]
@@ -39,7 +39,7 @@ use tikv_jemallocator::Jemalloc;
 static GLOBAL: Jemalloc = Jemalloc;
 
 #[derive(Parser)]
-#[clap(author, version, about, long_about = None)]
+#[clap(author = "AstianGO <contact@astian.org>", version, about, long_about = None)]
 #[clap(propagate_version = true)]
 struct Args {
     #[clap(subcommand)]
@@ -115,7 +115,7 @@ enum Commands {
         options: AmpcOptions,
     },
 
-    /// Commands for the admin interface to manage stract.
+    /// Commands for the admin interface to manage AstianGO.
     Admin {
         #[clap(subcommand)]
         options: AdminOptions,
@@ -279,7 +279,7 @@ fn main() -> Result<()> {
         .with_max_level(tracing::Level::INFO)
         .with_env_filter(
             tracing_subscriber::EnvFilter::builder()
-                .with_default_directive("stract=info".parse().unwrap())
+                .with_default_directive("astiango=info".parse().unwrap())
                 .from_env_lossy(),
         )
         .without_time()

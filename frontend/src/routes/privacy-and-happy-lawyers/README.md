@@ -1,6 +1,6 @@
 # We will always respect your privacy.
 
-We believe privacy should be a fundamental right. When using Stract, you can rest assured that we do everything
+We believe privacy should be a fundamental right. When using AstianGO, you can rest assured that we do everything
 possible to keep your private information the way it's supposed to be - private.
 We mostly do this by simply not storing any of your private information at all.
 This keeps things simple, both for you and for us.
@@ -31,26 +31,26 @@ improve our services tremendously. You can opt-out of this at any time from the
 [settings page](/settings/privacy) and we won't store anything at all.
 
 You don't have to take our word for these claims as our
-[source code is available to everyone.](https://github.com/StractOrg/stract)
+[source code is available to everyone.](https://github.com/goastian/astiango)
 
 ## Browser Features
 
 Most of the site should function with only a minimal set of browser features enabled. We use javascript and some other browser features to optionally enhance the user experience in some places. We try to provide an overview here so you can optionally enable the features and functionality you want to use.
 
 - [LocalStorage](https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage) is used to store your optics and all other settings. The preferences that influence the search results, e.g. liked/disliked/blocked sites, gets send to the backend in the GET request parameters of your search.
-- [JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript) is used in a number of places but we strive to solely use it to enhance the user experience. You should be able to perform searches and find similar sites in 'explore' without javascript enabled. Please [submit a bug report](https://github.com/StractOrg/stract/issues/new) if this is not the case so we can look into it. Javascript is however needed to provide functionality like changing your settings, liking/disliking sites, managing optics, easily remove a single site in 'explore' etc.
+- [JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript) is used in a number of places but we strive to solely use it to enhance the user experience. You should be able to perform searches and find similar sites in 'explore' without javascript enabled. Please [submit a bug report](https://github.com/goastian/astiango/issues/new) if this is not the case so we can look into it. Javascript is however needed to provide functionality like changing your settings, liking/disliking sites, managing optics, easily remove a single site in 'explore' etc.
 - [SSE](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) are used to stream the summary back to your browser when you request to summarize a search result.
 
 We do not use any first-party, and especially not third-party, cookies.
 
 ## Terms of Service
 
-Keep in mind that all services provided in Stract are provided “as is” and there
+Keep in mind that all services provided in AstianGO are provided “as is” and there
 are no warranties. By using our services you agree with the following terms.
 
 #### Introduction
 
-These Terms of Service ("Terms") govern your use of Stract (the "Services").
+These Terms of Service ("Terms") govern your use of AstianGO (the "Services").
 
 #### Privacy Policy
 
@@ -59,12 +59,12 @@ Privacy Policy which can be found at the top of this site.
 
 #### Source code
 
-The source code for Stract is distributed under the license described in the
-[git repository.](https://github.com/StractOrg/Stract/blob/main/LICENSE.md)
+The source code for AstianGO is distributed under the license described in the
+[git repository.](https://github.com/goastian/astiango/blob/main/LICENSE.md)
 
 #### Indemnification
 
-You agree to defend, indemnify and hold harmless Stract, its contractors,
+You agree to defend, indemnify and hold harmless AstianGO, its contractors,
 contributors, licensors, and partners, and their respective directors, officers,
 employees and agents ("Indemnified Parties") from and against any and all third
 party claims and expenses, including attorneys' fees, arising out of or related
@@ -73,7 +73,7 @@ to your use of the Services.
 #### Limitation of Liability
 
 THE SERVICES ARE PROVIDED "AS IS" WITH ALL FAULTS. TO THE EXTENT PERMITTED BY LAW,
-STRACT AND THE INDEMNIFIED PARTIES HEREBY DISCLAIM ALL WARRANTIES, WHETHER EXPRESS OR IMPLIED,
+ASTIANGO AND THE INDEMNIFIED PARTIES HEREBY DISCLAIM ALL WARRANTIES, WHETHER EXPRESS OR IMPLIED,
 INCLUDING WITHOUT LIMITATION WARRANTIES THAT THE SERVICES ARE FREE OF DEFECTS, MERCHANTABLE,
 FIT FOR A PARTICULAR PURPOSE, AND NON-INFRINGING. YOU BEAR THE ENTIRE RISK AS TO USING THE
 SERVICES FOR YOUR PURPOSES AND AS TO THE QUALITY AND PERFORMANCE OF THE SERVICES, INCLUDING
@@ -83,7 +83,7 @@ THIS LIMITATION WILL APPLY NOTWITHSTANDING THE FAILURE OF ESSENTIAL PURPOSE OF A
 SOME JURISDICTIONS DO NOT ALLOW THE EXCLUSION OR LIMITATION
 OF IMPLIED WARRANTIES, SO THIS DISCLAIMER MAY NOT APPLY TO YOU.
 
-EXCEPT AS REQUIRED BY LAW, STRACT AND THE INDEMNIFIED PARTIES WILL NOT BE LIABLE FOR ANY
+EXCEPT AS REQUIRED BY LAW, ASTIANGO AND THE INDEMNIFIED PARTIES WILL NOT BE LIABLE FOR ANY
 INDIRECT, SPECIAL, INCIDENTAL, CONSEQUENTIAL, OR EXEMPLARY DAMAGES ARISING OUT OF OR IN
 ANY WAY RELATING TO THESE TERMS OR THE USE OF OR INABILITY TO USE THE SERVICES, INCLUDING
 WITHOUT LIMITATION DIRECT AND INDIRECT DAMAGES FOR LOSS OF GOODWILL, WORK STOPPAGE, LOST
@@ -94,16 +94,16 @@ CONSEQUENTIAL, OR SPECIAL DAMAGES, SO THIS EXCLUSION AND LIMITATION MAY NOT APPL
 
 #### Modifications to these
 
-Terms Stract may update these Terms from time to time to address a new feature
+Terms AstianGO may update these Terms from time to time to address a new feature
 of the Services or to clarify a provision. The updated Terms will be posted
 online. If the changes are substantive, we will announce the update through
-Stract's usual channels for such announcements such as Discord. Your continued
+AstianGO's usual channels for such announcements. Your continued
 use of the Services after the effective date of such changes constitutes your
 acceptance of such changes.
 
 #### Miscellaneous
 
-These Terms constitute the entire agreement between you and Stract concerning
+These Terms constitute the entire agreement between you and AstianGO concerning
 the Services and are governed by the laws of Denmark, excluding its conflict of
 law provisions. If any portion of these Terms is held to be invalid or
 unenforceable, the remaining portions will remain in full force and effect. In

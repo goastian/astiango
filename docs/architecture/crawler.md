@@ -1,5 +1,5 @@
 # Crawler
-[Information for webmasters here](https://stract.com/webmasters)
+[Information for webmasters here](https://astiango.com/webmasters)
 
 The crawler is a distributed system that scours the web. It has a coordinator process that determines which URLs to crawl and a set of worker processes that fetch the content of those URLs. Each worker receives a batch of crawl jobs to process, stores the fetched contents in an S3 bucket and retrieves a new batch of jobs to process. This continues until the coordinator has determined that the crawl is complete.
 
@@ -13,7 +13,7 @@ Based on this analysis, the coordinator creates a crawl plan that takes the form
 ### Respectfullness
 It is of utmost importance that we are respectful of the websites we crawl. We do not want to overload a website with requests and we do not want to crawl pages from the website that the website owner does not want us to crawl.
 
-To ensure this, the jobs are oriented by site so each site is only included in a single job. When a site gets scheduled to a worker it is then the responsibility of the worker to respect the `robots.txt` file of the domain and to not overload the domain with requests. For more details see the [webmasters](https://stract.com/webmasters) documentation.
+To ensure this, the jobs are oriented by site so each site is only included in a single job. When a site gets scheduled to a worker it is then the responsibility of the worker to respect the `robots.txt` file of the domain and to not overload the domain with requests. For more details see the [webmasters](https://astiango.com/webmasters) documentation.
 
 ## Worker
 The worker is responsible for crawling the sites scheduled by the coordinator. It is completely stateless and stores the fetched data directly to an S3 bucket. It recursively discovers new urls on the assigned site and crawls them until the crawl budget is exhausted.

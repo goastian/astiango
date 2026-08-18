@@ -1,10 +1,10 @@
 #![no_main]
 
+use astiango::{index::Index, query::Query, searcher::SearchQuery};
 use libfuzzer_sys::fuzz_target;
-use stract::{index::Index, query::Query, searcher::SearchQuery};
 
 fuzz_target!(|query: &str| {
-    let index = Index::open("/tmp/stract/fuzz-index").unwrap();
+    let index = Index::open("/tmp/astiango/fuzz-index").unwrap();
 
     let ctx = index.inverted_index.local_search_ctx();
 

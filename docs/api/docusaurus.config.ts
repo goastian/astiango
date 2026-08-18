@@ -6,20 +6,20 @@ import { ScalarOptions } from '@scalar/docusaurus';
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
 const config: Config = {
-  title: 'Stract',
+  title: 'AstianGO',
   tagline: 'Web search done right',
   favicon: 'img/favicon.ico',
 
   // Set the production url of your site here
-  url: 'https://docs.stract.com',
+  url: 'https://docs.astiango.com',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: '/',
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'stractorg', // Usually your GitHub org/user name.
-  projectName: 'stract', // Usually your repo name.
+  organizationName: 'goastian', // Usually your GitHub org/user name.
+  projectName: 'astiango', // Usually your repo name.
 
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
@@ -63,7 +63,7 @@ const config: Config = {
     navbar: {
       // title: '',
       logo: {
-        alt: 'Stract Logo',
+        alt: 'AstianGO Logo',
         src: 'img/logo.svg',
       },
       items: [
@@ -93,13 +93,13 @@ const config: Config = {
         route: '/api',
         configuration: {
           spec: {
-            url: 'https://stract.com/beta/api/docs/openapi.json',
+            url: 'https://astiango.com/beta/api/docs/openapi.json',
             // url: 'http://localhost:3000/beta/api/docs/openapi.json',
           },
           layout: 'modern',
           hideModels: true,
-          baseServerURL: 'https://stract.com',
-          servers: [{ url: 'https://stract.com', description: 'Production server' }],
+          baseServerURL: 'https://astiango.com',
+          servers: [{ url: 'https://astiango.com', description: 'Production server' }],
           theme: 'kepler',
           defaultOpenAllTags: true,
         },

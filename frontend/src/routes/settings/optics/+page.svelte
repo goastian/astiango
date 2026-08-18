@@ -89,7 +89,7 @@
     <div class="text-sm">
       See our
       <a
-        href="https://github.com/StractOrg/sample-optics/blob/main/quickstart.optic"
+        href="https://github.com/goastian/sample-optics/blob/main/quickstart.optic"
         class="inline-flex font-medium underline"
       >
         quickstart

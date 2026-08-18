@@ -4,7 +4,7 @@ import { Redirect } from '@docusaurus/router';
 function NoscriptRedirect() {
   return (
     <noscript>
-      <meta http-equiv="refresh" content="0;url=https://stract.com/beta/api/docs/swagger" />
+      <meta http-equiv="refresh" content="0;url=https://astiango.com/beta/api/docs/swagger" />
     </noscript>
   );
 }

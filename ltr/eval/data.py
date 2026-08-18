@@ -4,7 +4,7 @@ sys.path.append("ltr")
 
 import argparse
 import random
-import stract
+import astiango
 import sqlite3
 from tqdm import tqdm
 import leechy
@@ -110,7 +110,7 @@ with sqlite3.connect(args.db_path) as conn:
                 sys.exit(-1)
 
             for (rank, url) in enumerate(leechy_results):
-                res = stract.search(f'{query} exacturl:{url}', num_results=1)
+                res = astiango.search(f'{query} exacturl:{url}', num_results=1)
 
                 if len(res) > 0:
                     cursor.execute("INSERT INTO golden (qid, url, rank, signals) VALUES (?, ?, ?, ?)", (qid, url, rank, str(res[0]['rankingSignals'])))
@@ -120,7 +120,7 @@ with sqlite3.connect(args.db_path) as conn:
             conn.commit()
 
         for page in range(0, 3):
-            results = stract.search(query, num_results=100, page=page, signal_coefficients=coeffs)
+            results = astiango.search(query, num_results=100, page=page, signal_coefficients=coeffs)
 
             for (rank, result) in enumerate(results):
                 rank = rank + 100*page

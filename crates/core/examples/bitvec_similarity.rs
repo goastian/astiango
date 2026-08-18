@@ -1,5 +1,5 @@
+use astiango::ranking::bitvec_similarity::BitVec;
 use rand::Rng;
-use stract::ranking::bitvec_similarity::BitVec;
 
 fn random_bitvec(max_len: usize, max_id: usize) -> BitVec {
     let mut rng = rand::thread_rng();

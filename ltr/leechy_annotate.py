@@ -1,6 +1,6 @@
 import leechy
 from db import Db
-import stract
+import astiango
 import numpy as np
 from tqdm import tqdm
 import time
@@ -62,7 +62,7 @@ for qid, query in tqdm(unannotated_queries.items()):
         try:
             data = next(
                 res
-                for res in stract.search(f"{query} exacturl:{result}")
+                for res in astiango.search(f"{query} exacturl:{result}")
                 if res["url"] == result
             )
         except StopIteration:
@@ -76,7 +76,7 @@ for qid, query in tqdm(unannotated_queries.items()):
         db.annotate(qid, result, label)
 
     for page in range(2, 2 + 1):
-        bad_results = stract.search(query, page=page)
+        bad_results = astiango.search(query, page=page)
 
         for i, result in enumerate(bad_results):
             if result["url"] in leechy_results:

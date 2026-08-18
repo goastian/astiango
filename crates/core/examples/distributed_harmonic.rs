@@ -1,11 +1,11 @@
 use std::{net::SocketAddr, time::Duration};
 
-use clap::Parser;
-use stract::{
+use astiango::{
     distributed::member::ShardId,
     webgraph::{Edge, Node},
     webpage::url_ext::UrlExt,
 };
+use clap::Parser;
 use tracing_subscriber::util::SubscriberInitExt;
 
 #[derive(Parser)]
@@ -17,12 +17,12 @@ struct Args {
 
 fn start_dht_thread(id: u64, host: SocketAddr, gossip: SocketAddr) {
     std::thread::spawn(move || {
-        let config = stract::entrypoint::ampc::dht::Config {
+        let config = astiango::entrypoint::ampc::dht::Config {
             node_id: id,
             host,
             shard: ShardId::new(id),
             seed_node: None,
-            gossip: Some(stract::config::GossipConfig {
+            gossip: Some(astiango::config::GossipConfig {
                 seed_nodes: Some(vec!["0.0.0.0:3001".parse().unwrap()]),
                 addr: gossip,
             }),
@@ -32,15 +32,15 @@ fn start_dht_thread(id: u64, host: SocketAddr, gossip: SocketAddr) {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(stract::entrypoint::ampc::dht::run(config))
+            .block_on(astiango::entrypoint::ampc::dht::run(config))
             .unwrap();
     });
 }
 
 fn start_worker_thread(graph_path: String, shard: ShardId, host: SocketAddr, gossip: SocketAddr) {
     std::thread::spawn(move || {
-        let config = stract::config::HarmonicWorkerConfig {
-            gossip: stract::config::GossipConfig {
+        let config = astiango::config::HarmonicWorkerConfig {
+            gossip: astiango::config::GossipConfig {
                 seed_nodes: Some(vec!["0.0.0.0:3001".parse().unwrap()]),
                 addr: gossip,
             },
@@ -49,7 +49,7 @@ fn start_worker_thread(graph_path: String, shard: ShardId, host: SocketAddr, gos
             host,
         };
 
-        stract::entrypoint::ampc::harmonic_centrality::worker::run(config).unwrap();
+        astiango::entrypoint::ampc::harmonic_centrality::worker::run(config).unwrap();
     });
 }
 
@@ -63,19 +63,19 @@ fn build_graphs_if_not_exist(warc_path: &str, graph_path: &str) -> anyhow::Resul
     tracing::info!("Building graphs from warc file: {}", warc_path);
 
     std::fs::create_dir_all(path)?;
-    let warc = stract::warc::WarcFile::open(warc_path)?;
+    let warc = astiango::warc::WarcFile::open(warc_path)?;
 
     let num_records = warc.records().count();
 
     let a_path = path.join("graph_a");
     let b_path = path.join("graph_b");
 
-    let mut a = stract::webgraph::WebgraphBuilder::new(a_path, 0u64.into()).open()?;
+    let mut a = astiango::webgraph::WebgraphBuilder::new(a_path, 0u64.into()).open()?;
 
-    let mut b = stract::webgraph::WebgraphBuilder::new(b_path, 0u64.into()).open()?;
+    let mut b = astiango::webgraph::WebgraphBuilder::new(b_path, 0u64.into()).open()?;
 
     for (i, record) in warc.records().flatten().enumerate() {
-        let webpage = match stract::webpage::Html::parse_without_text(
+        let webpage = match astiango::webpage::Html::parse_without_text(
             &record.response.body,
             &record.request.url,
         ) {
@@ -168,8 +168,8 @@ fn main() -> anyhow::Result<()> {
     );
     std::thread::sleep(Duration::from_secs(3));
 
-    let config = stract::config::HarmonicCoordinatorConfig {
-        gossip: stract::config::GossipConfig {
+    let config = astiango::config::HarmonicCoordinatorConfig {
+        gossip: astiango::config::GossipConfig {
             seed_nodes: Some(vec!["0.0.0.0:3001".parse().unwrap()]),
             addr: "0.0.0.0:3007".parse().unwrap(),
         },
@@ -178,7 +178,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let start = std::time::Instant::now();
-    stract::entrypoint::ampc::harmonic_centrality::coordinator::run(config)?;
+    astiango::entrypoint::ampc::harmonic_centrality::coordinator::run(config)?;
     tracing::info!("Calculated centrality in: {:?}", start.elapsed());
 
     Ok(())

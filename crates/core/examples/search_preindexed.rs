@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use optics::HostRankings;
-use rand::seq::SliceRandom;
-use stract::{
+use astiango::{
     bangs::Bangs,
     config::{
         defaults, ApiConfig, ApiThresholds, CollectorConfig, CorrectionConfig, SnippetConfig,
@@ -13,6 +11,8 @@ use stract::{
     searcher::{api::ApiSearcher, LocalSearchClient, LocalSearcher, SearchQuery},
     webgraph::Webgraph,
 };
+use optics::HostRankings;
+use rand::seq::SliceRandom;
 use tokio::sync::RwLock;
 
 #[tokio::main]
@@ -40,7 +40,7 @@ pub async fn main() {
             thesaurus_paths: vec!["data/english-wordnet-2022-subset.ttl".to_string()],
             calculator_fetch_currencies_exchange: false,
         },
-        spell_check: Some(stract::config::ApiSpellCheck {
+        spell_check: Some(astiango::config::ApiSpellCheck {
             path: "data/web_spell".to_string(),
             correction_config: CorrectionConfig::default(),
         }),
@@ -70,7 +70,7 @@ pub async fn main() {
 
     let bangs = Bangs::from_path(config.bangs_path.as_ref().unwrap());
 
-    let searcher = stract::searcher::LocalSearchClient::from(searcher);
+    let searcher = astiango::searcher::LocalSearchClient::from(searcher);
 
     let webgraph = Webgraph::open("data/webgraph", 0u64.into()).unwrap();
 
