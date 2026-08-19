@@ -10,9 +10,6 @@
     <div class="home-search">
     <Searchbar autofocus={true} />
     </div>
-    <div class="private-notes" aria-label="Privacy features">
-      <span><i>✓</i> No behavioural tracking</span><span><i>✓</i> Independent index</span><span><i>✓</i> Open source</span>
-    </div>
   </div>
 </section>
 
