@@ -9,7 +9,7 @@
   <div class="footer-brand"><span>Astian</span><b>GO</b><small>Private search for the open web.</small></div>
   <nav aria-label="Footer links">
     {#each footer as [url, name]}
-      <a href={url}>{name}</a>
+      <a href={url} target={name === 'API' ? '_blank' : undefined} rel={name === 'API' ? 'noreferrer' : undefined}>{name}</a>
     {/each}
     <a href="/webmasters">Webmasters</a>
   </nav>

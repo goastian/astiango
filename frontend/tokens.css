@@ -22,6 +22,7 @@
   --color-success: oklch(56% 0.12 150);
   --color-focus: oklch(55% 0.2 185);
   --color-accent-ink: oklch(23% 0.018 185);
+  --color-scrim: oklch(10% 0.012 185 / 35%);
   --font-display: "Space Grotesk", "Arial", sans-serif;
   --font-body: "Manrope", "Arial", sans-serif;
   --font-mono: "IBM Plex Mono", "Courier New", monospace;
@@ -36,6 +37,8 @@
   --space-12: 48px;
   --space-16: 64px;
   --space-20: 80px;
+  --space-24: 96px;
+  --space-40: 160px;
   --radius-sm: 8px;
   --radius-md: 14px;
   --radius-lg: 22px;
@@ -72,6 +75,7 @@ html.theme-high-contrast {
   --color-success: oklch(76% 0.11 150);
   --color-focus: oklch(82% 0.15 185);
   --color-accent-ink: oklch(20% 0.018 185);
+  --color-scrim: oklch(4% 0.015 185 / 55%);
   --shadow-float: 0 16px 44px -28px oklch(4% 0.015 185 / 72%);
   --shadow-card: 0 12px 30px -26px oklch(4% 0.015 185 / 76%);
 }
@@ -94,6 +98,7 @@ html.theme-pastel {
   --color-success: oklch(54% 0.11 150);
   --color-focus: oklch(53% 0.17 185);
   --color-accent-ink: oklch(22% 0.024 45);
+  --color-scrim: oklch(20% 0.024 45 / 28%);
 }
 
 html.theme-nord-light {
@@ -114,6 +119,7 @@ html.theme-nord-light {
   --color-success: oklch(61% 0.08 145);
   --color-focus: oklch(55% 0.12 210);
   --color-accent-ink: oklch(24% 0.024 245);
+  --color-scrim: oklch(20% 0.024 245 / 28%);
 }
 
 html.theme-ugly {
@@ -134,4 +140,5 @@ html.theme-ugly {
   --color-success: oklch(50% 0.1 145);
   --color-focus: oklch(50% 0.15 155);
   --color-accent-ink: oklch(25% 0.025 30);
+  --color-scrim: oklch(20% 0.025 30 / 30%);
 }

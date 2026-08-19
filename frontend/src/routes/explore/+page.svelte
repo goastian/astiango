@@ -99,8 +99,8 @@
   };
 </script>
 
-<div class="mt-10 flex justify-center px-5">
-  <div class="noscirpt:hidden flex max-w-3xl grow flex-col">
+<div class="mt-10 flex w-full justify-center px-5">
+  <div class="noscirpt:hidden flex w-full max-w-3xl flex-col">
     <div class="mb-4 flex flex-col items-center">
       <div class="mb-5 flex flex-col items-center space-y-1">
         <h1 class="text-2xl font-bold">Explore the web</h1>
