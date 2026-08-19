@@ -148,28 +148,30 @@
   </noscript>
 {/if}
 
-<div
-  class="m-0 grid w-full grid-rows-[auto_1fr] gap-y-5 px-5 pt-4 md:grid-cols-[minmax(50ch,48rem)_1fr] md:gap-x-12 md:pl-20 lg:pl-28"
-  style="text-rendering:optimizeLegibility;font-smooth:always;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;"
->
-  <div class="flex max-w-2xl flex-col space-y-1">
-    <div class="w-full">
+<div class="qwant-results-shell">
+  <div class="qwant-results-head">
+    <div class="qwant-search-wrap">
       <Searchbar {query} bind:this={searchbarElem} />
     </div>
-    <div class="mx-auto flex w-full justify-end sm:justify-between">
-      <div class="hidden h-full flex-col space-x-2 text-xs text-neutral sm:flex">
-        <p class="h-fit">
+    <nav class="result-tabs" aria-label="Search result types">
+      <a class="active" href="/search?q={encodeURIComponent(query)}">All</a>
+      <a href="/search?q={encodeURIComponent(query)}&type=images">Images</a>
+      <a href="/search?q={encodeURIComponent(query)}&type=videos">Videos</a>
+      <a href="/search?q={encodeURIComponent(query)}&type=news">News</a>
+      <a href="/search?q={encodeURIComponent(query)}&type=discussions">Discussions</a>
+    </nav>
+    <div class="result-tools">
+      <div class="result-count">
           {#if results}
-            Found <span class="font-medium">{prettyprintCount(results.numHits)}</span> results in
-            <span class="font-medium">{((results.searchDurationMs ?? 0) / 1000).toFixed(2)}s</span>
+            Found <strong>{prettyprintCount(results.numHits)}</strong> results in
+            <strong>{((results.searchDurationMs ?? 0) / 1000).toFixed(2)}s</strong>
           {/if}
-        </p>
       </div>
-      <div class="flex space-x-2">
-        <div class="m-0 flex h-full flex-col justify-center p-0">
+      <div class="result-selects">
+        <div>
           <OpticSelector searchOnChange={true} selected={data.params.optic} />
         </div>
-        <div class="select-region flex h-full flex-col justify-center">
+        <div>
           <RegionSelect searchOnChange={true} selected={data.params.selectedRegion} />
         </div>
       </div>
@@ -200,6 +202,39 @@
           bind:this={serp}
         />
       {/if}
+    {:catch}
+      <section class="preview-results" aria-label="Search result preview">
+        <p class="preview-label">Search result preview</p>
+        <article>
+          <p class="preview-url">astian.org</p>
+          <a href="https://astian.org">AstianGO — private, open search</a>
+          <p>Search the web through an independent index, without behavioural profiling or a personal data marketplace.</p>
+        </article>
+        <article>
+          <p class="preview-url">github.com / goastian / astiango</p>
+          <a href="https://github.com/goastian/astiango">AstianGO source code</a>
+          <p>Explore the open-source search engine, its crawler and the infrastructure that powers its own index.</p>
+        </article>
+        <article>
+          <p class="preview-url">astian.org / midori-browser</p>
+          <a href="https://astian.org/midori-browser/">Midori Browser</a>
+          <p>A lightweight browser from Astian, designed as a companion for a calmer and more private web.</p>
+        </article>
+      </section>
+      <aside class="preview-panel" aria-label="AstianGO overview">
+        <span class="panel-kicker">About this result</span>
+        <h2>AstianGO</h2>
+        <p>A private, open and transparent search engine with an independent crawler and index.</p>
+        <a href="/about">Learn about AstianGO →</a>
+      </aside>
     {/await}
   {/if}
 </div>
+
+<style>
+  .qwant-results-shell { display: grid; width: 100%; grid-template-columns: minmax(0, 760px) minmax(0, 360px); column-gap: clamp(var(--space-8), 7vw, var(--space-20)); row-gap: var(--space-6); padding: var(--space-6) max(var(--space-5), calc((100vw - 1240px) / 2)) var(--space-16); text-rendering: optimizeLegibility; }
+  .qwant-results-head { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 760px) minmax(0, 360px); column-gap: clamp(var(--space-8), 7vw, var(--space-20)); row-gap: var(--space-3); } .qwant-search-wrap { grid-column: 1; } .result-tabs { grid-column: 1; display: flex; gap: var(--space-5); overflow-x: auto; padding: var(--space-2) var(--space-1) 0; } .result-tabs a { position: relative; color: var(--color-muted); font: 700 13px var(--font-body); text-decoration: none; white-space: nowrap; } .result-tabs a:hover, .result-tabs a.active { color: var(--color-accent-strong); } .result-tabs a.active::after { position: absolute; right: 0; bottom: calc(var(--space-2) * -1); left: 0; height: 2px; border-radius: var(--radius-pill); background: var(--color-accent); content: ''; }
+  .result-tools { grid-column: 1; display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); } .result-count { color: var(--color-muted); font: 500 12px var(--font-body); } .result-count strong { color: var(--color-ink-soft); font-weight: 700; } .result-selects { display: flex; align-items: center; gap: var(--space-2); }
+  .preview-results { grid-column: 1; display: grid; gap: var(--space-8); max-width: 760px; } .preview-label { margin: 0 0 calc(var(--space-2) * -1); color: var(--color-muted); font: 600 12px var(--font-body); } .preview-results article { display: grid; gap: var(--space-2); } .preview-results p { margin: 0; color: var(--color-ink-soft); font: 400 14px/1.58 var(--font-body); } .preview-results .preview-url { color: var(--color-success); font: 600 12px var(--font-body); } .preview-results a { color: var(--color-link); font: 650 clamp(18px, 2vw, 21px)/1.25 var(--font-display); letter-spacing: -.025em; text-decoration: none; } .preview-results a:hover { text-decoration: underline; } .preview-panel { grid-column: 2; align-self: start; display: grid; gap: var(--space-3); border: var(--rule) solid var(--color-rule); border-radius: var(--radius-lg); background: var(--color-paper-raised); box-shadow: var(--shadow-card); padding: var(--space-6); } .preview-panel h2, .preview-panel p { margin: 0; } .preview-panel h2 { color: var(--color-ink); font: 650 25px/1.1 var(--font-display); letter-spacing: -.04em; } .preview-panel p { color: var(--color-ink-soft); font: 400 14px/1.55 var(--font-body); } .preview-panel a { color: var(--color-accent-strong); font: 700 13px var(--font-body); text-decoration: none; } .preview-panel a:hover { text-decoration: underline; } .panel-kicker { color: var(--color-muted); font: 700 11px var(--font-body); letter-spacing: .08em; text-transform: uppercase; }
+  @media (max-width: 900px) { .qwant-results-shell { grid-template-columns: minmax(0, 1fr); } .qwant-results-head { grid-template-columns: minmax(0, 1fr); } .qwant-search-wrap, .result-tabs, .result-tools, .preview-results, .preview-panel { grid-column: 1; } } @media (max-width: 560px) { .qwant-results-shell { padding-inline: var(--space-4); } .result-tools { align-items: flex-start; flex-direction: column; } .result-selects { width: 100%; justify-content: space-between; } }
+</style>

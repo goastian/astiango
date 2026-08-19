@@ -37,14 +37,13 @@
   export const clearFocus = () => mainResultLink?.clearFocus();
 </script>
 
-<span>
-  <div class="flex min-w-0 grow flex-col space-y-0.5" bind:this={mainDiv}>
-    <div class="flex min-w-0">
-      <div class="flex min-w-0 grow flex-col space-y-0.5">
-        <span class="flex flex-col-reverse">
-          <h3 class="flex">
+<article class="qwant-result" bind:this={mainDiv}>
+    <div class="result-topline">
+      <div class="result-main">
+        <span class="result-copy">
+          <h3>
             <ResultLink
-              _class="title line-clamp-2 md:line-clamp-1 max-w-[calc(100%-30px)] text-xl font-medium text-link visited:text-link-visited hover:underline"
+              _class="title result-title"
               title={webpage.title}
               href={webpage.url}
               {resultIndex}
@@ -53,9 +52,9 @@
               {webpage.title}
             </ResultLink>
           </h3>
-          <div class="flex items-center text-sm">
+          <div class="result-url-row">
             <ResultLink
-              _class="url max-w-[calc(100%-100px)] truncate text-neutral-focus"
+              _class="url result-url"
               href={webpage.url}
               {resultIndex}
             >
@@ -64,10 +63,10 @@
           </div>
         </span>
       </div>
-      <div class="flex space-x-2">
+      <div class="result-actions">
         {#if ranking}
-          <span class="flex items-center text-sm text-neutral-focus">
-            <span class="text-xs text-neutral">
+          <span class="ranking">
+            <span>
               {#if ranking == 'liked'}
                 <div title="liked site" aria-label="you have liked this site">
                   <HandThumbUp class="w-3 text-success" />
@@ -81,7 +80,7 @@
           </span>
         {/if}
         <button
-          class="noscript:hidden flex w-5 min-w-fit items-center justify-center bg-transparent text-neutral hover:cursor-pointer hover:text-neutral-focus"
+          class="result-menu"
           aria-label="Open modal for result number: {resultIndex}"
           bind:this={button}
           on:click|stopPropagation={() => dispatch('modal', button)}
@@ -90,7 +89,7 @@
         </button>
       </div>
     </div>
-    <p class="snippet text-sm font-normal text-neutral-focus [&>b]:font-bold">
+    <p class="snippet result-snippet [&>b]:font-bold">
       {#if webpage.richSnippet && webpage.richSnippet._type == 'stackOverflowQA'}
         <StackOverflowSnippet
           question={webpage.richSnippet.question}
@@ -135,5 +134,8 @@
         </span>
       {/if}
     </p>
-  </div>
-</span>
+  </article>
+
+<style>
+  .qwant-result { display: flex; min-width: 0; flex-direction: column; gap: var(--space-2); padding: 0; font-family: var(--font-body); } .result-topline { display: flex; min-width: 0; align-items: flex-start; gap: var(--space-3); } .result-main { min-width: 0; flex: 1; } .result-copy { display: flex; flex-direction: column-reverse; gap: var(--space-1); } h3 { margin: 0; min-width: 0; } :global(.result-title) { display: block; max-width: 100%; overflow: hidden; color: var(--color-link); font: 650 clamp(18px, 2vw, 21px)/1.25 var(--font-display); letter-spacing: -.025em; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; } :global(.result-title:visited) { color: var(--color-link-visited); } :global(.result-title:hover) { text-decoration: underline; } .result-url-row { display: flex; min-width: 0; align-items: center; } :global(.result-url) { display: block; max-width: 100%; overflow: hidden; color: var(--color-success); font: 600 12px/1.3 var(--font-body); text-decoration: none; text-overflow: ellipsis; white-space: nowrap; } .result-actions { display: flex; align-items: center; gap: var(--space-2); } .ranking { color: var(--color-muted); font-size: 12px; } .result-menu { display: grid; width: 28px; height: 28px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--color-muted); cursor: pointer; } .result-menu:hover { background: var(--color-paper-soft); color: var(--color-ink); } .result-menu:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; } .result-snippet { margin: 0; color: var(--color-ink-soft); font: 400 14px/1.58 var(--font-body); } .result-snippet :global(b) { color: var(--color-ink); } @media (max-width: 540px) { :global(.result-title) { white-space: normal; } }
+</style>

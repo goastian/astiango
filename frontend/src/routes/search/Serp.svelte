@@ -73,7 +73,7 @@
 
 {#if results._type == 'websites'}
   <h1 class="sr-only">Search Results</h1>
-  <div class="col-start-1 flex min-w-0 max-w-2xl flex-col space-y-5">
+  <div class="qwant-serp">
     {#if results.spellCorrection}
       <SpellCorrection spellCorrection={results.spellCorrection} bind:this={spellCorrectElem} />
     {/if}
@@ -83,9 +83,9 @@
     {/if}
 
     {#if results.webpages}
-      <div class="grid w-full grid-cols-1 space-y-10 place-self-start">
+      <div class="results-list">
         {#each results.webpages as webpage, resultIndex (`${query}-${resultIndex}-${webpage.url}`)}
-          <div animate:flip={{ duration: 150 }} aria-expanded={modal?.site == webpage}>
+          <div class="result-row" animate:flip={{ duration: 150 }} aria-expanded={modal?.site == webpage}>
             <Result
               bind:this={resultElems[resultIndex]}
               {webpage}
@@ -100,8 +100,8 @@
       </div>
     {/if}
 
-    <div class="flex justify-center">
-      <div class="grid grid-cols-[repeat(3,auto)] items-center justify-center gap-2">
+    <div class="pagination-wrap">
+      <div class="pagination">
         {#if prevPageSearchParams}
           <a href="/search?{prevPageSearchParams}" aria-label="Previous page">
             <ChevronLeft
@@ -128,10 +128,13 @@
   </div>
 
   {#if results.sidebar}
-    <div
-      class="row-start-2 mx-auto max-w-[90vw] justify-center md:col-start-2 md:row-span-2 md:row-start-1 md:max-w-[30vw] md:pt-5"
-    >
+    <aside class="qwant-sidebar">
       <Sidebar sidebar={results.sidebar} />
-    </div>
+    </aside>
   {/if}
 {/if}
+
+<style>
+  .qwant-serp { grid-column: 1; display: flex; min-width: 0; max-width: 760px; flex-direction: column; gap: var(--space-8); } .results-list { display: grid; gap: var(--space-8); width: 100%; } .result-row { min-width: 0; } .pagination-wrap { display: flex; justify-content: center; padding-top: var(--space-4); } .pagination { display: grid; grid-template-columns: repeat(3, auto); align-items: center; gap: var(--space-3); color: var(--color-ink-soft); font: 600 13px var(--font-body); } .pagination :global(a) { color: var(--color-accent-strong); } .qwant-sidebar { grid-column: 2; grid-row: 2; align-self: start; min-width: 0; border: var(--rule) solid var(--color-rule); border-radius: var(--radius-lg); background: var(--color-paper-raised); box-shadow: var(--shadow-card); padding: var(--space-6); }
+  @media (max-width: 900px) { .qwant-sidebar { grid-column: 1; grid-row: auto; } }
+</style>

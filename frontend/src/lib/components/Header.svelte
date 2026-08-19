@@ -1,109 +1,28 @@
 <script lang="ts">
-  import IconGitHub from '~icons/simple-icons/github';
   import Bars2 from '~icons/heroicons/bars-2-20-solid';
-
-  import { twJoin } from 'tailwind-merge';
   import { page } from '$app/stores';
-  import Link from './Link.svelte';
-  import { searchQueryStore } from '$lib/stores';
-  import BiglogoBeta from '$lib/images/BiglogoBeta.svelte';
-
-  $: links = [
-    [`/search${typeof $searchQueryStore == 'string' ? $searchQueryStore : ''}`, 'Search'],
-    ['/explore', 'Explore'],
-  ] as const;
-
-  $: showDivider = $page.data.globals?.header?.divider;
-  $: showLogo = !$page.data.globals?.header?.hideLogo;
-
-  const nav = [
-    ['/settings', 'Settings'],
-    ['/about', 'About'],
-  ] as const;
-
-  const social = [
-    ['https://github.com/goastian/astiango', 'Read the source code at GitHub', IconGitHub],
-  ] as const;
+  let open = false;
 </script>
 
-<nav class="relative grid w-full grid-cols-[2fr_1fr_2fr] px-4 text-sm">
-  <div class="absolute left-5 top-2 z-10">
-    <a
-      href="#main"
-      tabindex="0"
-      class="absolute -top-64 left-0 bg-black p-2 text-base-content focus:top-0"
-    >
-      Skip to content
-    </a>
+<nav class="qwant-nav" aria-label="Primary navigation">
+  <a class="skip" href="#main">Skip to content</a>
+  <a href="/" class="brand" aria-label="AstianGO home"><span>Astian</span><b>GO</b></a>
+  <div class="desktop-links">
+    <a class:active={$page.url.pathname === '/search'} href="/search">Search</a>
+    <a class:active={$page.url.pathname === '/explore'} href="/explore">Explore</a>
+    <a class:active={$page.url.pathname.startsWith('/settings')} href="/settings">Settings</a>
   </div>
-
-  <div class="flex space-x-4">
-    {#each links as [url, name]}
-      <a
-        href={url}
-        class={twJoin(
-          'relative z-10 border-b p-2 text-neutral-focus',
-          $page.url.pathname.startsWith(url.split('?')[0]) ? 'border-accent' : 'border-transparent',
-        )}
-      >
-        {name}
-      </a>
-    {/each}
-  </div>
-
-  <div class="flex items-center justify-center">
-    {#if showLogo}
-      <a href="/" class="w-20" title="Go to AstianGO's frontpage">
-        <BiglogoBeta />
-      </a>
-    {/if}
-  </div>
-
-  <div class="hidden items-center justify-end space-x-1 sm:flex md:space-x-2 lg:space-x-4">
-    {#each nav as [url, name]}
-      <Link href={url}>
-        {name}
-      </Link>
-    {/each}
-    {#each social as [url, label, Icon]}
-      <Link href={url} {label} round>
-        <Icon aria-label={label} />
-      </Link>
-    {/each}
-  </div>
-
-  <div class="group relative flex items-center justify-end text-lg sm:hidden">
-    <button
-      class="mx-1 aspect-square rounded-full bg-transparent px-3 text-neutral transition group-hover:text-neutral-focus"
-      title="Toggle menu"
-    >
-      <Bars2 />
-    </button>
-    <div
-      class="pointer-events-none absolute bottom-0 right-0 z-50 translate-y-[calc(100%-1px)] flex-col pt-1 opacity-0 transition group-hover:pointer-events-auto group-hover:flex group-hover:opacity-100"
-    >
-      <div class="rounded-xl border bg-base-100 p-2 shadow-xl">
-        <div class="flex flex-col items-start space-y-1 pb-2">
-          {#each nav as [url, name]}
-            <Link href={url}>
-              {name}
-            </Link>
-          {/each}
-        </div>
-        <div class="flex justify-around border-t pt-2">
-          {#each social as [url, label, Icon]}
-            <Link href={url} {label} round>
-              <Icon aria-label={label} />
-            </Link>
-          {/each}
-        </div>
-      </div>
-    </div>
-  </div>
-
-  {#if showDivider}
-    <div
-      class="absolute inset-x-0 -bottom-0 h-px bg-gradient-to-r from-primary via-primary-focus to-primary"
-    ></div>
+  <button class="menu" type="button" aria-label="Show menu" aria-expanded={open} on:click={() => (open = !open)}><Bars2 /></button>
+  {#if open}
+    <div class="mobile-menu"><a href="/search">Search</a><a href="/explore">Explore</a><a href="/settings">Settings</a><a href="/about">About</a></div>
   {/if}
 </nav>
+
+<style>
+  .qwant-nav { position: relative; z-index: 10; display: flex; width: min(calc(100% - var(--space-6)), 1240px); align-items: center; justify-content: space-between; min-height: 56px; margin: var(--space-3) auto 0; padding: 0 var(--space-5); background: color-mix(in oklch, var(--color-paper) 94%, transparent); border: var(--rule) solid var(--color-rule); border-radius: var(--radius-pill); box-shadow: var(--shadow-card); backdrop-filter: blur(12px); }
+  .skip { position: absolute; left: var(--space-4); top: calc(var(--space-12) * -2); padding: var(--space-2) var(--space-3); background: var(--color-ink); color: var(--color-paper); border-radius: var(--radius-sm); font: 700 13px var(--font-body); text-decoration: none; } .skip:focus { top: var(--space-2); }
+  .brand { color: var(--color-accent); font: 700 25px/1 var(--font-display); letter-spacing: -.08em; text-decoration: none; } .brand b { color: var(--color-coral); } .desktop-links { display: flex; align-items: center; gap: var(--space-5); } .desktop-links a, .mobile-menu a { color: var(--color-ink-soft); font: 600 13px var(--font-body); text-decoration: none; white-space: nowrap; } .desktop-links a:hover, .desktop-links a.active { color: var(--color-accent-strong); }
+  .menu { display: none; place-items: center; width: 38px; height: 38px; border: var(--rule) solid var(--color-rule); border-radius: 50%; background: var(--color-paper-raised); color: var(--color-ink); cursor: pointer; } .menu:hover { background: var(--color-paper-soft); } .menu:active { transform: scale(.94); } .menu:focus-visible, a:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 3px; }
+  .mobile-menu { position: absolute; right: 0; top: calc(100% + var(--space-2)); display: grid; gap: var(--space-3); min-width: 150px; padding: var(--space-4); border: var(--rule) solid var(--color-rule); border-radius: var(--radius-md); background: var(--color-paper-raised); box-shadow: var(--shadow-float); }
+  @media (max-width: 640px) { .desktop-links { display: none; } .menu { display: grid; } }
+</style>

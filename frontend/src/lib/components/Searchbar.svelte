@@ -2,7 +2,6 @@
 
 <script lang="ts">
   import MagnifyingGlass from '~icons/heroicons/magnifying-glass';
-  import Button from '$lib/components/Button.svelte';
   import { api, type HighlightedFragment } from '$lib/api';
   import { safeSearchStore, postSearchStore } from '$lib/stores';
   import { browser } from '$app/environment';
@@ -29,7 +28,9 @@
 
     const { data, cancel } = api.autosuggest({ q: query });
     cancelLastRequest = cancel;
-    data.then((res) => (suggestions = res.map((x) => x.highlighted)));
+    data
+      .then((res) => (suggestions = res.map((x) => x.highlighted)))
+      .catch(() => (suggestions = []));
   };
 
   let didChangeInput = false;
@@ -90,7 +91,7 @@
 
 <form
   action="/search"
-  class="flex w-full justify-center"
+  class="qwant-search-form"
   id="searchbar-form"
   method={$postSearchStore ? 'POST' : 'GET'}
   bind:this={formElem}
@@ -100,23 +101,22 @@
   <label
     for="searchbar"
     class={twJoin(
-      'group relative grid w-full grid-cols-[auto_1fr_auto] items-center rounded-3xl border border-base-400 pl-5 transition focus-within:shadow',
-      hasFocus && suggestions.length > 0 && 'rounded-b-none',
-      hasFocus && 'shadow',
+      'qwant-search-field',
+      hasFocus && suggestions.length > 0 && 'has-suggestions',
     )}
     aria-autocomplete="list"
     aria-expanded={suggestions.length > 0 && hasFocus}
   >
-    <MagnifyingGlass class="w-5 text-base-content" aria-label="Magnifying glass" />
+    <MagnifyingGlass class="search-glyph" aria-label="Magnifying glass" />
     <!-- svelte-ignore a11y-autofocus -->
     <input
       id="searchbar"
       name="q"
       {autofocus}
-      placeholder="Search"
+      placeholder="Search the web privately"
       autocomplete="off"
       aria-expanded={suggestions.length > 0 && hasFocus}
-      class="border-none bg-transparent text-lg focus:ring-0"
+      class="search-input"
       on:focus={() => {
         hasFocus = true;
       }}
@@ -137,24 +137,24 @@
       on:keydown={onKeydown}
       bind:this={inputElem}
     />
-    <div class="h-full py-0.5 pr-0.5">
-      <Button _class="py-0 h-full" type="submit">search</Button>
-    </div>
+    <button class="search-submit" type="submit" aria-label="Search">
+      <MagnifyingGlass aria-hidden="true" />
+    </button>
 
     {#if suggestions.length > 0}
       <div
-        class="absolute inset-x-5 bottom-px hidden h-px bg-base-300 group-focus-within:block"
+        class="suggestion-divider"
       ></div>
       <div
         class={twJoin(
-          'absolute inset-x-5 bottom-px h-px bg-base-300',
-          hasFocus ? 'block' : 'hidden',
+          'suggestion-divider',
+          hasFocus ? 'is-visible' : 'is-hidden',
         )}
       ></div>
       <div
         class={twJoin(
-          'absolute -inset-x-px bottom-0 translate-y-full flex-col overflow-hidden rounded-3xl rounded-t-none border border-t-0 border-base-400 bg-base-100 shadow',
-          hasFocus ? 'flex' : 'hidden',
+          'suggestions-panel',
+          hasFocus ? 'is-visible' : 'is-hidden',
         )}
         role="listbox"
         bind:this={suggestionsDiv}
@@ -164,8 +164,8 @@
             <li>
               <button
                 class={twJoin(
-                  'flex w-full space-x-3 py-1.5 pl-5 hover:bg-base-200',
-                  selected == index && 'bg-base-200',
+                  'suggestion-row',
+                  selected == index && 'is-selected',
                 )}
                 on:click={() => {
                   selectSuggestion(s);
@@ -173,7 +173,7 @@
                 }}
                 type="submit"
               >
-                <MagnifyingGlass class="w-4 text-neutral" aria-label="Magnifying glass" />
+                <MagnifyingGlass class="suggestion-icon" aria-label="Magnifying glass" />
                 <span>
                   {#each s as fragment}
                     {#if fragment.kind == 'highlighted'}
@@ -194,3 +194,17 @@
     <input type="hidden" value="true" name="ssr" />
   </noscript>
 </form>
+
+<style>
+  .qwant-search-form { display: flex; width: 100%; justify-content: center; font-family: var(--font-body); }
+  .qwant-search-field { position: relative; display: grid; width: 100%; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; min-height: 58px; border: var(--rule) solid var(--color-rule); border-radius: var(--radius-pill); background: var(--color-paper-raised); box-shadow: var(--shadow-card); transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
+  .qwant-search-field:focus-within { border-color: var(--color-accent); box-shadow: 0 0 0 4px var(--color-accent-soft), var(--shadow-card); }
+  .qwant-search-field.has-suggestions { border-bottom-left-radius: var(--radius-lg); border-bottom-right-radius: var(--radius-lg); }
+  .search-glyph { width: 20px; margin-left: var(--space-5); color: var(--color-muted); } .search-input { min-width: 0; border: 0; background: transparent; box-shadow: none !important; color: var(--color-ink); font: 500 16px var(--font-body); outline: 0; padding: var(--space-4); } .search-input:focus { box-shadow: none !important; } .search-input::placeholder { color: var(--color-muted); opacity: 1; }
+  .search-submit { display: grid; place-items: center; width: 42px; height: 42px; margin-right: var(--space-2); border: 0; border-radius: 50%; background: var(--color-accent); color: var(--color-accent-ink); cursor: pointer; transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); } .search-submit :global(svg) { width: 18px; } .search-submit:hover { background: var(--color-accent-strong); } .search-submit:active { transform: scale(.94); } .search-submit:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 3px; }
+  .suggestion-divider { position: absolute; inset-inline: var(--space-5); bottom: -1px; height: var(--rule); background: var(--color-rule); } .suggestion-divider.is-hidden { display: none; }
+  .suggestions-panel { position: absolute; inset-inline: -1px; top: 100%; z-index: 20; overflow: clip; border: var(--rule) solid var(--color-rule); border-top: 0; border-radius: 0 0 var(--radius-lg) var(--radius-lg); background: var(--color-paper-raised); box-shadow: var(--shadow-float); } .suggestions-panel.is-hidden { display: none; }
+  .suggestion-row { display: flex; width: 100%; align-items: center; gap: var(--space-3); border: 0; background: transparent; color: var(--color-ink); cursor: pointer; font: 500 14px var(--font-body); padding: var(--space-3) var(--space-5); text-align: left; } .suggestion-row:hover, .suggestion-row.is-selected { background: var(--color-paper-soft); } .suggestion-icon { width: 16px; color: var(--color-muted); }
+  @media (max-width: 640px) { .qwant-search-field { min-height: 52px; } .search-glyph { margin-left: var(--space-4); } .search-input { font-size: 15px; padding-inline: var(--space-3); } .search-submit { width: 38px; height: 38px; } }
+  @media (prefers-reduced-motion: reduce) { .qwant-search-field, .search-submit { transition-duration: var(--dur-fast); } }
+</style>
