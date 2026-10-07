@@ -38,7 +38,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^9.0.0",
-    "cassandra-driver": "^4.7.2",
+    "cassandra-driver": "^4.10.0",
     "papaparse": "^5.4.1"
   },
   "overrides": {
