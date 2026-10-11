@@ -1,0 +1,15 @@
+# Inicio aleatorio desde una lista pública real; descubre dominios por sus enlaces.
+# scripts/crawler-local.py bootstrap genera este archivo una sola vez.
+seeds_file = "data/crawler-local/seeds.txt"
+output_path = "data/crawler-local/warc"
+status_path = "data/crawler-local/status.json"
+pages_per_domain = 50
+num_worker_threads = 2
+min_crawl_delay_ms = 10000
+timeout_seconds = 30
+max_frontier = 10000
+revisit_interval_seconds = 3600
+
+[user_agent]
+full = "AstianGOBot/1.0 (+https://astiango.com/webmasters; contact@astian.org)"
+token = "AstianGOBot"

@@ -57,6 +57,7 @@ flate2.workspace = true
 fnv.workspace = true
 fst.workspace = true
 futures.workspace = true
+fs4.workspace = true
 hashbrown.workspace = true
 http.workspace = true
 image.workspace = true
@@ -123,6 +124,7 @@ web-spell = { path = "../web-spell" }
 tikv-jemallocator.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 criterion.workspace = true
 insta.workspace = true
 maplit.workspace = true

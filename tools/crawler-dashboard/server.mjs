@@ -1,0 +1,165 @@
+import { createServer } from "node:http";
+import { readFile, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { dirname, extname, resolve, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const appDirectory = dirname(fileURLToPath(import.meta.url));
+const contentTypes = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+};
+function respondJson(response, status, value) {
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
+  response.end(JSON.stringify(value));
+}
+function processAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+export function createDashboardServer({
+  statePath = process.env.CRAWLER_STATE_PATH ||
+    resolve(appDirectory, "../../data/crawler-local/status.json"),
+  distDirectory = resolve(appDirectory, "dist"),
+} = {}) {
+  const distRoot = resolve(distDirectory);
+  return createServer(async (request, response) => {
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.setHeader("Referrer-Policy", "no-referrer");
+    response.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+    );
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      response.setHeader("Allow", "GET, HEAD");
+      respondJson(response, 405, { error: "Método no permitido." });
+      return;
+    }
+    let pathname;
+    try {
+      pathname = decodeURIComponent((request.url || "/").split("?")[0]);
+    } catch {
+      respondJson(response, 400, { error: "Ruta no válida." });
+      return;
+    }
+    if (
+      pathname.includes("\0") ||
+      pathname.includes("\\") ||
+      pathname.split("/").includes("..")
+    ) {
+      respondJson(response, 403, { error: "Ruta no permitida." });
+      return;
+    }
+    if (pathname === "/healthz" || pathname === "/api/health") {
+      respondJson(response, 200, {
+        status: "ok",
+        service: "crawler-dashboard",
+      });
+      return;
+    }
+    if (pathname === "/api/status") {
+      try {
+        const [source, info] = await Promise.all([
+          readFile(statePath, "utf8"),
+          stat(statePath),
+        ]);
+        const snapshot = JSON.parse(source);
+        if (
+          snapshot.schema_version !== 1 ||
+          !Array.isArray(snapshot.sites) ||
+          !snapshot.counters
+        ) {
+          respondJson(response, 503, {
+            error: "El estado del crawler tiene un formato no compatible.",
+          });
+          return;
+        }
+        respondJson(response, 200, {
+          snapshot,
+          meta: {
+            read_at: new Date().toISOString(),
+            modified_at: info.mtime.toISOString(),
+            process_alive: processAlive(snapshot.pid),
+          },
+        });
+      } catch (error) {
+        const missing = error.code === "ENOENT";
+        respondJson(response, 503, {
+          error: missing
+            ? "El crawler todavía no ha publicado su estado."
+            : "No se pudo leer el estado del crawler.",
+          code: missing ? "STATE_UNAVAILABLE" : "STATE_UNREADABLE",
+        });
+      }
+      return;
+    }
+    if (pathname.startsWith("/api/")) {
+      respondJson(response, 404, { error: "Ruta no encontrada." });
+      return;
+    }
+    const filePath = resolve(
+      distRoot,
+      "." + (pathname === "/" ? "/index.html" : pathname),
+    );
+    if (!filePath.startsWith(distRoot + sep)) {
+      respondJson(response, 403, { error: "Ruta no permitida." });
+      return;
+    }
+    try {
+      const body = await readFile(filePath);
+      const etag = `"${createHash("sha256").update(body).digest("base64url")}"`;
+      response.setHeader("ETag", etag);
+      response.setHeader(
+        "Cache-Control",
+        pathname.startsWith("/assets/")
+          ? "public, max-age=31536000, immutable"
+          : "no-cache",
+      );
+      if (request.headers["if-none-match"] === etag) {
+        response.writeHead(304);
+        response.end();
+        return;
+      }
+      response.writeHead(200, {
+        "Content-Type":
+          contentTypes[extname(filePath)] || "application/octet-stream",
+        "Content-Length": body.length,
+      });
+      response.end(request.method === "HEAD" ? undefined : body);
+    } catch (error) {
+      respondJson(
+        response,
+        error.code === "ENOENT" || error.code === "EISDIR" ? 404 : 500,
+        { error: "Archivo no disponible." },
+      );
+    }
+  });
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+) {
+  const port = Number(process.env.PORT || 3100);
+  const host = process.env.HOST || "127.0.0.1";
+  const server = createDashboardServer();
+  server.listen(port, host, () =>
+    console.log(`Crawler dashboard: http://${host}:${port}`),
+  );
+  for (const signal of ["SIGINT", "SIGTERM"])
+    process.on(signal, () => server.close(() => process.exit(0)));
+}

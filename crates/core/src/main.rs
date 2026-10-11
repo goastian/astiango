@@ -179,6 +179,8 @@ enum LiveIndex {
 
 #[derive(Subcommand)]
 enum Crawler {
+    /// Run the standalone crawler with a durable local WARC archive and dashboard telemetry.
+    Local { config_path: String },
     /// Deploy the crawl worker. The worker is responsible for downloading webpages, saving them to S3,
     /// and sending newly discovered urls back to the crawl coordinator.
     Worker { config_path: String },
@@ -387,6 +389,13 @@ fn main() -> Result<()> {
             configure::run(skip_download)?;
         }
         Commands::Crawler { options } => match options {
+            Crawler::Local { config_path } => {
+                let config: astiango::crawler::local::Config = load_toml_config(config_path);
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()?
+                    .block_on(astiango::crawler::local::run(config))?;
+            }
             Crawler::Worker { config_path } => {
                 let config: config::CrawlerConfig = load_toml_config(config_path);
 

@@ -18,10 +18,10 @@ use super::{Error, Result};
 use crate::config::CrawlerConfig;
 use crate::crawler::robots_txt::RobotsTxtManager;
 use anyhow::anyhow;
-use std::time::Duration;
+use std::{net::IpAddr, sync::Arc, time::Duration};
 use url::Url;
 
-pub(super) fn reqwest_client(config: &CrawlerConfig) -> Result<reqwest::Client> {
+fn client_builder(config: &CrawlerConfig) -> reqwest::ClientBuilder {
     let timeout = Duration::from_secs(config.timeout_seconds);
 
     let mut headers = reqwest::header::HeaderMap::default();
@@ -39,10 +39,90 @@ pub(super) fn reqwest_client(config: &CrawlerConfig) -> Result<reqwest::Client> 
         .connect_timeout(timeout)
         .http2_keep_alive_interval(None)
         .default_headers(headers)
-        .redirect(reqwest::redirect::Policy::limited(0))
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent(&config.user_agent.full)
+}
+
+pub(super) fn reqwest_client(config: &CrawlerConfig) -> Result<reqwest::Client> {
+    client_builder(config)
         .build()
         .map_err(|e| Error::from(anyhow!(e)))
+}
+
+/// Fail closed for non-public addresses, including IPv4 encoded as IPv6.
+pub(super) fn is_public_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            !(ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || a == 0
+                || a >= 240
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 192 && b == 0 && c == 0)
+                || (a == 192 && b == 88 && c == 99)
+                || (a == 198 && (b == 18 || b == 19)))
+        }
+        IpAddr::V6(ip) => {
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                return is_public_address(IpAddr::V4(v4));
+            }
+            let s = ip.segments();
+            // Global unicast only; exclude transition, protocol and documentation ranges.
+            (s[0] & 0xe000) == 0x2000
+                && !(s[0] == 0x2001 && (s[1] < 0x0200 || s[1] == 0x0db8))
+                && s[0] != 0x2002
+                && !(s[0] == 0x3fff && s[1] < 0x1000)
+        }
+    }
+}
+
+pub(super) fn validate_public_url(url: &Url) -> Result<()> {
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !matches!(url.port_or_known_default(), Some(80 | 443))
+    {
+        return Err(anyhow!("crawl destination must be public HTTP(S) on port 80 or 443").into());
+    }
+    match url.host() {
+        Some(url::Host::Domain(host)) if host.contains('.') && host != "localhost" => Ok(()),
+        Some(url::Host::Ipv4(ip)) if is_public_address(IpAddr::V4(ip)) => Ok(()),
+        Some(url::Host::Ipv6(ip)) if is_public_address(IpAddr::V6(ip)) => Ok(()),
+        _ => Err(anyhow!("non-public crawl destination").into()),
+    }
+}
+
+/// Resolve once and pin this request to validated addresses. Never let a second
+/// DNS lookup or a proxy turn a public hostname into an internal connection.
+pub(super) async fn public_request(
+    config: &CrawlerConfig,
+    url: &Url,
+) -> Result<reqwest::RequestBuilder> {
+    validate_public_url(url)?;
+    let mut builder = client_builder(config).no_proxy();
+    if let Some(url::Host::Domain(host)) = url.host() {
+        let addresses: Vec<_> = tokio::time::timeout(
+            Duration::from_secs(config.timeout_seconds),
+            tokio::net::lookup_host((host, 0)),
+        )
+        .await
+        .map_err(|e| Error::from(anyhow!(e)))?
+        .map_err(|e| Error::from(anyhow!(e)))?
+        .collect();
+        if addresses.is_empty() || addresses.iter().any(|addr| !is_public_address(addr.ip())) {
+            return Err(
+                anyhow!("DNS returned a non-public or empty destination for {host}").into(),
+            );
+        }
+        builder = builder.resolve_to_addrs(host, &addresses);
+    }
+    let client = builder.build().map_err(|e| Error::from(anyhow!(e)))?;
+    Ok(client.get(url.clone()))
 }
 
 /// Reqwest client that respects robots.txt for each request.
@@ -50,6 +130,7 @@ pub(super) fn reqwest_client(config: &CrawlerConfig) -> Result<reqwest::Client> 
 pub struct RobotClient {
     robots_txt_manager: RobotsTxtManager,
     client: reqwest::Client,
+    public_config: Option<Arc<CrawlerConfig>>,
 }
 
 impl RobotClient {
@@ -57,6 +138,18 @@ impl RobotClient {
         Ok(Self {
             client: reqwest_client(config)?,
             robots_txt_manager: RobotsTxtManager::new(config),
+            public_config: None,
+        })
+    }
+
+    pub async fn new_public(config: &CrawlerConfig, seeds: &[Url]) -> Result<Self> {
+        for seed in seeds {
+            validate_public_url(seed)?;
+        }
+        Ok(Self {
+            client: reqwest_client(config)?,
+            robots_txt_manager: RobotsTxtManager::new_public(config),
+            public_config: Some(Arc::new(config.clone())),
         })
     }
 
@@ -65,11 +158,18 @@ impl RobotClient {
     }
 
     pub async fn get(&self, url: Url) -> Result<RequestBuilder> {
+        if self.public_config.is_some() {
+            validate_public_url(&url)?;
+        }
         if !self.robots_txt_manager.is_allowed(&url).await {
             return Err(Error::DisallowedPath);
         }
 
-        Ok(RequestBuilder::new(self.client.get(url)))
+        let request = match &self.public_config {
+            Some(config) => public_request(config, &url).await?,
+            None => self.client.get(url),
+        };
+        Ok(RequestBuilder::new(request))
     }
 }
 
@@ -105,6 +205,44 @@ impl RequestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_crawl_rejects_internal_and_special_destinations() {
+        for address in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "192.168.1.1",
+            "192.0.2.1",
+            "198.18.0.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+            "2001:db8::1",
+            "2002:7f00:1::",
+        ] {
+            assert!(!is_public_address(address.parse().unwrap()), "{address}");
+        }
+        for address in ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"] {
+            assert!(is_public_address(address.parse().unwrap()), "{address}");
+        }
+        for url in [
+            "http://localhost/",
+            "http://127.0.0.1/",
+            "https://example.org:8080/",
+            "https://user:password@example.org/",
+            "ftp://example.org/",
+        ] {
+            assert!(
+                validate_public_url(&Url::parse(url).unwrap()).is_err(),
+                "{url}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn test_errs_disallowed_path() {

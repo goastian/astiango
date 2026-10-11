@@ -53,7 +53,7 @@ const IGNORED_EXTENSIONS: [&str; 27] = [
 const INITIAL_WANDER_STEPS: u64 = 4;
 
 enum UrlVisit {
-    Skip,
+    Skip(&'static str),
     CanCrawl,
 }
 
@@ -128,6 +128,10 @@ impl WorkerThread {
 
 /// JobExecutor receives a job from the coordinator and crawls the urls in the job.
 pub struct JobExecutor<S: DatumSink> {
+    observer: Option<Arc<super::observer::Observer>>,
+    attempted: u64,
+    attempt_limit: u64,
+    seed_urls: Vec<Url>,
     writer: Arc<S>,
     client: RobotClient,
     has_gotten_429_response: bool,
@@ -153,6 +157,10 @@ impl<S: DatumSink> JobExecutor<S> {
         client: RobotClient,
     ) -> Self {
         Self {
+            observer: None,
+            attempted: 0,
+            attempt_limit: job.urls.len() as u64 + job.wandering_urls,
+            seed_urls: job.urls.iter().map(|url| url.url().clone()).collect(),
             writer,
             politeness_factor: config.start_politeness_factor,
             min_politeness_factor: config.min_politeness_factor,
@@ -171,8 +179,21 @@ impl<S: DatumSink> JobExecutor<S> {
         }
     }
 
+    pub(super) fn with_observer(mut self, observer: Arc<super::observer::Observer>) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
     pub async fn run(mut self) {
         tracing::info!("Processing job: {:?}", self.job.domain);
+        if let Some(observer) = &self.observer {
+            observer.event(
+                &self.job.domain,
+                None,
+                "site_started",
+                "Trabajo de dominio iniciado",
+            );
+        }
         for site in self
             .job
             .urls
@@ -203,6 +224,14 @@ impl<S: DatumSink> JobExecutor<S> {
             && self.wander_prioritiser.known_urls() > 0
         {
             self.wander().await;
+        }
+        if let Some(observer) = &self.observer {
+            observer.event(
+                &self.job.domain,
+                None,
+                "site_completed",
+                "Cola del dominio finalizada",
+            );
         }
     }
 
@@ -249,21 +278,21 @@ impl<S: DatumSink> JobExecutor<S> {
 
     async fn verify_url(&mut self, retryable_url: &RetrieableUrl) -> UrlVisit {
         if Domain::from(retryable_url.url()) != self.job.domain {
-            return UrlVisit::Skip;
+            return UrlVisit::Skip("Dominio fuera del trabajo asignado");
         }
 
         if self.crawled_urls.contains(retryable_url.url()) {
-            return UrlVisit::Skip;
+            return UrlVisit::Skip("URL ya visitada");
         }
 
         if retryable_url.retries > self.max_url_slowdown_retry {
-            return UrlVisit::Skip;
+            return UrlVisit::Skip("Límite de reintentos alcanzado");
         }
 
         if retryable_url.url().host_str().is_none()
             || !matches!(retryable_url.url().scheme(), "http" | "https")
         {
-            return UrlVisit::Skip;
+            return UrlVisit::Skip("URL inválida o protocolo no permitido");
         }
 
         if !self
@@ -272,12 +301,12 @@ impl<S: DatumSink> JobExecutor<S> {
             .is_allowed(retryable_url.url())
             .await
         {
-            return UrlVisit::Skip;
+            return UrlVisit::Skip("robots.txt deniega la URL o no se pudo verificar");
         }
 
         if let Some(port) = retryable_url.url().port() {
             if port != 80 && port != 443 {
-                return UrlVisit::Skip;
+                return UrlVisit::Skip("Puerto no permitido");
             }
         }
 
@@ -285,7 +314,7 @@ impl<S: DatumSink> JobExecutor<S> {
     }
 
     async fn crawl_sitemaps(&mut self) {
-        let urls: Vec<_> = self.job.urls.iter().map(|url| url.url()).cloned().collect();
+        let urls = self.seed_urls.clone();
 
         for url in urls {
             let site = Site(url.host_str().unwrap_or_default().to_string());
@@ -306,10 +335,30 @@ impl<S: DatumSink> JobExecutor<S> {
     pub async fn process_urls(&mut self, mut urls: VecDeque<RetrieableUrl>) {
         tracing::debug!("processing {} urls", urls.len());
         while let Some(mut retryable_url) = urls.pop_front() {
+            if self.observer.is_some() && self.attempted >= self.attempt_limit {
+                break;
+            }
             retryable_url.weighted_url.url.normalize_in_place();
 
-            if let UrlVisit::Skip = self.verify_url(&retryable_url).await {
+            if let Some(observer) = &self.observer {
+                observer.event(
+                    &self.job.domain,
+                    Some(retryable_url.url()),
+                    "checking",
+                    "Verificando robots.txt",
+                );
+            }
+
+            if let UrlVisit::Skip(reason) = self.verify_url(&retryable_url).await {
                 tracing::debug!("skipping url: {}", retryable_url.url());
+                if let Some(observer) = &self.observer {
+                    observer.event(
+                        &self.job.domain,
+                        Some(retryable_url.url()),
+                        "skipped",
+                        reason,
+                    );
+                }
                 continue;
             }
 
@@ -320,11 +369,40 @@ impl<S: DatumSink> JobExecutor<S> {
                 .await
             {
                 if delay > self.min_crawl_delay {
-                    self.min_crawl_delay = delay.min(self.max_crawl_delay);
+                    // A declared robots delay is a lower bound, even when it
+                    // exceeds our adaptive backoff ceiling.
+                    self.min_crawl_delay = delay;
+                    self.max_crawl_delay = self.max_crawl_delay.max(delay);
                 }
             }
 
+            if let Some(observer) = &self.observer {
+                self.attempted += 1;
+                observer.event(
+                    &self.job.domain,
+                    Some(retryable_url.url()),
+                    "fetching",
+                    "Descargando página",
+                );
+            }
+            let started = Instant::now();
             let res = self.process_url(retryable_url.url().clone()).await;
+            let fetch_time = started.elapsed();
+
+            if let (Some(observer), Err(error)) = (&self.observer, &res) {
+                let kind = match error {
+                    Error::FetchFailed { status_code, .. } if status_code.is_redirection() => {
+                        "redirect"
+                    }
+                    _ => "failed",
+                };
+                observer.event(
+                    &self.job.domain,
+                    Some(retryable_url.url()),
+                    kind,
+                    &error.to_string(),
+                );
+            }
 
             match res {
                 Ok(res) => {
@@ -353,17 +431,26 @@ impl<S: DatumSink> JobExecutor<S> {
                     self.has_gotten_429_response = true;
 
                     if headers.contains_key("retry-after") {
-                        let retry_after = headers["retry-after"]
-                            .to_str()
-                            .ok()
-                            .and_then(|s| s.parse::<u64>().ok())
-                            .map(Duration::from_secs);
+                        let retry_after = headers["retry-after"].to_str().ok().and_then(|s| {
+                            s.parse::<u64>().ok().map(Duration::from_secs).or_else(|| {
+                                chrono::DateTime::parse_from_rfc2822(s).ok().map(|date| {
+                                    Duration::from_secs(
+                                        (date.with_timezone(&chrono::Utc) - chrono::Utc::now())
+                                            .num_seconds()
+                                            .max(0) as u64,
+                                    )
+                                })
+                            })
+                        });
 
                         if let Some(retry_after) = retry_after {
                             if retry_after > self.max_crawl_delay {
                                 return; // don't crawl anymore from this site
                             }
 
+                            if let Some(observer) = &self.observer {
+                                observer.waiting(&self.job.domain, retry_after);
+                            }
                             tokio::time::sleep(retry_after).await;
                         }
                     }
@@ -376,7 +463,7 @@ impl<S: DatumSink> JobExecutor<S> {
                 Err(Error::FetchFailed {
                     status_code,
                     headers,
-                }) if status_code == 301 || status_code == 302 => {
+                }) if matches!(status_code.as_u16(), 301 | 302 | 303 | 307 | 308) => {
                     if let Some(new_url) = headers
                         .get("location")
                         .and_then(|location| std::str::from_utf8(location.as_bytes()).ok())
@@ -391,6 +478,9 @@ impl<S: DatumSink> JobExecutor<S> {
                     }
                 }
                 Err(_) => {}
+            }
+            if self.observer.is_some() {
+                self.politeness_delay(fetch_time).await;
             }
         }
     }
@@ -440,7 +530,7 @@ impl<S: DatumSink> JobExecutor<S> {
 
     async fn process_url(&mut self, url: Url) -> Result<ProcessedUrl> {
         let datum = self.polite_crawl_url(url.clone()).await?;
-        self.save_datum(datum.clone()).await;
+        self.writer.write(datum.clone()).await?;
 
         match Html::parse(&datum.body, datum.url.as_str()) {
             Ok(html) => {
@@ -455,10 +545,6 @@ impl<S: DatumSink> JobExecutor<S> {
             }
             Err(_) => Err(Error::InvalidHtml),
         }
-    }
-
-    async fn save_datum(&self, datum: CrawlDatum) {
-        self.writer.write(datum).await.ok();
     }
 
     async fn fetch(&self, url: Url) -> Result<reqwest::Response> {
@@ -513,6 +599,9 @@ impl<S: DatumSink> JobExecutor<S> {
             delay = self.max_crawl_delay;
         }
 
+        if let Some(observer) = &self.observer {
+            observer.waiting(&self.job.domain, delay);
+        }
         tokio::time::sleep(delay).await;
     }
 
@@ -581,11 +670,16 @@ impl<S: DatumSink> JobExecutor<S> {
 
         let payload_type = self.check_headers(&res);
         let status_code = res.status();
+        if let Some(observer) = &self.observer {
+            observer.response(&self.job.domain, status_code.as_u16());
+        }
         let mut res_url = res.url().clone();
 
-        if let Ok(payload_type) = payload_type {
-            if let Ok(Some(datum)) = self.redirect_datum(&res, &url, payload_type) {
-                return Ok(datum);
+        if self.observer.is_none() {
+            if let Ok(payload_type) = payload_type {
+                if let Ok(Some(datum)) = self.redirect_datum(&res, &url, payload_type) {
+                    return Ok(datum);
+                }
             }
         }
         if status_code != reqwest::StatusCode::OK {
@@ -623,7 +717,9 @@ impl<S: DatumSink> JobExecutor<S> {
         let start = Instant::now();
         let res = self.unpolite_crawl_url(url).await;
         let fetch_time = start.elapsed();
-        self.politeness_delay(fetch_time).await;
+        if self.observer.is_none() {
+            self.politeness_delay(fetch_time).await;
+        }
         let mut datum = res?;
         datum.fetch_time_ms = fetch_time.as_millis() as u64;
         Ok(datum)
@@ -651,7 +747,7 @@ impl<S: DatumSink> JobExecutor<S> {
                 continue;
             }
 
-            let body = res.text().await;
+            let body = encoded_body(res).await;
 
             if body.is_err() {
                 continue;

@@ -55,10 +55,9 @@ impl CheckedRobotsTxt {
 
 impl CheckedRobotsTxt {
     fn is_expired(&self, expiration: &Duration) -> bool {
-        match self.robots {
-            Lookup::Found(_) | Lookup::Unavailable => self.last_check.elapsed() >= *expiration,
-            Lookup::Unreachable => false,
-        }
+        // A transient DNS or server failure must not block a host forever in
+        // the continuous crawler. Keep denying requests until this TTL expires.
+        self.last_check.elapsed() >= *expiration
     }
 }
 
@@ -70,6 +69,7 @@ struct InnerRobotsTxtManager {
     user_agent: String,
     min_crawl_delay: Duration,
     max_crawl_delay: Duration,
+    public_config: Option<Arc<CrawlerConfig>>,
 }
 
 impl InnerRobotsTxtManager {
@@ -88,10 +88,14 @@ impl InnerRobotsTxtManager {
             user_agent: user_agent.to_string(),
             min_crawl_delay,
             max_crawl_delay,
+            public_config: None,
         }
     }
 
     async fn is_allowed(&self, url: &Url) -> bool {
+        if self.public_config.is_some() && super::robot_client::validate_public_url(url).is_err() {
+            return false;
+        }
         match &self.get(url).await.robots {
             Lookup::Found(robots_txt) => robots_txt.is_allowed(url),
             Lookup::Unavailable => true,
@@ -118,7 +122,12 @@ impl InnerRobotsTxtManager {
     }
 
     async fn fetch_robots_txt_from_url(&self, url: &str) -> Lookup<robotstxt::Robots> {
-        let res = match super::robot_client::RequestBuilder::new(self.client.get(url))
+        let request = if let Some(config) = &self.public_config {
+            return self.fetch_public_robots(config, url).await;
+        } else {
+            self.client.get(url)
+        };
+        let res = match super::robot_client::RequestBuilder::new(request)
             .timeout(Duration::from_secs(60))
             .send()
             .await
@@ -148,6 +157,57 @@ impl InnerRobotsTxtManager {
         tokio::time::sleep(self.min_crawl_delay).await;
 
         res
+    }
+
+    async fn fetch_public_robots(
+        &self,
+        config: &CrawlerConfig,
+        initial_url: &str,
+    ) -> Lookup<robotstxt::Robots> {
+        let Ok(mut url) = Url::parse(initial_url) else {
+            return Lookup::Unreachable;
+        };
+        for _ in 0..=5 {
+            let request = match super::robot_client::public_request(config, &url).await {
+                Ok(request) => request,
+                Err(_) => return Lookup::Unreachable,
+            };
+            let response = super::robot_client::RequestBuilder::new(request)
+                .send()
+                .await;
+            // Robots requests and their redirects also obey the configured delay.
+            tokio::time::sleep(self.min_crawl_delay).await;
+            let Ok(response) = response else {
+                return Lookup::Unreachable;
+            };
+            if response.status().is_redirection() {
+                let next = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|location| url.join(location).ok());
+                let Some(next) = next else {
+                    return Lookup::Unreachable;
+                };
+                url = next;
+                continue;
+            }
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                return Lookup::Unavailable;
+            }
+            if response.status() != reqwest::StatusCode::OK {
+                return Lookup::Unreachable;
+            }
+            let Ok(body) = encoded_body(response).await else {
+                return Lookup::Unreachable;
+            };
+            let user_agent = self.user_agent.clone();
+            return match panic::catch_unwind(|| robotstxt::Robots::parse(&user_agent, &body)) {
+                Ok(Ok(robots)) => Lookup::Found(robots),
+                _ => Lookup::Unreachable,
+            };
+        }
+        Lookup::Unreachable
     }
 
     async fn fetch_robots_txt_without_retry(&self, site: &Site) -> Lookup<robotstxt::Robots> {
@@ -248,6 +308,14 @@ impl RobotsTxtManager {
             inner: Arc::new(InnerRobotsTxtManager::new(config)),
         }
     }
+
+    pub fn new_public(config: &CrawlerConfig) -> Self {
+        let mut inner = InnerRobotsTxtManager::new(config);
+        inner.public_config = Some(Arc::new(config.clone()));
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
 }
 
 impl RobotsTxtManager {
@@ -274,6 +342,16 @@ mod tests {
     use super::*;
 
     type RobotsTxt = robotstxt::Robots;
+
+    #[test]
+    fn unreachable_robots_are_rechecked_after_cache_expiry() {
+        let cached = CheckedRobotsTxt {
+            robots: Lookup::Unreachable,
+            last_check: std::time::Instant::now() - Duration::from_secs(61),
+        };
+        assert!(cached.is_expired(&Duration::from_secs(60)));
+        assert!(!cached.is_expired(&Duration::from_secs(120)));
+    }
 
     #[test]
     fn simple() {
@@ -409,12 +487,5 @@ Disallow: /test/*
         assert!(!robots_txt.is_allowed(&Url::parse("http://example.com/test/foo/baz/bar").unwrap()));
         assert!(robots_txt.is_allowed(&Url::parse("http://example.com/test").unwrap()));
         assert!(robots_txt.is_allowed(&Url::parse("http://example.com/testfoo").unwrap()));
-    }
-
-    #[test]
-    fn test_unreachable_robots_never_updated() {
-        let checked = CheckedRobotsTxt::new(Lookup::Unreachable);
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        assert!(!checked.is_expired(&Duration::from_millis(10)));
     }
 }
