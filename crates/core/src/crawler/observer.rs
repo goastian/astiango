@@ -118,6 +118,7 @@ pub struct Sample {
 
 pub struct Observer {
     path: PathBuf,
+    metrics: Option<std::sync::Arc<super::runtime::Metrics>>,
     snapshot: Mutex<Snapshot>,
     persistence_error: Mutex<Option<String>>,
     registered_domains: Mutex<HashSet<String>>,
@@ -130,12 +131,19 @@ impl Observer {
         }
         let observer = Self {
             path,
+            metrics: None,
             snapshot: Mutex::new(snapshot),
             persistence_error: Mutex::new(None),
             registered_domains: Mutex::new(HashSet::new()),
         };
         observer.persist(&observer.snapshot.lock().unwrap())?;
         Ok(observer)
+    }
+
+    #[cfg(feature = "crawler-bench")]
+    pub(super) fn with_metrics(mut self, metrics: std::sync::Arc<super::runtime::Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     fn persist(&self, snapshot: &Snapshot) -> anyhow::Result<()> {
@@ -149,6 +157,7 @@ impl Observer {
     }
 
     fn update(&self, f: impl FnOnce(&mut Snapshot)) {
+        let _timer = super::runtime::StageTimer::optional(self.metrics.as_ref(), "observer");
         let mut snapshot = self.snapshot.lock().unwrap();
         f(&mut snapshot);
         snapshot.updated_at = Utc::now().to_rfc3339();

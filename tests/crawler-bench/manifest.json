@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "description": "Conserved real HTML from existing Stract parsing/entity/schema fixtures. Paths are relative to the repository root; original bytes are reused without downloading.",
+  "network_policy": "Serve fixture bytes only from controlled loopback endpoints. Source URLs are provenance, never crawl seeds; do not follow fixture links or fetch their resources.",
+  "fixtures": [
+    {
+      "id": "encyclopedia-en",
+      "path": "crates/core/testcases/entity/world_heritage_site.html",
+      "sha256": "99df5121710efaaecb0a68d91d3ab874a1f780e61e98a0b75cc35b7e54e0d820",
+      "bytes": 217714,
+      "category": "encyclopedia",
+      "language": "en",
+      "source_url": "https://en.wikipedia.org/wiki/World_Heritage_Site",
+      "provenance": {
+        "kind": "existing_repository_fixture",
+        "evidence": "Canonical link in saved HTML.",
+        "capture_date": null,
+        "license": null
+      },
+      "notes": "Long article, tables, citations and navigation."
+    },
+    {
+      "id": "forum-en",
+      "path": "crates/core/testcases/parsing/reddit.html",
+      "sha256": "6fe38992e35584a0c897866630afd8f3fdd22443dfd024a66f14a54f07902021",
+      "bytes": 617325,
+      "category": "forum",
+      "language": "en",
+      "source_url": "https://www.reddit.com/r/ContagiousLaughter/comments/13gf27q/siblings_are_the_best/",
+      "provenance": {
+        "kind": "existing_repository_fixture",
+        "evidence": "Canonical link in saved HTML.",
+        "capture_date": null,
+        "license": null
+      },
+      "notes": "Large comment thread with substantial navigation and embedded state."
+    },
+    {
+      "id": "news-en",
+      "path": "crates/core/testcases/schema_org/infinity_war.html",
+      "sha256": "860f6f98a055a62a5d5295f5d986b14fde7f08e09180fd765fb9903921f6d104",
+      "bytes": 246778,
+      "category": "news",
+      "language": "en-US",
+      "source_url": "https://www.businessinsider.com/category/infinity-war",
+      "provenance": {
+        "kind": "existing_repository_fixture",
+        "evidence": "og:url metadata in saved HTML.",
+        "capture_date": null,
+        "license": null
+      },
+      "notes": "News category listing with structured data; this is a category page, not a news article."
+    },
+    {
+      "id": "recipe-da",
+      "path": "crates/core/testcases/schema_org/recipe.html",
+      "sha256": "520c0e7f66d06fcecb60a19bba859eeb86b701de43c228c5938bd1ac9bc7ab8e",
+      "bytes": 668351,
+      "category": "recipe_schema",
+      "language": "da",
+      "source_url": "https://www.valdemarsro.dk/one-pot-pasta/",
+      "provenance": {
+        "kind": "existing_repository_fixture",
+        "evidence": "Canonical link in saved HTML.",
+        "capture_date": null,
+        "license": null
+      },
+      "notes": "Large Danish recipe page and structured data."
+    },
+    {
+      "id": "qa-es",
+      "path": "crates/core/testcases/schema_org/stackoverflow_with_code.html",
+      "sha256": "b75280d6c578587da67ad2dc9895d29dbde2e781c1d711f0e01f881c64c3352d",
+      "bytes": 133129,
+      "category": "qa_schema_code",
+      "language": "es",
+      "source_url": "https://es.stackoverflow.com/questions/163192/almacenar-y-comparar-valor-de-atributo-de-un-objeto-en-javascript",
+      "provenance": {
+        "kind": "existing_repository_fixture",
+        "evidence": "Canonical link in saved HTML.",
+        "capture_date": null,
+        "license": null
+      },
+      "notes": "Spanish question and answers with source code and schema.org QAPage markup."
+    },
+    {
+      "id": "legacy-ja",
+      "path": "crates/core/testcases/parsing/yasudaya.html",
+      "sha256": "805e5058d8063caedbab611e523c53d7b0e0830c23e8f19748ce0a1fae85a070",
+      "bytes": 9377,
+      "category": "legacy_parsing",
+      "language": "ja",
+      "source_url": "http://028.yasudaya.biz/view/17368/",
+      "provenance": {
+        "kind": "existing_repository_fixture",
+        "evidence": "Canonical link in saved HTML; existing hard_parsing regression fixture.",
+        "capture_date": null,
+        "license": null
+      },
+      "notes": "Small Japanese page with legacy table-oriented content."
+    },
+    {
+      "id": "legacy-zh",
+      "path": "crates/core/testcases/parsing/5390001.html",
+      "sha256": "f24712517ebebab00d6171a528f568f84989db1998221d630eb2e97e320c7d79",
+      "bytes": 9895,
+      "category": "legacy_parsing",
+      "language": "zh",
+      "source_url": null,
+      "provenance": {
+        "kind": "existing_repository_fixture",
+        "evidence": "Existing hard_parsing regression fixture; Chinese title and content. Original capture URL is not recorded.",
+        "capture_date": null,
+        "license": null
+      },
+      "notes": "Small Chinese XHTML product page with relative links."
+    },
+    {
+      "id": "encoding-legacy-zh",
+      "path": "crates/core/testcases/parsing/77p2p-7.live-105.html",
+      "sha256": "5d391da30af193caa37146edf50d3a8bf3d601db6606af2aa57f1390ad7a2cba",
+      "bytes": 77747,
+      "category": "legacy_encoding",
+      "language": "zh-TW",
+      "source_url": null,
+      "provenance": {
+        "kind": "existing_repository_fixture",
+        "evidence": "Existing hard_parsing regression fixture; Content-Language declares zh-tw. Original capture URL is not recorded.",
+        "capture_date": null,
+        "license": null
+      },
+      "notes": "Legacy irregular markup declares big5 but the conserved fixture is UTF-8 with already-garbled text. Do not decode it again as big5."
+    }
+  ]
+}

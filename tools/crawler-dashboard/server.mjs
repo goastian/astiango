@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isBenchmarkReport } from "./benchmark-report.mjs";
 
 const appDirectory = dirname(fileURLToPath(import.meta.url));
 const contentTypes = {
@@ -34,6 +35,7 @@ function processAlive(pid) {
 export function createDashboardServer({
   statePath = process.env.CRAWLER_STATE_PATH ||
     resolve(appDirectory, "../../data/crawler-local/status.json"),
+  benchmarkPath = process.env.CRAWLER_BENCHMARK_PATH || null,
   distDirectory = resolve(appDirectory, "dist"),
 } = {}) {
   const distRoot = resolve(distDirectory);
@@ -103,6 +105,50 @@ export function createDashboardServer({
             ? "El crawler todavía no ha publicado su estado."
             : "No se pudo leer el estado del crawler.",
           code: missing ? "STATE_UNAVAILABLE" : "STATE_UNREADABLE",
+        });
+      }
+      return;
+    }
+    if (pathname === "/api/benchmarks") {
+      if (!benchmarkPath) {
+        respondJson(response, 404, {
+          error: "El banco local C01 no está habilitado en este dashboard.",
+          code: "BENCHMARK_DISABLED",
+        });
+        return;
+      }
+      try {
+        const [source, info] = await Promise.all([
+          readFile(benchmarkPath, "utf8"),
+          stat(benchmarkPath),
+        ]);
+        const report = JSON.parse(source);
+        if (!isBenchmarkReport(report)) {
+          respondJson(response, 503, {
+            error: "El informe del banco C01 tiene un formato no compatible.",
+            code: "BENCHMARK_INVALID",
+          });
+          return;
+        }
+        respondJson(response, 200, {
+          report,
+          meta: {
+            read_at: new Date().toISOString(),
+            modified_at: info.mtime.toISOString(),
+          },
+        });
+      } catch (error) {
+        const missing = error.code === "ENOENT";
+        const invalid = error instanceof SyntaxError;
+        respondJson(response, 503, {
+          error: missing
+            ? "El banco C01 todavía no ha publicado su informe."
+            : "No se pudo leer el informe del banco C01.",
+          code: missing
+            ? "BENCHMARK_UNAVAILABLE"
+            : invalid
+              ? "BENCHMARK_INVALID"
+              : "BENCHMARK_UNREADABLE",
         });
       }
       return;

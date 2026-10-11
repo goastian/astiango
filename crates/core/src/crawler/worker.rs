@@ -18,12 +18,7 @@ use hashbrown::HashSet;
 use itertools::Itertools;
 use rand::seq::SliceRandom;
 
-use std::{
-    collections::VecDeque,
-    net::SocketAddr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, net::SocketAddr, sync::Arc, time::Duration};
 
 use url::Url;
 
@@ -39,8 +34,8 @@ use crate::{
 };
 
 use super::{
-    encoded_body, robot_client::RobotClient, wander_prioritiser::WanderPrioritiser, CrawlDatum,
-    DatumSink, Domain, Error, Result, RetrieableUrl, Site, WarcWriter, WeightedUrl, WorkerJob,
+    robot_client::RobotClient, wander_prioritiser::WanderPrioritiser, CrawlDatum, DatumSink,
+    Domain, Error, Result, RetrieableUrl, Site, WarcWriter, WeightedUrl, WorkerJob,
     MAX_CONTENT_LENGTH, MAX_OUTGOING_URLS_PER_PAGE,
 };
 
@@ -385,9 +380,9 @@ impl<S: DatumSink> JobExecutor<S> {
                     "Descargando página",
                 );
             }
-            let started = Instant::now();
+            let started = self.client.now();
             let res = self.process_url(retryable_url.url().clone()).await;
-            let fetch_time = started.elapsed();
+            let fetch_time = self.client.now().duration_since(started);
 
             if let (Some(observer), Err(error)) = (&self.observer, &res) {
                 let kind = match error {
@@ -404,6 +399,9 @@ impl<S: DatumSink> JobExecutor<S> {
                 );
             }
 
+            if let (Some(metrics), Err(error)) = (self.client.metrics(), &res) {
+                metrics.error(error);
+            }
             match res {
                 Ok(res) => {
                     if !self.has_gotten_429_response {
@@ -435,7 +433,7 @@ impl<S: DatumSink> JobExecutor<S> {
                             s.parse::<u64>().ok().map(Duration::from_secs).or_else(|| {
                                 chrono::DateTime::parse_from_rfc2822(s).ok().map(|date| {
                                     Duration::from_secs(
-                                        (date.with_timezone(&chrono::Utc) - chrono::Utc::now())
+                                        (date.with_timezone(&chrono::Utc) - self.client.utc_now())
                                             .num_seconds()
                                             .max(0) as u64,
                                     )
@@ -451,7 +449,7 @@ impl<S: DatumSink> JobExecutor<S> {
                             if let Some(observer) = &self.observer {
                                 observer.waiting(&self.job.domain, retry_after);
                             }
-                            tokio::time::sleep(retry_after).await;
+                            self.client.sleep(retry_after).await;
                         }
                     }
 
@@ -530,7 +528,11 @@ impl<S: DatumSink> JobExecutor<S> {
 
     async fn process_url(&mut self, url: Url) -> Result<ProcessedUrl> {
         let datum = self.polite_crawl_url(url.clone()).await?;
-        self.writer.write(datum.clone()).await?;
+        {
+            let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "sink");
+            self.writer.write(datum.clone()).await?;
+        }
+        let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "parse");
 
         match Html::parse(&datum.body, datum.url.as_str()) {
             Ok(html) => {
@@ -566,7 +568,7 @@ impl<S: DatumSink> JobExecutor<S> {
             match self.fetch(https).await {
                 Ok(res) => Ok(res),
                 Err(_) => {
-                    tokio::time::sleep(self.delay_duration()).await;
+                    self.client.sleep(self.delay_duration()).await;
                     self.fetch(url.clone()).await
                 }
             }
@@ -602,7 +604,7 @@ impl<S: DatumSink> JobExecutor<S> {
         if let Some(observer) = &self.observer {
             observer.waiting(&self.job.domain, delay);
         }
-        tokio::time::sleep(delay).await;
+        self.client.sleep(delay).await;
     }
 
     fn check_headers(&self, res: &reqwest::Response) -> Result<warc::PayloadType> {
@@ -656,7 +658,7 @@ impl<S: DatumSink> JobExecutor<S> {
                 payload_type,
                 body: String::new(),
                 fetch_time_ms: 0,
-                date: chrono::Utc::now(),
+                date: self.client.utc_now(),
             }))
         } else {
             Ok(None)
@@ -689,7 +691,7 @@ impl<S: DatumSink> JobExecutor<S> {
             });
         }
 
-        let body = encoded_body(res).await;
+        let body = self.client.body(res).await;
 
         self.crawled_urls.insert(url.clone());
 
@@ -702,7 +704,7 @@ impl<S: DatumSink> JobExecutor<S> {
             body: body?,
             payload_type: payload_type?,
             fetch_time_ms: 0,
-            date: chrono::Utc::now(),
+            date: self.client.utc_now(),
         })
     }
 
@@ -714,9 +716,9 @@ impl<S: DatumSink> JobExecutor<S> {
             return Err(Error::from(anyhow!("url already crawled: {}", url)));
         }
 
-        let start = Instant::now();
+        let start = self.client.now();
         let res = self.unpolite_crawl_url(url).await;
-        let fetch_time = start.elapsed();
+        let fetch_time = self.client.now().duration_since(start);
         if self.observer.is_none() {
             self.politeness_delay(fetch_time).await;
         }
@@ -735,7 +737,7 @@ impl<S: DatumSink> JobExecutor<S> {
             }
 
             let res = self.fetch_with_https_priority(url).await;
-            tokio::time::sleep(self.delay_duration()).await;
+            self.client.sleep(self.delay_duration()).await;
 
             if res.is_err() {
                 continue;
@@ -747,7 +749,7 @@ impl<S: DatumSink> JobExecutor<S> {
                 continue;
             }
 
-            let body = encoded_body(res).await;
+            let body = self.client.body(res).await;
 
             if body.is_err() {
                 continue;

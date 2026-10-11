@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Icon from "./Icon.svelte";
+  import BenchmarkPanel from "./BenchmarkPanel.svelte";
   import {
     buildHistoryBars,
     summarizeOutcomes,
@@ -19,6 +20,7 @@
   let selectedHost = $state("");
   let windowMinutes = $state(15);
   let showConfig = $state(false);
+  let benchmarkAvailable = $state(false);
   let lastRead = $state<string | null>(null);
   let abortController: AbortController | null = null;
 
@@ -428,7 +430,8 @@
         >Sitios</a
       ><a href="#actividad">Actividad</a><a href="#almacenamiento"
         >Archivos WARC</a
-      ><span>ASTIAN CRAWLER</span>
+      >{#if benchmarkAvailable}<a href="#banco-c01">Banco C01 · local</a
+        >{/if}<span>ASTIAN CRAWLER</span>
     </nav>
   </header>
   <main>
@@ -1085,6 +1088,9 @@
         </div>
       </section>
     </div>
+    <BenchmarkPanel
+      onavailability={(available) => (benchmarkAvailable = available)}
+    />
     <footer class="page-footer">
       <span
         >Astian crawler <span class="slash">/</span>

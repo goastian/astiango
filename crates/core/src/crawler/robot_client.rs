@@ -21,7 +21,7 @@ use anyhow::anyhow;
 use std::{net::IpAddr, sync::Arc, time::Duration};
 use url::Url;
 
-fn client_builder(config: &CrawlerConfig) -> reqwest::ClientBuilder {
+pub(super) fn client_builder(config: &CrawlerConfig) -> reqwest::ClientBuilder {
     let timeout = Duration::from_secs(config.timeout_seconds);
 
     let mut headers = reqwest::header::HeaderMap::default();
@@ -131,11 +131,13 @@ pub struct RobotClient {
     robots_txt_manager: RobotsTxtManager,
     client: reqwest::Client,
     public_config: Option<Arc<CrawlerConfig>>,
+    runtime: Option<Arc<super::runtime::Runtime>>,
 }
 
 impl RobotClient {
     pub fn new(config: &CrawlerConfig) -> Result<Self> {
         Ok(Self {
+            runtime: None,
             client: reqwest_client(config)?,
             robots_txt_manager: RobotsTxtManager::new(config),
             public_config: None,
@@ -147,10 +149,54 @@ impl RobotClient {
             validate_public_url(seed)?;
         }
         Ok(Self {
+            runtime: None,
             client: reqwest_client(config)?,
             robots_txt_manager: RobotsTxtManager::new_public(config),
             public_config: Some(Arc::new(config.clone())),
         })
+    }
+
+    #[cfg(any(test, feature = "crawler-bench"))]
+    pub fn with_runtime(
+        config: &CrawlerConfig,
+        runtime: Arc<super::runtime::Runtime>,
+    ) -> Result<Self> {
+        Ok(Self {
+            client: reqwest_client(config)?,
+            robots_txt_manager: RobotsTxtManager::with_runtime(config, runtime.clone()),
+            public_config: None,
+            runtime: Some(runtime),
+        })
+    }
+
+    pub(crate) fn metrics(&self) -> Option<&Arc<super::runtime::Metrics>> {
+        self.runtime.as_ref().map(|runtime| &runtime.metrics)
+    }
+
+    pub(crate) fn now(&self) -> std::time::Instant {
+        self.runtime
+            .as_ref()
+            .map_or_else(std::time::Instant::now, |runtime| runtime.clock.now())
+    }
+
+    pub(crate) fn utc_now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.runtime
+            .as_ref()
+            .map_or_else(chrono::Utc::now, |runtime| runtime.clock.utc_now())
+    }
+
+    pub(crate) async fn sleep(&self, duration: Duration) {
+        match &self.runtime {
+            Some(runtime) => runtime.sleep(duration).await,
+            None => tokio::time::sleep(duration).await,
+        }
+    }
+
+    pub(crate) async fn body(&self, response: reqwest::Response) -> Result<String> {
+        match &self.runtime {
+            Some(runtime) => runtime.body(response).await,
+            None => super::encoded_body(response).await,
+        }
     }
 
     pub fn robots_txt_manager(&self) -> &RobotsTxtManager {
@@ -165,6 +211,9 @@ impl RobotClient {
             return Err(Error::DisallowedPath);
         }
 
+        if let Some(runtime) = &self.runtime {
+            return Ok(RequestBuilder::injected(runtime.clone(), url));
+        }
         let request = match &self.public_config {
             Some(config) => public_request(config, &url).await?,
             None => self.client.get(url),
@@ -173,8 +222,10 @@ impl RobotClient {
     }
 }
 
-#[allow(dead_code)] // not used in tests, but required for public API
-pub struct RequestBuilder(reqwest::RequestBuilder);
+pub struct RequestBuilder {
+    request: Option<reqwest::RequestBuilder>,
+    injected: Option<(Arc<super::runtime::Runtime>, Url, Option<Duration>)>,
+}
 
 impl From<reqwest::RequestBuilder> for RequestBuilder {
     fn from(builder: reqwest::RequestBuilder) -> Self {
@@ -184,21 +235,43 @@ impl From<reqwest::RequestBuilder> for RequestBuilder {
 
 impl RequestBuilder {
     pub fn new(builder: reqwest::RequestBuilder) -> Self {
-        Self(builder)
+        Self {
+            request: Some(builder),
+            injected: None,
+        }
     }
 
-    #[cfg(not(test))]
+    pub(crate) fn injected(runtime: Arc<super::runtime::Runtime>, url: Url) -> Self {
+        Self {
+            request: None,
+            injected: Some((runtime, url, None)),
+        }
+    }
+
     pub async fn send(self) -> Result<reqwest::Response> {
-        self.0.send().await.map_err(|e| Error::from(anyhow!(e)))
+        if let Some((runtime, url, timeout)) = self.injected {
+            return runtime.http.send(url, timeout).await;
+        }
+        #[cfg(not(test))]
+        {
+            self.request
+                .unwrap()
+                .send()
+                .await
+                .map_err(|e| Error::from(anyhow!(e)))
+        }
+        #[cfg(test)]
+        {
+            Err(Error::from(anyhow!("Not allowed in tests")))
+        }
     }
 
-    #[cfg(test)]
-    pub async fn send(&self) -> Result<reqwest::Response> {
-        Err(Error::from(anyhow!("Not allowed in tests")))
-    }
-
-    pub fn timeout(self, timeout: Duration) -> Self {
-        Self(self.0.timeout(timeout))
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        if let Some((_, _, value)) = &mut self.injected {
+            *value = Some(timeout);
+        }
+        self.request = self.request.map(|request| request.timeout(timeout));
+        self
     }
 }
 

@@ -45,6 +45,7 @@ struct CheckedRobotsTxt {
 }
 
 impl CheckedRobotsTxt {
+    #[cfg(test)]
     fn new(robots: Lookup<robotstxt::Robots>) -> Self {
         Self {
             robots,
@@ -54,10 +55,15 @@ impl CheckedRobotsTxt {
 }
 
 impl CheckedRobotsTxt {
+    #[cfg(test)]
     fn is_expired(&self, expiration: &Duration) -> bool {
+        self.is_expired_at(expiration, std::time::Instant::now())
+    }
+
+    fn is_expired_at(&self, expiration: &Duration, now: std::time::Instant) -> bool {
         // A transient DNS or server failure must not block a host forever in
         // the continuous crawler. Keep denying requests until this TTL expires.
-        self.last_check.elapsed() >= *expiration
+        now.duration_since(self.last_check) >= *expiration
     }
 }
 
@@ -70,6 +76,7 @@ struct InnerRobotsTxtManager {
     min_crawl_delay: Duration,
     max_crawl_delay: Duration,
     public_config: Option<Arc<CrawlerConfig>>,
+    runtime: Option<Arc<super::runtime::Runtime>>,
 }
 
 impl InnerRobotsTxtManager {
@@ -89,6 +96,7 @@ impl InnerRobotsTxtManager {
             min_crawl_delay,
             max_crawl_delay,
             public_config: None,
+            runtime: None,
         }
     }
 
@@ -121,7 +129,77 @@ impl InnerRobotsTxtManager {
         }
     }
 
+    fn now(&self) -> std::time::Instant {
+        self.runtime
+            .as_ref()
+            .map_or_else(std::time::Instant::now, |runtime| runtime.clock.now())
+    }
+
+    async fn sleep(&self, duration: Duration) {
+        match &self.runtime {
+            Some(runtime) => runtime.sleep(duration).await,
+            None => tokio::time::sleep(duration).await,
+        }
+    }
+
+    async fn body(&self, response: reqwest::Response) -> super::Result<String> {
+        match &self.runtime {
+            Some(runtime) => runtime.body(response).await,
+            None => encoded_body(response).await,
+        }
+    }
+
+    async fn fetch_injected_robots(
+        &self,
+        runtime: &Arc<super::runtime::Runtime>,
+        initial: &str,
+    ) -> Lookup<robotstxt::Robots> {
+        let Ok(mut url) = Url::parse(initial) else {
+            return Lookup::Unreachable;
+        };
+        for _ in 0..=5 {
+            let response =
+                super::robot_client::RequestBuilder::injected(runtime.clone(), url.clone())
+                    .send()
+                    .await;
+            self.sleep(self.min_crawl_delay).await;
+            let Ok(response) = response else {
+                return Lookup::Unreachable;
+            };
+            if response.status().is_redirection() {
+                let next = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| url.join(v).ok());
+                let Some(next) = next else {
+                    return Lookup::Unreachable;
+                };
+                url = next;
+                continue;
+            }
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                return Lookup::Unavailable;
+            }
+            if response.status() != reqwest::StatusCode::OK {
+                return Lookup::Unreachable;
+            }
+            let Ok(body) = self.body(response).await else {
+                return Lookup::Unreachable;
+            };
+            let user_agent = self.user_agent.clone();
+            return match panic::catch_unwind(|| robotstxt::Robots::parse(&user_agent, &body)) {
+                Ok(Ok(robots)) => Lookup::Found(robots),
+                _ => Lookup::Unreachable,
+            };
+        }
+        Lookup::Unreachable
+    }
+
     async fn fetch_robots_txt_from_url(&self, url: &str) -> Lookup<robotstxt::Robots> {
+        if let Some(runtime) = &self.runtime {
+            return self.fetch_injected_robots(runtime, url).await;
+        }
         let request = if let Some(config) = &self.public_config {
             return self.fetch_public_robots(config, url).await;
         } else {
@@ -140,7 +218,7 @@ impl InnerRobotsTxtManager {
                     }
                 }
 
-                let body = match encoded_body(res).await {
+                let body = match self.body(res).await {
                     Ok(body) => body,
                     Err(_) => return Lookup::Unreachable,
                 };
@@ -154,7 +232,7 @@ impl InnerRobotsTxtManager {
             Err(_) => Lookup::Unreachable,
         };
 
-        tokio::time::sleep(self.min_crawl_delay).await;
+        self.sleep(self.min_crawl_delay).await;
 
         res
     }
@@ -176,7 +254,7 @@ impl InnerRobotsTxtManager {
                 .send()
                 .await;
             // Robots requests and their redirects also obey the configured delay.
-            tokio::time::sleep(self.min_crawl_delay).await;
+            self.sleep(self.min_crawl_delay).await;
             let Ok(response) = response else {
                 return Lookup::Unreachable;
             };
@@ -198,7 +276,7 @@ impl InnerRobotsTxtManager {
             if response.status() != reqwest::StatusCode::OK {
                 return Lookup::Unreachable;
             }
-            let Ok(body) = encoded_body(response).await else {
+            let Ok(body) = self.body(response).await else {
                 return Lookup::Unreachable;
             };
             let user_agent = self.user_agent.clone();
@@ -241,29 +319,33 @@ impl InnerRobotsTxtManager {
                 Lookup::Unreachable => {}
             }
 
-            tokio::time::sleep(self.max_crawl_delay).await;
+            self.sleep(self.max_crawl_delay).await;
         }
 
         Lookup::Unreachable
     }
 
     async fn fetch_robots_txt(&self, site: &Site) -> CheckedRobotsTxt {
-        if RETRY_ROBOTSTXT_UNREACHABLE {
-            CheckedRobotsTxt::new(self.fetch_robots_txt_with_retry(site).await)
+        let robots = if RETRY_ROBOTSTXT_UNREACHABLE {
+            self.fetch_robots_txt_with_retry(site).await
         } else {
-            CheckedRobotsTxt::new(self.fetch_robots_txt_without_retry(site).await)
+            self.fetch_robots_txt_without_retry(site).await
+        };
+        CheckedRobotsTxt {
+            robots,
+            last_check: self.now(),
         }
     }
 
     fn maybe_prune(&self) {
-        if self.last_prune.lock().unwrap().elapsed() < Duration::from_secs(60) {
+        if self.now().duration_since(*self.last_prune.lock().unwrap()) < Duration::from_secs(60) {
             return;
         }
 
         self.cache
-            .retain(|_, v| !v.is_expired(&self.cache_expiration));
+            .retain(|_, v| !v.is_expired_at(&self.cache_expiration, self.now()));
 
-        *self.last_prune.lock().unwrap() = std::time::Instant::now();
+        *self.last_prune.lock().unwrap() = self.now();
     }
 
     async fn get(&self, url: &Url) -> impl Deref<Target = CheckedRobotsTxt> + '_ {
@@ -273,7 +355,7 @@ impl InnerRobotsTxtManager {
         let cache_should_update = self
             .cache
             .get_mut(&site)
-            .map(|v| v.is_expired(&self.cache_expiration))
+            .map(|v| v.is_expired_at(&self.cache_expiration, self.now()))
             .unwrap_or(true);
 
         if cache_should_update {
@@ -306,6 +388,16 @@ impl RobotsTxtManager {
     pub fn new(config: &CrawlerConfig) -> Self {
         Self {
             inner: Arc::new(InnerRobotsTxtManager::new(config)),
+        }
+    }
+
+    #[cfg(any(test, feature = "crawler-bench"))]
+    pub fn with_runtime(config: &CrawlerConfig, runtime: Arc<super::runtime::Runtime>) -> Self {
+        let mut inner = InnerRobotsTxtManager::new(config);
+        inner.last_prune = Arc::new(Mutex::new(runtime.clock.now()));
+        inner.runtime = Some(runtime);
+        Self {
+            inner: Arc::new(inner),
         }
     }
 

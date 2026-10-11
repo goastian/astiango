@@ -49,6 +49,9 @@ pub mod robot_client;
 mod wander_prioritiser;
 mod warc_writer;
 mod worker;
+pub mod runtime;
+#[cfg(feature = "crawler-bench")]
+pub mod benchmark;
 
 pub use coordinator::CrawlCoordinator;
 
