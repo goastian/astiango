@@ -15,8 +15,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use super::{Error, Result};
-use crate::config::CrawlerConfig;
-use crate::crawler::robots_txt::RobotsTxtManager;
+use crate::config::{CrawlNetworkPolicy, CrawlerConfig};
+use crate::crawler::robots_txt::{RobotAccess, RobotsTxtManager};
 use anyhow::anyhow;
 use std::{net::IpAddr, sync::Arc, time::Duration};
 use url::Url;
@@ -87,14 +87,53 @@ pub(super) fn validate_public_url(url: &Url) -> Result<()> {
         || url.password().is_some()
         || !matches!(url.port_or_known_default(), Some(80 | 443))
     {
-        return Err(anyhow!("crawl destination must be public HTTP(S) on port 80 or 443").into());
+        return Err(Error::NonPublicDestination(
+            "crawl destination must be public HTTP(S) on port 80 or 443".into(),
+        ));
     }
     match url.host() {
         Some(url::Host::Domain(host)) if host.contains('.') && host != "localhost" => Ok(()),
         Some(url::Host::Ipv4(ip)) if is_public_address(IpAddr::V4(ip)) => Ok(()),
         Some(url::Host::Ipv6(ip)) if is_public_address(IpAddr::V6(ip)) => Ok(()),
-        _ => Err(anyhow!("non-public crawl destination").into()),
+        _ => Err(Error::NonPublicDestination(
+            "non-public crawl destination".into(),
+        )),
     }
+}
+
+pub(super) fn validate_network_url(policy: CrawlNetworkPolicy, url: &Url) -> Result<()> {
+    match policy {
+        CrawlNetworkPolicy::PublicOnly => validate_public_url(url),
+        CrawlNetworkPolicy::AllowPrivate => {
+            if matches!(url.scheme(), "http" | "https")
+                && url.host().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+            {
+                Ok(())
+            } else {
+                Err(Error::NonPublicDestination(
+                    "crawl destination must be HTTP(S) without credentials".into(),
+                ))
+            }
+        }
+    }
+}
+
+pub fn validate_seed_urls(config: &CrawlerConfig, seeds: &[Url]) -> Result<()> {
+    for seed in seeds {
+        validate_network_url(config.network_policy, seed)?;
+    }
+    Ok(())
+}
+
+fn validate_public_addresses(host: &str, addresses: &[std::net::SocketAddr]) -> Result<()> {
+    if addresses.is_empty() || addresses.iter().any(|addr| !is_public_address(addr.ip())) {
+        return Err(Error::NonPublicDestination(format!(
+            "DNS returned a non-public or empty destination for {host}"
+        )));
+    }
+    Ok(())
 }
 
 /// Resolve once and pin this request to validated addresses. Never let a second
@@ -114,11 +153,7 @@ pub(super) async fn public_request(
         .map_err(|e| Error::from(anyhow!(e)))?
         .map_err(|e| Error::from(anyhow!(e)))?
         .collect();
-        if addresses.is_empty() || addresses.iter().any(|addr| !is_public_address(addr.ip())) {
-            return Err(
-                anyhow!("DNS returned a non-public or empty destination for {host}").into(),
-            );
-        }
+        validate_public_addresses(host, &addresses)?;
         builder = builder.resolve_to_addrs(host, &addresses);
     }
     let client = builder.build().map_err(|e| Error::from(anyhow!(e)))?;
@@ -130,7 +165,7 @@ pub(super) async fn public_request(
 pub struct RobotClient {
     robots_txt_manager: RobotsTxtManager,
     client: reqwest::Client,
-    public_config: Option<Arc<CrawlerConfig>>,
+    config: Arc<CrawlerConfig>,
     runtime: Option<Arc<super::runtime::Runtime>>,
 }
 
@@ -140,20 +175,19 @@ impl RobotClient {
             runtime: None,
             client: reqwest_client(config)?,
             robots_txt_manager: RobotsTxtManager::new(config),
-            public_config: None,
+            config: Arc::new(config.clone()),
         })
     }
 
+    #[deprecated(note = "use new with network_policy and validate_seed_urls")]
     pub async fn new_public(config: &CrawlerConfig, seeds: &[Url]) -> Result<Self> {
-        for seed in seeds {
-            validate_public_url(seed)?;
+        if config.network_policy != CrawlNetworkPolicy::PublicOnly {
+            return Err(Error::NonPublicDestination(
+                "new_public requires network_policy = public_only".into(),
+            ));
         }
-        Ok(Self {
-            runtime: None,
-            client: reqwest_client(config)?,
-            robots_txt_manager: RobotsTxtManager::new_public(config),
-            public_config: Some(Arc::new(config.clone())),
-        })
+        validate_seed_urls(config, seeds)?;
+        Self::new(config)
     }
 
     #[cfg(any(test, feature = "crawler-bench"))]
@@ -164,7 +198,7 @@ impl RobotClient {
         Ok(Self {
             client: reqwest_client(config)?,
             robots_txt_manager: RobotsTxtManager::with_runtime(config, runtime.clone()),
-            public_config: None,
+            config: Arc::new(config.clone()),
             runtime: Some(runtime),
         })
     }
@@ -204,19 +238,19 @@ impl RobotClient {
     }
 
     pub async fn get(&self, url: Url) -> Result<RequestBuilder> {
-        if self.public_config.is_some() {
-            validate_public_url(&url)?;
-        }
-        if !self.robots_txt_manager.is_allowed(&url).await {
-            return Err(Error::DisallowedPath);
+        validate_network_url(self.config.network_policy, &url)?;
+        match self.robots_txt_manager.access(&url).await {
+            RobotAccess::Allowed => {}
+            RobotAccess::Disallowed => return Err(Error::DisallowedPath),
+            RobotAccess::Unreachable => return Err(Error::RobotsUnavailable),
         }
 
         if let Some(runtime) = &self.runtime {
             return Ok(RequestBuilder::injected(runtime.clone(), url));
         }
-        let request = match &self.public_config {
-            Some(config) => public_request(config, &url).await?,
-            None => self.client.get(url),
+        let request = match self.config.network_policy {
+            CrawlNetworkPolicy::PublicOnly => public_request(&self.config, &url).await?,
+            CrawlNetworkPolicy::AllowPrivate => self.client.get(url),
         };
         Ok(RequestBuilder::new(request))
     }
@@ -280,6 +314,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn configuration_migration_defaults_to_public_only() {
+        let mut legacy = serde_json::to_value(CrawlerConfig::for_tests()).unwrap();
+        legacy.as_object_mut().unwrap().remove("network_policy");
+        legacy.as_object_mut().unwrap().remove("max_redirect_hops");
+        let config: CrawlerConfig = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(config.network_policy, CrawlNetworkPolicy::PublicOnly);
+        assert_eq!(config.max_redirect_hops, 10);
+
+        legacy["network_policy"] = serde_json::json!("allow_private");
+        legacy["max_redirect_hops"] = serde_json::json!(3);
+        let config: CrawlerConfig = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(config.network_policy, CrawlNetworkPolicy::AllowPrivate);
+        assert_eq!(config.max_redirect_hops, 3);
+        legacy["network_policy"] = serde_json::json!("legacy");
+        assert!(serde_json::from_value::<CrawlerConfig>(legacy).is_err());
+    }
+
+    #[test]
+    fn private_network_access_requires_explicit_policy() {
+        let private = Url::parse("http://127.0.0.1:1234/fixture").unwrap();
+        let mut config = CrawlerConfig::for_tests();
+        assert!(validate_seed_urls(&config, std::slice::from_ref(&private)).is_err());
+        config.network_policy = CrawlNetworkPolicy::AllowPrivate;
+        assert!(validate_seed_urls(&config, &[private]).is_ok());
+        for url in ["ftp://127.0.0.1/", "http://user:password@127.0.0.1/"] {
+            assert!(validate_seed_urls(&config, &[Url::parse(url).unwrap()]).is_err());
+        }
+    }
+
+    #[test]
+    fn public_dns_validation_rejects_empty_and_mixed_destinations() {
+        assert!(validate_public_addresses("fixture.test", &[]).is_err());
+        let public = "1.1.1.1:0".parse().unwrap();
+        let private = "127.0.0.1:0".parse().unwrap();
+        assert!(validate_public_addresses("fixture.test", &[public]).is_ok());
+        assert!(validate_public_addresses("fixture.test", &[public, private]).is_err());
+    }
+
+    #[tokio::test]
+    #[allow(deprecated)]
+    async fn public_constructor_alias_cannot_override_the_configured_policy() {
+        let mut config = CrawlerConfig::for_tests();
+        let seed = Url::parse("https://fixture.test/page").unwrap();
+        let client = RobotClient::new_public(&config, &[seed]).await.unwrap();
+        assert_eq!(client.config.network_policy, CrawlNetworkPolicy::PublicOnly);
+        assert!(matches!(
+            client.get(Url::parse("http://127.0.0.1/").unwrap()).await,
+            Err(Error::NonPublicDestination(_))
+        ));
+        config.network_policy = CrawlNetworkPolicy::AllowPrivate;
+        assert!(RobotClient::new_public(&config, &[]).await.is_err());
+    }
+
+    #[test]
     fn public_crawl_rejects_internal_and_special_destinations() {
         for address in [
             "127.0.0.1",
@@ -319,7 +407,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_errs_disallowed_path() {
-        let config = CrawlerConfig::for_tests();
+        let mut config = CrawlerConfig::for_tests();
+        config.network_policy = CrawlNetworkPolicy::AllowPrivate;
         let client = RobotClient::new(&config).unwrap();
 
         let robots_txt =

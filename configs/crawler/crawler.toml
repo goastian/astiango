@@ -4,6 +4,8 @@ num_worker_threads = 1
 politeness_factor = 1.0
 router_hosts = ["0.0.0.0:8181"]
 timeout_seconds = 30
+network_policy = "public_only"
+max_redirect_hops = 10
 
 [user_agent]
 full = "<user_agent>" 

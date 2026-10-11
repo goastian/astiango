@@ -37,6 +37,64 @@ def stats(values):
     return {'median': median, 'min': min(values), 'max': max(values),
             'mad': statistics.median(abs(value - median) for value in values)}
 
+def verify_job_outcomes(run, hosts, paths, check):
+    jobs = run['job_outcomes']
+    check(isinstance(jobs, dict) and set(jobs) == hosts, 'job outcome origins differ')
+    records = {}
+    durable = attempts = 0
+    for host in hosts:
+        job = jobs.get(host)
+        if job is None:
+            continue
+        check(job['status'] in ('completed', 'deferred', 'cancelled'), f'{host}: invalid job status')
+        check(Counter(entry['url'] for entry in job['urls']) ==
+              Counter(f'http://{host}{path}' for path in paths),
+              f'{host}: input URL does not have exactly one outcome')
+        kinds = Counter(entry['outcome']['kind'] for entry in job['urls'])
+        check(set(kinds) <= {'durable_success', 'skipped', 'permanent_failure', 'deferred', 'cancelled'},
+              f'{host}: invalid terminal outcome')
+        if kinds['cancelled']:
+            check(job['status'] == 'cancelled', f'{host}: cancellation silently completed')
+        elif kinds['deferred']:
+            check(job['status'] == 'deferred', f'{host}: deferral silently completed')
+        else:
+            check(job['status'] == 'completed', f'{host}: unexplained incomplete status')
+        counters = job['counters']
+        check(all(isinstance(counters[key], int) and not isinstance(counters[key], bool)
+                  and counters[key] >= 0 for key in ('useful_pages', 'page_http_attempts', 'redirect_hops')),
+              f'{host}: invalid job counters')
+        check(counters['useful_pages'] == kinds['durable_success'], f'{host}: false durable count')
+        durable += counters['useful_pages']
+        attempts += counters['page_http_attempts']
+        for entry in job['urls']:
+            outcome = entry['outcome']
+            if outcome['kind'] in ('skipped', 'permanent_failure', 'deferred'):
+                check(bool(outcome.get('reason')), f'{entry["url"]}: missing terminal reason')
+            records[entry['url']] = outcome
+    check(durable == run['saved_pages'], 'job/sink durable totals differ')
+    check(attempts + run['server']['by_path'].get('/robots.txt', 0) == run['client_requests'],
+          'page HTTP attempts and robots do not reconcile')
+    return records
+
+
+def missing_request_explained(host, path, records, server):
+    outcome = records.get(f'http://{host}{path}', {})
+    kind, reason = outcome.get('kind'), outcome.get('reason')
+    if kind == 'cancelled':
+        return True
+    if kind == 'skipped':
+        return path == '/blocked' and reason == 'robots_disallowed'
+    if kind != 'deferred':
+        return False
+    if reason == 'robots_unavailable':
+        return server['by_origin_path'].get(host + '/robots.txt', 0) > 0
+    if reason == 'origin_rate_limited':
+        trigger = records.get(f'http://{host}/error/429', {})
+        return (trigger.get('kind') == 'deferred' and trigger.get('reason') == 'http_429'
+                and server['by_origin_path'].get(host + '/error/429', 0) > 0)
+    return False
+
+
 report = json.loads(REPORT.read_text())
 if not report.get('acceptance', {}).get('passed'):
     print(f"Informe incompleto: {len(report.get('scenarios', []))}/18 grupos; aceptación no aprobada.")
@@ -78,6 +136,9 @@ source_paths = {ROOT / 'Cargo.toml', ROOT / 'Cargo.lock',
                 ROOT / 'scripts/crawler-bench.py', manifest_path, ROOT / 'crates/core/Cargo.toml'}
 for relative in ('crates/core/src', 'crates/core/examples', 'crates/robotstxt/src', 'crates/kuchiki/src'):
     source_paths.update(path for path in (ROOT / relative).rglob('*') if path.is_file())
+if 'acceptance_profile' in configuration:
+    source_paths.add(ROOT / 'crates/simple-wal/Cargo.toml')
+    source_paths.update(path for path in (ROOT / 'crates/simple-wal/src').rglob('*') if path.is_file())
 source_hash = hashlib.sha256()
 for path in sorted(source_paths):
     source_hash.update(str(path.relative_to(ROOT)).encode() + b'\0' + path.read_bytes() + b'\0')
@@ -139,14 +200,31 @@ for row in report['scenarios']:
                 server['requests'] == run['client_requests'], f'{label}: total counters disagree')
         require(server['by_path'].get('/blocked', 0) == 0, f'{label}: requested forbidden robots path')
         require(server['by_path'].get('/escape', 0) == 0, f'{label}: followed external escape redirect')
+        outcomes = None
+        if 'job_outcomes' in run:
+            outcomes = verify_job_outcomes(
+                run, expected_hosts, config['paths'],
+                lambda condition, message: require(condition, f'{label}: {message}'))
         for host in expected_hosts:
             require(server['by_origin_path'].get(host + '/robots.txt', 0) >= 1,
                     f'{label}: no robots request for {host}')
             for path in initial_paths:
-                require(server['by_origin_path'].get(host + path, 0) >= 1,
+                explained = outcomes is not None and missing_request_explained(host, path, outcomes, server)
+                require(server['by_origin_path'].get(host + path, 0) >= 1 or explained,
                         f'{label}: missing initial request for {host}{path}')
         expected_saved = {'balanced': 8, 'slow': 12}.get(name)
-        if expected_saved:
+        if expected_saved and outcomes is not None:
+            kinds = Counter(outcome['kind'] for outcome in outcomes.values())
+            failures = sum(count for kind, count in kinds.items() if kind != 'durable_success')
+            require(kinds['skipped'] == 0, f'{label}: unexplained omission in a success-only workload')
+            require(run['saved_pages'] + failures == expected_saved * origins,
+                    f'{label}: saved pages and terminal outcomes do not account for every input')
+            if failures:
+                pressure_failures.append(
+                    f'{label}: {run["saved_pages"]}/{expected_saved * origins} páginas guardadas; '
+                    f'resultados explícitos={dict(kinds)}'
+                )
+        elif expected_saved:
             # These scenarios schedule each page once and have no deliberate
             # error/redirect endpoints. Every missing page must therefore have
             # exactly one recorded final process_url error. Stress-induced loss

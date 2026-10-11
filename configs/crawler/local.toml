@@ -7,6 +7,8 @@ pages_per_domain = 50
 num_worker_threads = 2
 min_crawl_delay_ms = 10000
 timeout_seconds = 30
+network_policy = "public_only"
+max_redirect_hops = 10
 max_frontier = 10000
 revisit_interval_seconds = 3600
 

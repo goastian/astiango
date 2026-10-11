@@ -29,6 +29,132 @@ pub struct Snapshot {
     pub history: Vec<Sample>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observer() -> (tempfile::TempDir, Observer) {
+        let directory = tempfile::tempdir().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let observer = Observer::new(
+            directory.path().join("status.json"),
+            Snapshot {
+                schema_version: 1,
+                run_id: "observer-c02-test".into(),
+                pid: std::process::id(),
+                started_at: now.clone(),
+                updated_at: now,
+                finished_at: None,
+                phase: "running".into(),
+                user_agent: "test".into(),
+                workers: 1,
+                min_crawl_delay_ms: 1,
+                pages_per_domain: 5,
+                continuous: false,
+                frontier: FrontierState::default(),
+                counters: Counters::default(),
+                sites: Vec::new(),
+                recent_events: Vec::new(),
+                warc: Warc {
+                    directory: directory.path().display().to_string(),
+                    files: 0,
+                    bytes: 0,
+                    current_file: None,
+                },
+                history: Vec::new(),
+            },
+        )
+        .unwrap();
+        (directory, observer)
+    }
+
+    fn datum(url: url::Url) -> super::super::CrawlDatum {
+        super::super::CrawlDatum {
+            url,
+            payload_type: crate::warc::PayloadType::Html,
+            body: "<html>saved</html>".into(),
+            fetch_time_ms: 3,
+            date: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn transport_and_explicit_outcomes_remain_separate() {
+        let (directory, observer) = observer();
+        let url = url::Url::parse("https://example.test/page").unwrap();
+        let domain = Domain::from(&url);
+        observer.register_site(domain.as_str().into(), 5);
+        observer.event(&domain, Some(&url), "fetching", "candidate");
+        for _ in 0..3 {
+            observer.http_attempt(&domain, &url);
+        }
+        observer.redirect(&domain, &url);
+        observer.saved(&domain, &datum(url.clone()), "saved.warc.gz".into(), 12);
+        for kind in [
+            "failed",
+            "skipped",
+            "deferred",
+            "cancelled",
+            "storage_failed",
+        ] {
+            observer.event(&domain, Some(&url), kind, kind);
+        }
+        observer.check().unwrap();
+        let snapshot: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.path().join("status.json")).unwrap())
+                .unwrap();
+        let counters = &snapshot["counters"];
+        assert_eq!(counters["attempted"], 1);
+        assert_eq!(counters["page_http_attempts"], 3);
+        assert_eq!(counters["redirect_hops"], 1);
+        assert_eq!(counters["downloaded"], 1);
+        assert_eq!(counters["useful_pages"], 1);
+        for kind in [
+            "failed",
+            "skipped",
+            "deferred",
+            "cancelled",
+            "storage_failed",
+        ] {
+            assert_eq!(counters[kind], 1);
+            assert_eq!(snapshot["sites"][0][kind], 1);
+        }
+    }
+
+    #[test]
+    fn finish_preserves_incomplete_outcomes_and_unknown_saved_domains_are_safe() {
+        let (_directory, observer) = observer();
+        for status in ["deferred", "cancelled", "storage_failed"] {
+            let url = url::Url::parse(&format!("https://{status}.test/page")).unwrap();
+            let domain = Domain::from(&url);
+            observer.register_site(domain.as_str().into(), 5);
+            observer.event(&domain, Some(&url), &format!("site_{status}"), status);
+        }
+        let url = url::Url::parse("https://unregistered.test/page").unwrap();
+        observer.saved(
+            &Domain::from(&url),
+            &datum(url),
+            "redirect.warc.gz".into(),
+            12,
+        );
+        observer.finish("stopped");
+        observer.check().unwrap();
+        let snapshot = observer.snapshot.lock().unwrap();
+        assert_eq!(snapshot.counters.downloaded, 1);
+        assert_eq!(snapshot.counters.useful_pages, 1);
+        assert_eq!(snapshot.counters.completed_sites, 0);
+        for (site, expected) in
+            snapshot
+                .sites
+                .iter()
+                .zip(["deferred", "cancelled", "storage_failed"])
+        {
+            assert_eq!(site.status, expected);
+            assert!(site.current_url.is_none());
+        }
+    }
+}
+
 #[derive(Default, Serialize)]
 pub struct FrontierState {
     pub pending_domains: usize,
@@ -42,6 +168,12 @@ pub struct Counters {
     pub failed: u64,
     pub skipped: u64,
     pub attempted: u64,
+    pub page_http_attempts: u64,
+    pub redirect_hops: u64,
+    pub useful_pages: u64,
+    pub deferred: u64,
+    pub cancelled: u64,
+    pub storage_failed: u64,
     pub bytes: u64,
     pub sites: usize,
     pub completed_sites: usize,
@@ -56,6 +188,12 @@ pub struct Site {
     pub failed: u64,
     pub skipped: u64,
     pub attempted: u64,
+    pub page_http_attempts: u64,
+    pub redirect_hops: u64,
+    pub useful_pages: u64,
+    pub deferred: u64,
+    pub cancelled: u64,
+    pub storage_failed: u64,
     pub budget: u64,
     pub bytes: u64,
     pub last_activity_at: String,
@@ -75,6 +213,12 @@ impl Site {
             failed: 0,
             skipped: 0,
             attempted: 0,
+            page_http_attempts: 0,
+            redirect_hops: 0,
+            useful_pages: 0,
+            deferred: 0,
+            cancelled: 0,
+            storage_failed: 0,
             budget,
             bytes: 0,
             last_activity_at: Utc::now().to_rfc3339(),
@@ -191,12 +335,13 @@ impl Observer {
     pub fn register_site(&self, host: String, budget: u64) {
         let first_visit = self.registered_domains.lock().unwrap().insert(host.clone());
         self.update(|s| {
+            let mut was_completed = false;
             if let Some(index) = s.sites.iter().position(|site| site.host == host) {
-                s.sites.remove(index);
+                was_completed = s.sites.remove(index).status == "completed";
             }
             if first_visit {
                 s.counters.sites += 1;
-            } else {
+            } else if was_completed {
                 s.counters.completed_sites = s.counters.completed_sites.saturating_sub(1);
             }
             // Keep the live snapshot bounded; global counters remain cumulative.
@@ -230,7 +375,10 @@ impl Observer {
             for site in &mut s.sites {
                 site.current_url = None;
                 site.next_request_at = None;
-                if site.status != "completed" {
+                if !matches!(
+                    site.status.as_str(),
+                    "completed" | "failed" | "deferred" | "cancelled" | "storage_failed"
+                ) {
                     site.status = phase.into();
                 }
             }
@@ -270,6 +418,36 @@ impl Observer {
                     site.skipped += 1;
                     s.counters.skipped += 1;
                 }
+                "http_attempt" => {
+                    site.page_http_attempts += 1;
+                    s.counters.page_http_attempts += 1;
+                    site.current_url = url.map(ToString::to_string);
+                    site.last_http_status = None;
+                }
+                "redirect" => {
+                    site.redirect_hops += 1;
+                    s.counters.redirect_hops += 1;
+                }
+                "deferred" => {
+                    site.deferred += 1;
+                    s.counters.deferred += 1;
+                    site.last_error = Some(message.into());
+                }
+                "cancelled" => {
+                    site.cancelled += 1;
+                    s.counters.cancelled += 1;
+                    site.last_error = Some(message.into());
+                }
+                "storage_failed" => {
+                    site.storage_failed += 1;
+                    s.counters.storage_failed += 1;
+                    site.last_error = Some(message.into());
+                }
+                "site_deferred" | "site_cancelled" | "site_storage_failed" => {
+                    site.status = kind.trim_start_matches("site_").into();
+                    site.current_url = None;
+                    site.next_request_at = None;
+                }
                 "site_completed" => {
                     site.status = "completed".into();
                     site.current_url = None;
@@ -285,9 +463,12 @@ impl Observer {
                 0,
                 Event {
                     at: now,
-                    level: if kind == "failed" {
+                    level: if matches!(kind, "failed" | "storage_failed" | "site_storage_failed") {
                         "error"
-                    } else if kind == "skipped" {
+                    } else if matches!(
+                        kind,
+                        "skipped" | "deferred" | "cancelled" | "site_deferred" | "site_cancelled"
+                    ) {
                         "warn"
                     } else {
                         "info"
@@ -305,6 +486,24 @@ impl Observer {
             );
             s.recent_events.truncate(100);
         });
+    }
+
+    pub fn http_attempt(&self, domain: &Domain, url: &url::Url) {
+        self.event(
+            domain,
+            Some(url),
+            "http_attempt",
+            "Intento HTTP de página o sitemap",
+        );
+    }
+
+    pub fn redirect(&self, domain: &Domain, url: &url::Url) {
+        self.event(
+            domain,
+            Some(url),
+            "redirect",
+            "Salto de redirección seguido",
+        );
     }
 
     pub fn response(&self, domain: &Domain, status: u16) {
@@ -343,17 +542,18 @@ impl Observer {
         self.update(|s| {
             let now = Utc::now().to_rfc3339();
             let bytes = datum.body.len() as u64;
-            let site = s
-                .sites
-                .iter_mut()
-                .find(|site| site.host == domain.as_str())
-                .unwrap();
-            site.pages_downloaded += 1;
-            site.bytes += bytes;
-            site.last_fetch_ms = Some(datum.fetch_time_ms);
-            site.last_activity_at = now.clone();
-            site.last_error = None;
+            let site = s.sites.iter_mut().find(|site| site.host == domain.as_str());
+            let http_status = site.as_ref().and_then(|site| site.last_http_status);
+            if let Some(site) = site {
+                site.pages_downloaded += 1;
+                site.useful_pages += 1;
+                site.bytes += bytes;
+                site.last_fetch_ms = Some(datum.fetch_time_ms);
+                site.last_activity_at = now.clone();
+                site.last_error = None;
+            }
             s.counters.downloaded += 1;
+            s.counters.useful_pages += 1;
             s.counters.bytes += bytes;
             s.warc.files += 1;
             s.warc.bytes += compressed_bytes;
@@ -367,7 +567,7 @@ impl Observer {
                     message: "Página guardada en WARC".into(),
                     host: domain.as_str().into(),
                     url: Some(datum.url.to_string()),
-                    http_status: site.last_http_status,
+                    http_status,
                     bytes: Some(bytes),
                     fetch_time_ms: Some(datum.fetch_time_ms),
                     warc_file: Some(file),

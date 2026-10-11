@@ -15,6 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/
 
 use std::{
+    future::Future,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -54,6 +55,8 @@ struct InnerCrawlableSite {
     last_drip: Instant,
     drip_rate: Duration,
     budget: u64,
+    retry_urls: Vec<CrawlableUrl>,
+    retry_not_before: Option<(Instant, Duration)>,
 }
 
 impl InnerCrawlableSite {
@@ -74,6 +77,8 @@ impl InnerCrawlableSite {
             last_drip: Instant::now(),
             drip_rate,
             budget: 0,
+            retry_urls: Vec::new(),
+            retry_not_before: None,
         })
     }
 
@@ -91,7 +96,14 @@ impl InnerCrawlableSite {
         }
     }
     pub fn should_crawl(&self, interval: &CheckIntervals) -> bool {
-        (self.frontpage.should_check(interval)
+        if self
+            .retry_not_before
+            .is_some_and(|(started, delay)| started.elapsed() < delay)
+        {
+            return false;
+        }
+        (!self.retry_urls.is_empty()
+            || self.frontpage.should_check(interval)
             || self.sitemap.should_check(interval)
             || self.feeds.should_check(interval))
             && self.budget > 0
@@ -136,15 +148,97 @@ impl CrawlableSite {
     }
 }
 
-impl crawler::DatumSink for tokio::sync::Mutex<Vec<crawler::CrawlDatum>> {
+trait IndexBackend: Send + Sync {
+    fn index(&self, pages: Vec<IndexableWebpage>) -> impl Future<Output = Result<()>> + Send;
+}
+
+impl IndexBackend for Client {
+    async fn index(&self, pages: Vec<IndexableWebpage>) -> Result<()> {
+        Client::index(self, pages).await
+    }
+}
+
+struct LiveIndexSink<'a, B: IndexBackend> {
+    backend: &'a B,
+    pending: Mutex<Vec<crawler::CrawlDatum>>,
+}
+
+impl<'a, B: IndexBackend> LiveIndexSink<'a, B> {
+    fn new(backend: &'a B) -> Self {
+        Self {
+            backend,
+            pending: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl<B: IndexBackend> crawler::DatumSink for LiveIndexSink<'_, B> {
     async fn write(&self, crawl_datum: crawler::CrawlDatum) -> Result<(), crawler::Error> {
-        self.lock().await.push(crawl_datum);
+        self.pending.lock().await.push(crawl_datum);
+        Ok(())
+    }
+
+    async fn checkpoint(&self) -> Result<(), crawler::Error> {
+        let mut pending = self.pending.lock().await;
+        if pending.is_empty() {
+            return Ok(());
+        }
+        self.backend
+            .index(
+                pending
+                    .iter()
+                    .cloned()
+                    .map(IndexableWebpage::from)
+                    .collect(),
+            )
+            .await?;
+        pending.clear();
         Ok(())
     }
 
     async fn finish(&self) -> Result<(), crawler::Error> {
-        Ok(())
+        self.checkpoint().await
     }
+}
+
+struct Settlement {
+    retry_urls: Vec<CrawlableUrl>,
+    retry_delay: Duration,
+    marker_error: Option<anyhow::Error>,
+}
+
+fn settle_job(outcome: &crawler::JobOutcome, db: &ShardedCrawledDb) -> Settlement {
+    let mut settlement = Settlement {
+        retry_urls: Vec::new(),
+        retry_delay: super::MIN_CRAWL_DELAY,
+        marker_error: None,
+    };
+    for entry in &outcome.urls {
+        match &entry.outcome {
+            crawler::FetchOutcome::DurableSuccess { final_url } => {
+                let stored = db
+                    .insert(&final_url.clone().normalize())
+                    .and_then(|()| db.insert(&entry.url.clone().normalize()));
+                if let Err(error) = stored {
+                    settlement.retry_urls.push(entry.url.clone().into());
+                    settlement.marker_error = Some(error);
+                }
+            }
+            crawler::FetchOutcome::Deferred { retry_after_ms, .. } => {
+                settlement.retry_urls.push(entry.url.clone().into());
+                if let Some(delay) = retry_after_ms {
+                    settlement.retry_delay =
+                        settlement.retry_delay.max(Duration::from_millis(*delay));
+                }
+            }
+            crawler::FetchOutcome::Cancelled | crawler::FetchOutcome::StorageFailure { .. } => {
+                settlement.retry_urls.push(entry.url.clone().into());
+            }
+            crawler::FetchOutcome::Skipped { .. }
+            | crawler::FetchOutcome::PermanentFailure { .. } => {}
+        }
+    }
+    settlement
 }
 
 pub struct CrawlableSiteGuard {
@@ -192,7 +286,8 @@ impl Drop for CrawlableSiteGuard {
 impl CrawlableSiteGuard {
     pub async fn crawl(self, client: &Client, interval: &CheckIntervals) -> Result<()> {
         let mut site = self.site.inner.lock().await;
-        let mut urls = Vec::new();
+        let mut urls = std::mem::take(&mut site.retry_urls);
+        site.retry_not_before = None;
 
         if site.feeds.should_check(interval) {
             urls.extend(
@@ -240,7 +335,7 @@ impl CrawlableSiteGuard {
         let budget = site.budget.min(urls.len() as u64);
         site.budget = site.budget.saturating_sub(budget);
 
-        urls.truncate(budget as usize);
+        site.retry_urls.extend(urls.split_off(budget as usize));
 
         if urls.is_empty() {
             tracing::debug!("No new urls to crawl for site {}", site.site.as_str());
@@ -253,12 +348,7 @@ impl CrawlableSiteGuard {
             site.site.as_str()
         );
 
-        for crawlable_url in &urls {
-            self.crawled_db
-                .insert(&crawlable_url.url.clone().normalize())?;
-        }
-
-        let crawl_data = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let sink = Arc::new(LiveIndexSink::new(client));
 
         let executor = crawler::JobExecutor::new(
             crawler::WorkerJob {
@@ -278,22 +368,28 @@ impl CrawlableSiteGuard {
                 wandering_urls: 0,
             },
             Arc::clone(&self.config),
-            Arc::clone(&crawl_data),
+            sink,
             client.reqwest(),
         );
 
-        executor.run().await;
-
-        let crawl_data = crawl_data.lock().await.clone();
-
-        tracing::debug!(
-            "Indexing {} urls for site {}",
-            crawl_data.len(),
-            site.site.as_str()
+        let outcome = executor.run().await;
+        let settlement = settle_job(&outcome, &self.crawled_db);
+        site.budget = site
+            .budget
+            .saturating_add(settlement.retry_urls.len() as u64)
+            .min(MAX_PENDING_BUDGET);
+        if !settlement.retry_urls.is_empty() {
+            site.retry_not_before = Some((Instant::now(), settlement.retry_delay));
+            site.retry_urls.extend(settlement.retry_urls);
+        }
+        if let Some(error) = settlement.marker_error {
+            return Err(error);
+        }
+        anyhow::ensure!(
+            outcome.is_success(),
+            "live crawler job incomplete: {}",
+            serde_json::to_string(&outcome)?
         );
-        client
-            .index(crawl_data.into_iter().map(IndexableWebpage::from).collect())
-            .await?;
 
         tracing::debug!("Finished crawling site {}", site.site.as_str());
 
@@ -312,10 +408,114 @@ fn order_urls(urls: &mut [CrawlableUrl]) {
 
 #[cfg(test)]
 mod tests {
+    use crate::crawler::DatumSink;
     use chrono::DateTime;
     use url::Url;
 
     use super::*;
+
+    #[derive(Default)]
+    struct FakeIndex {
+        fail: AtomicBool,
+        acknowledged: Mutex<Vec<usize>>,
+    }
+
+    impl IndexBackend for FakeIndex {
+        async fn index(&self, pages: Vec<IndexableWebpage>) -> Result<()> {
+            anyhow::ensure!(
+                !self.fail.load(Ordering::Relaxed),
+                "controlled index rejection"
+            );
+            self.acknowledged.lock().await.push(pages.len());
+            Ok(())
+        }
+    }
+
+    fn datum() -> crawler::CrawlDatum {
+        crawler::CrawlDatum {
+            url: Url::parse("https://example.com/page").unwrap(),
+            payload_type: crate::warc::PayloadType::Html,
+            body: "<html><body>live fixture</body></html>".into(),
+            fetch_time_ms: 4,
+            date: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn live_sink_confirms_checkpoint_and_preserves_unacknowledged_pages() {
+        let backend = FakeIndex::default();
+        let sink = LiveIndexSink::new(&backend);
+        sink.write(datum()).await.unwrap();
+        assert!(backend.acknowledged.lock().await.is_empty());
+        backend.fail.store(true, Ordering::Relaxed);
+        assert!(sink
+            .checkpoint()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("controlled index rejection"));
+        assert_eq!(sink.pending.lock().await.len(), 1);
+        backend.fail.store(false, Ordering::Relaxed);
+        sink.checkpoint().await.unwrap();
+        assert!(sink.pending.lock().await.is_empty());
+        sink.finish().await.unwrap();
+        assert_eq!(*backend.acknowledged.lock().await, [1]);
+    }
+
+    #[test]
+    fn live_settlement_marks_only_durable_original_and_final_urls() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = ShardedCrawledDb::open(directory.path()).unwrap();
+        let base = Url::parse("https://example.com/").unwrap();
+        let mut outcome = crawler::JobOutcome::default();
+        for (path, result) in [
+            (
+                "original",
+                crawler::FetchOutcome::DurableSuccess {
+                    final_url: base.join("final").unwrap(),
+                },
+            ),
+            (
+                "later",
+                crawler::FetchOutcome::Deferred {
+                    reason: "http_429".into(),
+                    retry_after_ms: Some(120_000),
+                },
+            ),
+            ("cancelled", crawler::FetchOutcome::Cancelled),
+            (
+                "storage",
+                crawler::FetchOutcome::StorageFailure {
+                    message: "index rejected".into(),
+                },
+            ),
+            (
+                "missing",
+                crawler::FetchOutcome::PermanentFailure {
+                    reason: "http_404".into(),
+                },
+            ),
+        ] {
+            outcome.record(base.join(path).unwrap(), result);
+        }
+        let settlement = settle_job(&outcome, &db);
+        assert!(settlement.marker_error.is_none());
+        assert_eq!(
+            settlement
+                .retry_urls
+                .iter()
+                .map(|url| url.url.path())
+                .collect::<Vec<_>>(),
+            ["/later", "/cancelled", "/storage"]
+        );
+        assert_eq!(settlement.retry_delay, Duration::from_secs(120));
+        for path in ["original", "final"] {
+            assert!(db.has_crawled(&base.join(path).unwrap()).unwrap());
+        }
+        for path in ["later", "cancelled", "storage", "missing"] {
+            assert!(!db.has_crawled(&base.join(path).unwrap()).unwrap());
+        }
+    }
 
     #[test]
     fn test_latest_urls_crawled_first() {

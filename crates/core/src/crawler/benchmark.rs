@@ -314,6 +314,8 @@ pub async fn run(config: Config) -> Result<serde_json::Value> {
             full: "CrawlerBench/1.0 (isolated local benchmark)".into(),
             token: "CrawlerBench".into(),
         },
+        network_policy: crate::config::CrawlNetworkPolicy::PublicOnly,
+        max_redirect_hops: crate::config::default_max_redirect_hops(),
         robots_txt_cache_sec: 3600,
         min_politeness_factor: 0,
         start_politeness_factor: 0,
@@ -366,6 +368,7 @@ pub async fn run(config: Config) -> Result<serde_json::Value> {
                 })
             })
             .collect::<Result<VecDeque<_>>>()?;
+        let job_domain = domain.as_str().to_owned();
         let job = Job {
             domain,
             urls,
@@ -380,7 +383,7 @@ pub async fn run(config: Config) -> Result<serde_json::Value> {
         if let Some(observer) = &observer {
             executor = executor.with_observer(observer.clone());
         }
-        jobs.push(executor);
+        jobs.push((job_domain, executor));
     }
     let ticks_per_second = std::process::Command::new("getconf")
         .arg("CLK_TCK")
@@ -394,15 +397,24 @@ pub async fn run(config: Config) -> Result<serde_json::Value> {
     metrics.reset();
     let started = Instant::now();
     let outcomes = stream::iter(jobs)
-        .map(|executor| {
+        .map(|(domain, executor)| {
             metrics.stage("queue_wait", started.elapsed());
-            tokio::spawn(executor.run())
+            tokio::spawn(async move { (domain, executor.run().await) })
         })
         .buffer_unordered(config.workers)
         .collect::<Vec<_>>()
         .await;
+    let mut job_outcomes = BTreeMap::new();
     for outcome in outcomes {
-        outcome.context("benchmark executor panicked")?;
+        let (domain, outcome) = outcome.context("benchmark executor panicked")?;
+        anyhow::ensure!(
+            !matches!(
+                outcome.status,
+                super::JobStatus::StorageFailed | super::JobStatus::Cancelled
+            ),
+            "benchmark job did not finish: {outcome:?}"
+        );
+        job_outcomes.insert(domain, outcome);
     }
     sink.finish().await?;
     let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -468,6 +480,15 @@ pub async fn run(config: Config) -> Result<serde_json::Value> {
     object.insert("warc_verified".into(), true.into());
     object.insert("resources_io".into(), serde_json::to_value(io)?);
     object.insert("resources_crawl".into(), resources_crawl);
+    object.insert("job_outcomes".into(), serde_json::to_value(job_outcomes)?);
+    object.insert(
+        "crawl_policy".into(),
+        serde_json::json!({
+            "network_policy": crawler_config.network_policy,
+            "max_redirect_hops": crawler_config.max_redirect_hops,
+            "observer_controls_behavior": false,
+        }),
+    );
     object.insert("stage_semantics".into(), "cumulative worker wall time; stages overlap across concurrent jobs; sink includes saved observer callback; DNS is injected; no Internet/TLS; WARC verification excluded".into());
     fs::write(
         config.output_dir.join("result.json"),

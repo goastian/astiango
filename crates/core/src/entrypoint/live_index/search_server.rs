@@ -137,22 +137,21 @@ async fn setup(index: Arc<LiveIndex>, cluster: Arc<Cluster>, temp_wal: TempWal) 
             },
         )
         .await;
-        index.re_open().await.unwrap();
+        index.re_open().await?;
     }
 
-    let mut wal = temp_wal
-        .lock()
-        .await
-        .take()
-        .expect("temp_wal should always exist before setup has been run");
-
-    for pages in wal.iter().unwrap().chunks(512).into_iter() {
+    let mut temporary = temp_wal.lock().await;
+    let wal = temporary
+        .as_mut()
+        .context("temporary WAL missing during live index setup")?;
+    for pages in wal.iter()?.chunks(512).into_iter() {
         let pages: Vec<_> = pages.into_iter().collect();
-        index.insert(&pages).await;
+        index.insert(&pages).await?;
     }
     index.commit().await;
-
-    wal.clear().unwrap();
+    wal.clear()?;
+    temporary.take();
+    drop(temporary);
 
     start_manager(index);
 
@@ -233,7 +232,9 @@ impl LiveIndexService {
         let cluster = self.cluster_handle.clone();
 
         std::thread::spawn(move || {
-            crate::block_on(setup(index, cluster, temp_wal)).unwrap();
+            if let Err(error) = crate::block_on(setup(index, cluster, temp_wal)) {
+                tracing::error!(?error, "Live index setup failed; node remains unready");
+            }
         });
     }
 
@@ -346,11 +347,7 @@ impl RemoteIndex {
                     .await
                     .with_context(|| format!("failed to connect to {}", self.host))?;
 
-            if conn
-                .send_with_timeout(req.clone(), INDEXING_TIMEOUT)
-                .await
-                .is_ok()
-            {
+            if replica_acknowledged(&conn.send_with_timeout(req.clone(), INDEXING_TIMEOUT).await) {
                 return Ok(());
             }
         }
@@ -359,10 +356,16 @@ impl RemoteIndex {
     }
 }
 
+fn replica_acknowledged<E>(response: &Result<Result<(), IndexingError>, E>) -> bool {
+    matches!(response, Ok(Ok(())))
+}
+
 #[derive(thiserror::Error, Debug, bincode::Encode, bincode::Decode)]
 pub enum IndexingError {
     #[error("failed to replicate to the necessary quorom")]
     InsufficientReplication,
+    #[error("live index storage failed: {0}")]
+    StorageFailure(String),
 }
 
 #[derive(Debug, Clone, bincode::Encode, bincode::Decode)]
@@ -376,9 +379,14 @@ impl sonic::service::Message<LiveIndexService> for IndexWebpages {
 
     async fn handle(self, server: &LiveIndexService) -> Self::Response {
         if let Some(wal) = server.temp_wal.lock().await.as_mut() {
-            wal.batch_write(self.pages.iter()).unwrap();
+            wal.batch_write_durable(self.pages.iter())
+                .map_err(|error| IndexingError::StorageFailure(error.to_string()))?;
         } else {
-            server.index.insert(&self.pages).await;
+            server
+                .index
+                .insert(&self.pages)
+                .await
+                .map_err(|error| IndexingError::StorageFailure(error.to_string()))?;
 
             if let Some(consistency_fraction) = self.consistency_fraction {
                 server
@@ -452,4 +460,50 @@ pub async fn serve(config: LiveIndexConfig) -> Result<()> {
     tokio::try_join!(live_index_handle, search_server_handle)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod durable_ack_tests {
+    use super::*;
+
+    #[test]
+    fn replica_quorum_requires_application_acknowledgement() {
+        let acknowledged: Result<Result<(), IndexingError>, &str> = Ok(Ok(()));
+        let transport_failure = Err("connection closed");
+        let storage_failure = Ok(Err(IndexingError::StorageFailure("disk full".into())));
+        let quorum_failure = Ok(Err(IndexingError::InsufficientReplication));
+        assert!(replica_acknowledged(&acknowledged));
+        assert!(!replica_acknowledged(&transport_failure));
+        assert!(!replica_acknowledged::<&str>(&storage_failure));
+        assert!(!replica_acknowledged::<&str>(&quorum_failure));
+    }
+
+    #[test]
+    fn storage_error_extension_preserves_the_existing_wire_variant() {
+        #[derive(bincode::Encode)]
+        enum LegacyIndexingError {
+            InsufficientReplication,
+        }
+        let previous = bincode::encode_to_vec(
+            LegacyIndexingError::InsufficientReplication,
+            common::bincode_config(),
+        )
+        .unwrap();
+        let current = bincode::encode_to_vec(
+            IndexingError::InsufficientReplication,
+            common::bincode_config(),
+        )
+        .unwrap();
+        assert_eq!(previous, current);
+        let encoded = bincode::encode_to_vec(
+            IndexingError::StorageFailure("disk full".into()),
+            common::bincode_config(),
+        )
+        .unwrap();
+        let (decoded, _): (IndexingError, _) =
+            bincode::decode_from_slice(&encoded, common::bincode_config()).unwrap();
+        assert!(
+            matches!(decoded, IndexingError::StorageFailure(message) if message == "disk full")
+        );
+    }
 }

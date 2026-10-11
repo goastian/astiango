@@ -16,33 +16,35 @@
 
 use anyhow::Result;
 use std::{
-    fs::File,
+    fs::{File, OpenOptions},
     path::{Path, PathBuf},
 };
 
 pub struct Wal<T> {
     writer: file_store::iterable::IterableStoreWriter<T, File>,
     path: PathBuf,
+    sync_file: File,
 }
 
 impl<T> Wal<T> {
     pub fn open<P: AsRef<Path>>(file: P) -> Result<Self> {
         let path = file.as_ref().to_path_buf();
-        let file = if file.as_ref().exists() {
-            File::open(file)?
-        } else {
-            File::create(file)?
-        };
-
+        let file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open(&path)?;
+        let sync_file = file.try_clone()?;
         Ok(Wal {
             writer: file_store::iterable::IterableStoreWriter::new(file),
             path,
+            sync_file,
         })
     }
 
     pub fn clear(&mut self) -> Result<()> {
         std::fs::remove_file(&self.path)?;
-        self.writer = file_store::iterable::IterableStoreWriter::new(File::create(&self.path)?);
+        *self = Self::open(&self.path)?;
 
         Ok(())
     }
@@ -59,7 +61,31 @@ where
         Ok(())
     }
 
-    pub fn batch_write<'a>(&'a mut self, items: impl Iterator<Item = &'a T>) -> Result<()> {
+    /// Confirm that flushed records and the directory entry have reached storage.
+    pub fn checkpoint(&mut self) -> Result<()> {
+        self.writer.flush()?;
+        self.sync_file.sync_all()?;
+        let parent = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    }
+
+    pub fn batch_write_durable<'a>(&mut self, items: impl Iterator<Item = &'a T>) -> Result<()>
+    where
+        T: 'a,
+    {
+        self.batch_write(items)?;
+        self.checkpoint()
+    }
+
+    pub fn batch_write<'a>(&mut self, items: impl Iterator<Item = &'a T>) -> Result<()>
+    where
+        T: 'a,
+    {
         for item in items {
             self.writer.write(item)?;
         }
@@ -158,6 +184,65 @@ mod tests {
         let res: Vec<_> = writer.iter()?.collect();
         assert!(res.is_empty());
 
+        Ok(())
+    }
+
+    #[test]
+    fn durable_batches_survive_reopen_and_append() -> Result<()> {
+        let directory = file_store::gen_temp_dir()?;
+        let path = directory.as_ref().join("wal");
+        let mut wal = Wal::open(&path)?;
+        wal.batch_write_durable([1u64, 2].iter())?;
+        drop(wal);
+        let mut wal = Wal::open(&path)?;
+        wal.batch_write_durable([3u64, 4].iter())?;
+        drop(wal);
+        assert_eq!(
+            Wal::<u64>::open(&path)?.iter()?.collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn clear_replaces_the_file_used_by_the_next_durable_checkpoint() -> Result<()> {
+        let directory = file_store::gen_temp_dir()?;
+        let path = directory.as_ref().join("wal");
+        let mut wal = Wal::open(&path)?;
+        wal.batch_write_durable([1u64, 2].iter())?;
+        wal.clear()?;
+        wal.batch_write_durable([3u64].iter())?;
+        drop(wal);
+        assert_eq!(Wal::<u64>::open(&path)?.iter()?.collect::<Vec<_>>(), [3]);
+        Ok(())
+    }
+
+    #[test]
+    fn durable_write_propagates_a_flush_failure() -> Result<()> {
+        let directory = file_store::gen_temp_dir()?;
+        let path = directory.as_ref().join("wal");
+        File::create(&path)?;
+        let file = File::open(&path)?;
+        let mut wal = Wal {
+            sync_file: file.try_clone()?,
+            writer: file_store::iterable::IterableStoreWriter::new(file),
+            path,
+        };
+        assert!(wal.batch_write_durable([1u64].iter()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn durable_checkpoint_propagates_a_missing_parent_directory() -> Result<()> {
+        let directory = file_store::gen_temp_dir()?;
+        let parent = directory.as_ref().join("removed");
+        std::fs::create_dir(&parent)?;
+        let path = parent.join("wal");
+        let mut wal = Wal::open(&path)?;
+        wal.write(&1u64)?;
+        std::fs::remove_file(&path)?;
+        std::fs::remove_dir(parent)?;
+        assert!(wal.checkpoint().is_err());
         Ok(())
     }
 }

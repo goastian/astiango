@@ -4,8 +4,19 @@ export type SiteStatus =
   | "waiting"
   | "completed"
   | "stopped"
+  | "deferred"
+  | "cancelled"
+  | "storage_failed"
   | "failed";
-export interface Site {
+export interface ExplicitCounters {
+  page_http_attempts?: number;
+  redirect_hops?: number;
+  useful_pages?: number;
+  deferred?: number;
+  cancelled?: number;
+  storage_failed?: number;
+}
+export interface Site extends ExplicitCounters {
   host: string;
   status: SiteStatus;
   current_url: string | null;
@@ -51,7 +62,7 @@ export interface Snapshot {
   workers: number;
   min_crawl_delay_ms: number;
   pages_per_domain: number;
-  counters: {
+  counters: ExplicitCounters & {
     downloaded: number;
     failed: number;
     skipped: number;

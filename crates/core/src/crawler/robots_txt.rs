@@ -24,11 +24,21 @@ use std::{
 use dashmap::DashMap;
 use url::Url;
 
-use crate::{config::CrawlerConfig, crawler};
+use crate::{
+    config::{CrawlNetworkPolicy, CrawlerConfig},
+    crawler,
+};
 
 use super::{encoded_body, Site};
 
 const RETRY_ROBOTSTXT_UNREACHABLE: bool = false;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RobotAccess {
+    Allowed,
+    Disallowed,
+    Unreachable,
+}
 
 #[derive(Debug)]
 enum Lookup<T> {
@@ -75,7 +85,7 @@ struct InnerRobotsTxtManager {
     user_agent: String,
     min_crawl_delay: Duration,
     max_crawl_delay: Duration,
-    public_config: Option<Arc<CrawlerConfig>>,
+    config: Arc<CrawlerConfig>,
     runtime: Option<Arc<super::runtime::Runtime>>,
 }
 
@@ -95,19 +105,20 @@ impl InnerRobotsTxtManager {
             user_agent: user_agent.to_string(),
             min_crawl_delay,
             max_crawl_delay,
-            public_config: None,
+            config: Arc::new(config.clone()),
             runtime: None,
         }
     }
 
-    async fn is_allowed(&self, url: &Url) -> bool {
-        if self.public_config.is_some() && super::robot_client::validate_public_url(url).is_err() {
-            return false;
+    async fn access(&self, url: &Url) -> RobotAccess {
+        if super::robot_client::validate_network_url(self.config.network_policy, url).is_err() {
+            return RobotAccess::Disallowed;
         }
         match &self.get(url).await.robots {
-            Lookup::Found(robots_txt) => robots_txt.is_allowed(url),
-            Lookup::Unavailable => true,
-            Lookup::Unreachable => false,
+            Lookup::Found(robots_txt) if robots_txt.is_allowed(url) => RobotAccess::Allowed,
+            Lookup::Found(_) => RobotAccess::Disallowed,
+            Lookup::Unavailable => RobotAccess::Allowed,
+            Lookup::Unreachable => RobotAccess::Unreachable,
         }
     }
 
@@ -149,116 +160,39 @@ impl InnerRobotsTxtManager {
         }
     }
 
-    async fn fetch_injected_robots(
-        &self,
-        runtime: &Arc<super::runtime::Runtime>,
-        initial: &str,
-    ) -> Lookup<robotstxt::Robots> {
-        let Ok(mut url) = Url::parse(initial) else {
-            return Lookup::Unreachable;
-        };
-        for _ in 0..=5 {
-            let response =
-                super::robot_client::RequestBuilder::injected(runtime.clone(), url.clone())
-                    .send()
-                    .await;
-            self.sleep(self.min_crawl_delay).await;
-            let Ok(response) = response else {
-                return Lookup::Unreachable;
-            };
-            if response.status().is_redirection() {
-                let next = response
-                    .headers()
-                    .get(reqwest::header::LOCATION)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| url.join(v).ok());
-                let Some(next) = next else {
-                    return Lookup::Unreachable;
-                };
-                url = next;
-                continue;
-            }
-            if response.status() == reqwest::StatusCode::NOT_FOUND {
-                return Lookup::Unavailable;
-            }
-            if response.status() != reqwest::StatusCode::OK {
-                return Lookup::Unreachable;
-            }
-            let Ok(body) = self.body(response).await else {
-                return Lookup::Unreachable;
-            };
-            let user_agent = self.user_agent.clone();
-            return match panic::catch_unwind(|| robotstxt::Robots::parse(&user_agent, &body)) {
-                Ok(Ok(robots)) => Lookup::Found(robots),
-                _ => Lookup::Unreachable,
-            };
-        }
-        Lookup::Unreachable
-    }
-
-    async fn fetch_robots_txt_from_url(&self, url: &str) -> Lookup<robotstxt::Robots> {
+    async fn request(&self, url: Url) -> super::Result<super::robot_client::RequestBuilder> {
+        super::robot_client::validate_network_url(self.config.network_policy, &url)?;
         if let Some(runtime) = &self.runtime {
-            return self.fetch_injected_robots(runtime, url).await;
+            return Ok(super::robot_client::RequestBuilder::injected(
+                runtime.clone(),
+                url,
+            ));
         }
-        let request = if let Some(config) = &self.public_config {
-            return self.fetch_public_robots(config, url).await;
-        } else {
-            self.client.get(url)
-        };
-        let res = match super::robot_client::RequestBuilder::new(request)
-            .timeout(Duration::from_secs(60))
-            .send()
-            .await
-        {
-            Ok(res) => {
-                if res.status() != reqwest::StatusCode::OK {
-                    match res.status() {
-                        reqwest::StatusCode::NOT_FOUND => return Lookup::Unavailable,
-                        _ => return Lookup::Unreachable,
-                    }
-                }
-
-                let body = match self.body(res).await {
-                    Ok(body) => body,
-                    Err(_) => return Lookup::Unreachable,
-                };
-
-                let self_user_agent = self.user_agent.clone();
-                match panic::catch_unwind(|| robotstxt::Robots::parse(&self_user_agent, &body)) {
-                    Ok(Ok(r)) => Lookup::Found(r),
-                    _ => Lookup::Unreachable,
-                }
+        let request = match self.config.network_policy {
+            CrawlNetworkPolicy::PublicOnly => {
+                super::robot_client::public_request(&self.config, &url).await?
             }
-            Err(_) => Lookup::Unreachable,
+            CrawlNetworkPolicy::AllowPrivate => self.client.get(url),
         };
-
-        self.sleep(self.min_crawl_delay).await;
-
-        res
+        Ok(super::robot_client::RequestBuilder::new(request))
     }
 
-    async fn fetch_public_robots(
-        &self,
-        config: &CrawlerConfig,
-        initial_url: &str,
-    ) -> Lookup<robotstxt::Robots> {
+    async fn fetch_robots_txt_from_url(&self, initial_url: &str) -> Lookup<robotstxt::Robots> {
         let Ok(mut url) = Url::parse(initial_url) else {
             return Lookup::Unreachable;
         };
         for _ in 0..=5 {
-            let request = match super::robot_client::public_request(config, &url).await {
+            let request = match self.request(url.clone()).await {
                 Ok(request) => request,
                 Err(_) => return Lookup::Unreachable,
             };
-            let response = super::robot_client::RequestBuilder::new(request)
-                .send()
-                .await;
+            let response = request.send().await;
             // Robots requests and their redirects also obey the configured delay.
             self.sleep(self.min_crawl_delay).await;
             let Ok(response) = response else {
                 return Lookup::Unreachable;
             };
-            if response.status().is_redirection() {
+            if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
                 let next = response
                     .headers()
                     .get(reqwest::header::LOCATION)
@@ -391,6 +325,13 @@ impl RobotsTxtManager {
         }
     }
 
+    #[deprecated(note = "set network_policy and use new")]
+    pub fn new_public(config: &CrawlerConfig) -> Self {
+        let mut config = config.clone();
+        config.network_policy = CrawlNetworkPolicy::PublicOnly;
+        Self::new(&config)
+    }
+
     #[cfg(any(test, feature = "crawler-bench"))]
     pub fn with_runtime(config: &CrawlerConfig, runtime: Arc<super::runtime::Runtime>) -> Self {
         let mut inner = InnerRobotsTxtManager::new(config);
@@ -400,19 +341,15 @@ impl RobotsTxtManager {
             inner: Arc::new(inner),
         }
     }
-
-    pub fn new_public(config: &CrawlerConfig) -> Self {
-        let mut inner = InnerRobotsTxtManager::new(config);
-        inner.public_config = Some(Arc::new(config.clone()));
-        Self {
-            inner: Arc::new(inner),
-        }
-    }
 }
 
 impl RobotsTxtManager {
+    pub async fn access(&self, url: &Url) -> RobotAccess {
+        self.inner.access(url).await
+    }
+
     pub async fn is_allowed(&self, url: &Url) -> bool {
-        self.inner.is_allowed(url).await
+        self.access(url).await == RobotAccess::Allowed
     }
 
     pub async fn crawl_delay(&self, url: &Url) -> Option<Duration> {
@@ -432,8 +369,188 @@ impl RobotsTxtManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crawler::{
+        robot_client::RobotClient,
+        runtime::{Clock, Http, IoFuture, Metrics, Runtime},
+        Error,
+    };
+    use std::{collections::VecDeque, time::Instant};
 
     type RobotsTxt = robotstxt::Robots;
+
+    #[tokio::test]
+    #[allow(deprecated)]
+    async fn legacy_public_manager_alias_preserves_public_policy() {
+        let mut config = CrawlerConfig::for_tests();
+        config.network_policy = CrawlNetworkPolicy::AllowPrivate;
+        let manager = RobotsTxtManager::new_public(&config);
+        assert_eq!(
+            manager.inner.config.network_policy,
+            CrawlNetworkPolicy::PublicOnly
+        );
+        assert_eq!(
+            manager
+                .access(&Url::parse("http://127.0.0.1/").unwrap())
+                .await,
+            RobotAccess::Disallowed
+        );
+    }
+
+    struct Reply {
+        status: u16,
+        location: Option<&'static str>,
+        body: &'static str,
+    }
+
+    struct ScriptedHttp {
+        replies: Mutex<VecDeque<Reply>>,
+        requests: Mutex<Vec<String>>,
+    }
+
+    impl Http for ScriptedHttp {
+        fn send(
+            &self,
+            url: Url,
+            _: Option<Duration>,
+        ) -> IoFuture<'_, super::super::Result<reqwest::Response>> {
+            Box::pin(async move {
+                self.requests.lock().unwrap().push(url.to_string());
+                let reply = self.replies.lock().unwrap().pop_front().unwrap();
+                let mut response = http_02::Response::builder().status(reply.status);
+                if let Some(location) = reply.location {
+                    response = response.header("location", location);
+                }
+                Ok(response.body(reply.body).unwrap().into())
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingClock(Mutex<Vec<Duration>>);
+
+    impl Clock for RecordingClock {
+        fn now(&self) -> Instant {
+            Instant::now()
+        }
+        fn utc_now(&self) -> chrono::DateTime<chrono::Utc> {
+            chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+        }
+        fn sleep(&self, duration: Duration) -> IoFuture<'_, ()> {
+            Box::pin(async move { self.0.lock().unwrap().push(duration) })
+        }
+    }
+
+    fn scripted_client(
+        replies: Vec<Reply>,
+    ) -> (RobotClient, Arc<ScriptedHttp>, Arc<RecordingClock>) {
+        let mut config = CrawlerConfig::for_tests();
+        config.min_crawl_delay_ms = 17;
+        let http = Arc::new(ScriptedHttp {
+            replies: Mutex::new(replies.into()),
+            requests: Mutex::new(Vec::new()),
+        });
+        let clock = Arc::new(RecordingClock::default());
+        let client = RobotClient::with_runtime(
+            &config,
+            Arc::new(Runtime {
+                http: http.clone(),
+                clock: clock.clone(),
+                metrics: Arc::new(Metrics::default()),
+            }),
+        )
+        .unwrap();
+        (client, http, clock)
+    }
+
+    #[tokio::test]
+    async fn robots_redirects_without_mime_follow_relative_and_cross_origin_urls() {
+        let (client, http, clock) = scripted_client(vec![
+            Reply {
+                status: 302,
+                location: Some("/policies"),
+                body: "",
+            },
+            Reply {
+                status: 307,
+                location: Some("https://redirect.test/rules"),
+                body: "",
+            },
+            Reply {
+                status: 200,
+                location: None,
+                body: "User-agent: *\nDisallow: /blocked\n",
+            },
+        ]);
+        let url = Url::parse("https://fixture.test/blocked").unwrap();
+        assert_eq!(
+            client.robots_txt_manager().access(&url).await,
+            RobotAccess::Disallowed
+        );
+        assert_eq!(
+            *http.requests.lock().unwrap(),
+            [
+                "https://fixture.test/robots.txt",
+                "https://fixture.test/policies",
+                "https://redirect.test/rules",
+            ]
+        );
+        assert_eq!(*clock.0.lock().unwrap(), vec![Duration::from_millis(17); 3]);
+        assert!(matches!(client.get(url).await, Err(Error::DisallowedPath)));
+    }
+
+    #[tokio::test]
+    async fn robots_redirect_to_private_destination_is_never_sent() {
+        let (client, http, _) = scripted_client(vec![
+            Reply {
+                status: 302,
+                location: Some("http://127.0.0.1/private"),
+                body: "",
+            },
+            Reply {
+                status: 302,
+                location: Some("http://127.0.0.1/private"),
+                body: "",
+            },
+        ]);
+        let url = Url::parse("https://fixture.test/page").unwrap();
+        assert!(matches!(
+            client.get(url).await,
+            Err(Error::RobotsUnavailable)
+        ));
+        assert_eq!(
+            *http.requests.lock().unwrap(),
+            [
+                "https://fixture.test/robots.txt",
+                "http://fixture.test/robots.txt",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn inaccessible_robots_are_distinct_from_disallowed_paths() {
+        let (client, http, _) = scripted_client(vec![
+            Reply {
+                status: 503,
+                location: None,
+                body: "unavailable",
+            },
+            Reply {
+                status: 503,
+                location: None,
+                body: "unavailable",
+            },
+        ]);
+        let url = Url::parse("https://fixture.test/page").unwrap();
+        assert_eq!(
+            client.robots_txt_manager().access(&url).await,
+            RobotAccess::Unreachable
+        );
+        assert!(matches!(
+            client.get(url).await,
+            Err(Error::RobotsUnavailable)
+        ));
+        assert_eq!(http.requests.lock().unwrap().len(), 2);
+    }
 
     #[test]
     fn unreachable_robots_are_rechecked_after_cache_expiry() {

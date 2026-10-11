@@ -231,9 +231,9 @@ def distribution(values):
             "mad": statistics.median(abs(value - median) for value in values)}
 
 
-def scenario_paths(bodies):
+def scenario_paths(bodies, profile="c01"):
     ids = list(bodies)
-    return {
+    paths = {
         "balanced": [f"/fixture/{name}" for name in ids],
         "slow": [f"/fixture/{name}" for name in ids] +
                 [f"/slow/{name}" for name in ids[:2]] + [f"/slow-body/{ids[0]}", "/large"],
@@ -241,13 +241,58 @@ def scenario_paths(bodies):
                        ["/large", "/oversized", "/error/404", "/error/500", "/error/429",
                         "/redirect/relative", "/redirect/loop", "/redirect/external", "/blocked"],
     }
+    if profile == "c02":
+        paths["adversarial"].remove("/error/429")
+        paths["adversarial"].append("/error/429")
+    return paths
+
+
+def observer_equivalent(off, on):
+    if not off or len(off) != len(on):
+        return False
+    baseline = {run["repetition"]: run for run in off}
+    observed = {run["repetition"]: run for run in on}
+    if len(baseline) != len(off) or len(observed) != len(on) or baseline.keys() != observed.keys():
+        return False
+    fields = ("requests_by_path", "requests_by_origin", "job_outcomes", "saved_pages", "saved_bytes", "crawl_policy")
+    return all(
+        all(field in original and field in observed[repetition]
+            and original[field] == observed[repetition][field] for field in fields)
+        and original["server"]["by_origin_path"] == observed[repetition]["server"]["by_origin_path"]
+        for repetition, original in baseline.items()
+    )
+
+
+def explicit_outcomes_verified(run):
+    jobs = run.get("job_outcomes")
+    policy = run.get("crawl_policy", {})
+    if not isinstance(jobs, dict) or set(jobs) != set(run["requests_by_origin"]):
+        return False
+    if policy.get("observer_controls_behavior") is not False or policy.get("network_policy") != "public_only":
+        return False
+    durable = attempts = 0
+    for job in jobs.values():
+        kinds = [entry["outcome"]["kind"] for entry in job["urls"]]
+        if not set(kinds) <= {"durable_success", "skipped", "permanent_failure", "deferred"}:
+            return False
+        if job["status"] not in ("completed", "deferred"):
+            return False
+        if ("deferred" in kinds) != (job["status"] == "deferred"):
+            return False
+        if job["counters"]["useful_pages"] != kinds.count("durable_success"):
+            return False
+        durable += job["counters"]["useful_pages"]
+        attempts += job["counters"]["page_http_attempts"]
+    return (durable == run["saved_pages"] and
+            attempts + run["requests_by_path"].get("/robots.txt", 0) == run["client_requests"])
 
 
 def code_version():
     paths = {ROOT / "Cargo.toml", ROOT / "Cargo.lock", Path(__file__).resolve(), CORPUS}
-    for directory in ("crates/core/src", "crates/core/examples", "crates/robotstxt/src", "crates/kuchiki/src"):
+    for directory in ("crates/core/src", "crates/core/examples", "crates/robotstxt/src", "crates/kuchiki/src", "crates/simple-wal/src"):
         paths.update(path for path in (ROOT / directory).rglob("*") if path.is_file())
     paths.add(ROOT / "crates/core/Cargo.toml")
+    paths.add(ROOT / "crates/simple-wal/Cargo.toml")
     digest = hashlib.sha256()
     for path in sorted(paths):
         digest.update(str(path.relative_to(ROOT)).encode() + b"\0" + path.read_bytes() + b"\0")
@@ -302,7 +347,8 @@ def atomic_json(path, value):
 
 
 def markdown_report(report):
-    lines = ["# C01 · Resultados locales", "", f"Generado: {report['generated_at']}", "",
+    profile = report["configuration"].get("acceptance_profile", "c01")
+    lines = [f"# {profile.upper()} · Resultados locales", "", f"Generado: {report['generated_at']}", "",
              f"Código: `{report['code']['commit']}`; árbol modificado: `{report['code']['dirty']}`.",
              f"SHA-256 de fuentes: `{report['code']['source_sha256']}`.",
              f"Corpus: `{report['corpus']['sha256']}`.", "",
@@ -315,16 +361,24 @@ def markdown_report(report):
                      f"{metric['duration_ms']['median']:.2f} | {metric['duration_ms']['mad']:.2f} | "
                      f"{metric['cpu_seconds']['median']:.3f} | {metric['rss_peak_bytes']['median']/1048576:.1f} | "
                      f"{metric['requests']['median']:g} | {'sí' if all(r.get('warc_verified') for r in row['runs']) else 'no'} |")
+    comparison_note = (
+        "C02 compara solicitudes, decisiones, páginas y bytes por repetición con y sin observador. Las pruebas Rust verifican las pausas permitidas con reloj inyectado; el tiempo de pared real puede variar."
+        if profile == "c02" else
+        "La matriz C01 mide capacidad. Comparar tiempos requiere revisar la igualdad de solicitudes y resultados; el perfil C02 verifica esa equivalencia explícitamente."
+    )
     lines += ["", "Las etapas concurrentes se acumulan por tarea y no suman el tiempo de pared. HTTP excluye TLS y DNS público.",
-              "La comparación con observador incluye diferencias actuales de pausas y presupuestos (C02); no estima overhead puro, incluso con las mismas páginas.",
+              comparison_note,
               "El JSON conserva cada repetición, contadores del servidor, configuración, recursos y rangos completos.", ""]
+    if profile == "c02":
+        lines += ["El perfil C02 sitúa HTTP 429 al final del escenario adversarial para ejercer redirects y robots antes del aplazamiento. El corpus HTML y los límites permanecen iguales.", ""]
     return "\n".join(lines)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--origins", type=int, nargs="+", default=[2, 32, 128])
+    parser.add_argument("--acceptance-profile", choices=["c01", "c02"], default="c01")
+    parser.add_argument("--origins", type=int, nargs="+")
     parser.add_argument("--scenarios", nargs="+", choices=["balanced", "slow", "adversarial"],
                         default=["balanced", "slow", "adversarial"])
     parser.add_argument("--repetitions", type=int, default=3)
@@ -333,6 +387,8 @@ def main():
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--binary", type=Path, default=ROOT / "target/release/examples/crawler_bench")
     args = parser.parse_args()
+    if args.origins is None:
+        args.origins = [2] if args.acceptance_profile == "c02" else [2, 32, 128]
     if args.repetitions < 3 or not 1 <= args.workers <= 128 or args.timeout <= 0 or any(count < 1 or count > 128 for count in args.origins):
         parser.error("Use at least three repetitions, 1–128 workers/origins and a positive timeout")
     if len(set(args.origins)) != len(args.origins) or len(set(args.scenarios)) != len(args.scenarios):
@@ -352,12 +408,13 @@ def main():
     if not binary.is_file():
         parser.error(f"Missing benchmark binary: {binary}")
     output.mkdir(parents=True, exist_ok=True)
-    version, paths = code_version(), scenario_paths(bodies)
+    version, paths = code_version(), scenario_paths(bodies, args.acceptance_profile)
     disk = os.statvfs(output)
     report = {"schema_version": 1, "kind": "crawler-capacity-benchmark",
               "generated_at": datetime.now(timezone.utc).isoformat(), "code": version,
               "corpus": corpus, "hardware": hardware(),
-              "configuration": {"repetitions": args.repetitions, "origins": args.origins,
+              "configuration": {"acceptance_profile": args.acceptance_profile,
+                                "repetitions": args.repetitions, "origins": args.origins,
                                 "workers": args.workers, "min_crawl_delay_ms": 5, "max_crawl_delay_ms": 50,
                                 "timeout_seconds": 1, "server": SERVER_CONFIG,
                                 "scenario_paths": {name: paths[name] for name in args.scenarios},
@@ -415,7 +472,8 @@ def main():
             report["comparisons"].append({"name": name, "origins": count,
                 "duration_overhead_pct": 100 * (on["duration_ms"]["median"] / off["duration_ms"]["median"] - 1),
                 "requests_equal": all(a["requests_by_path"] == b["requests_by_path"] for a, b in zip(groups[False], groups[True])),
-                "saved_pages_equal": all(a["saved_pages"] == b["saved_pages"] for a, b in zip(groups[False], groups[True]))})
+                "saved_pages_equal": all(a["saved_pages"] == b["saved_pages"] for a, b in zip(groups[False], groups[True])),
+                "behavior_equivalent": observer_equivalent(groups[False], groups[True])})
             atomic_json(output / "report.json", report)
     runs = [run for scenario in report["scenarios"] for run in scenario["runs"]]
     report["acceptance"] = {
@@ -429,7 +487,16 @@ def main():
         "source_unchanged": version["source_sha256"] == code_version()["source_sha256"],
         "loopback_only": True,
     }
-    report["acceptance"]["passed"] = all(report["acceptance"].values())
+    if args.acceptance_profile == "c02":
+        report["acceptance"].update(
+            c02_matrix=2 in args.origins and set(args.scenarios) == set(paths),
+            observer_equivalent=all(row["behavior_equivalent"] for row in report["comparisons"]),
+            explicit_outcomes=all(explicit_outcomes_verified(run) for run in runs),
+        )
+        required = [value for key, value in report["acceptance"].items() if key != "full_matrix"]
+    else:
+        required = list(report["acceptance"].values())
+    report["acceptance"]["passed"] = all(required)
     atomic_json(output / "report.json", report)
     (output / "report.md").write_text(markdown_report(report))
     print(f"Report: {output / 'report.json'}; acceptance={report['acceptance']['passed']}")

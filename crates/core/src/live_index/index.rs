@@ -326,9 +326,10 @@ impl InnerIndex {
         self.re_open().await;
     }
 
-    pub fn insert(&mut self, pages: &[IndexableWebpage]) {
-        self.write_ahead_log.batch_write(pages.iter()).unwrap();
+    pub fn insert(&mut self, pages: &[IndexableWebpage]) -> Result<()> {
+        self.write_ahead_log.batch_write_durable(pages.iter())?;
         self.has_inserts = true;
+        Ok(())
     }
 
     pub async fn commit(&mut self) {
@@ -413,7 +414,7 @@ impl LiveIndex {
         self.inner.read().await.index.clone()
     }
 
-    pub async fn insert(&self, pages: &[IndexableWebpage]) {
+    pub async fn insert(&self, pages: &[IndexableWebpage]) -> Result<()> {
         tracing::debug!("inserting {} pages into index", pages.len());
         self.inner.write().await.insert(pages)
     }

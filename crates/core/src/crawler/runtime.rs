@@ -251,9 +251,11 @@ mod tests {
             ]),
             wandering_urls: 0,
         };
-        JobExecutor::new(job.into(), Arc::new(config), sink.clone(), client)
+        let outcome = JobExecutor::new(job.into(), Arc::new(config), sink.clone(), client)
             .run()
             .await;
+        assert!(outcome.is_success());
+        assert_eq!(outcome.counters.useful_pages, 1);
         assert_eq!(*http.requests.lock().unwrap(), ["/robots.txt", "/allowed"]);
         assert_eq!(sink.0.lock().unwrap().len(), 1);
         assert_eq!(*clock.elapsed.lock().unwrap(), Duration::from_secs(20));

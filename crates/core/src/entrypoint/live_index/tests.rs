@@ -461,7 +461,7 @@ async fn test_meta_segments() -> Result<()> {
             .to_string(),
             fetch_time_ms: 100,
         }])
-        .await;
+        .await?;
     index.commit().await;
 
     assert_eq!(index.meta().await.segments().len(), 1);
@@ -501,7 +501,7 @@ async fn test_segment_compaction() -> Result<()> {
             .to_string(),
             fetch_time_ms: 100,
         }])
-        .await;
+        .await?;
 
     index.commit().await;
 
@@ -515,7 +515,7 @@ async fn test_segment_compaction() -> Result<()> {
             .to_string(),
             fetch_time_ms: 100,
         }])
-        .await;
+        .await?;
 
     index.commit().await;
 

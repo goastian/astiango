@@ -35,23 +35,25 @@ use url::Url;
 use crate::{config::CrawlerConfig, warc, webpage::url_ext::UrlExt};
 
 use self::{warc_writer::WarcWriter, worker::WorkerThread};
+pub use outcome::{CrawlCounters, FetchOutcome, JobOutcome, JobStatus, UrlOutcome};
 pub use worker::JobExecutor;
 
 pub mod coordinator;
 pub mod robots_txt;
 pub mod router;
 pub use router::Router;
+#[cfg(feature = "crawler-bench")]
+pub mod benchmark;
 mod file_queue;
 pub mod local;
 mod observer;
+pub mod outcome;
 pub mod planner;
 pub mod robot_client;
+pub mod runtime;
 mod wander_prioritiser;
 mod warc_writer;
 mod worker;
-pub mod runtime;
-#[cfg(feature = "crawler-bench")]
-pub mod benchmark;
 
 pub use coordinator::CrawlCoordinator;
 
@@ -88,6 +90,12 @@ pub enum Error {
 
     #[error("request path is disallowed by robots.txt")]
     DisallowedPath,
+
+    #[error("robots.txt is temporarily unavailable")]
+    RobotsUnavailable,
+
+    #[error("destination rejected by network policy: {0}")]
+    NonPublicDestination(String),
 
     #[error("an error occurred: {0}")]
     Anyhow(#[from] anyhow::Error),
@@ -277,13 +285,13 @@ pub struct CrawlDatum {
 
 pub struct Crawler {
     writer: Arc<WarcWriter>,
-    handles: Vec<tokio::task::JoinHandle<()>>,
+    handles: tokio::task::JoinSet<Result<()>>,
 }
 
 impl Crawler {
     pub async fn new(config: CrawlerConfig) -> Result<Self> {
         let writer = Arc::new(WarcWriter::new(config.s3.clone()));
-        let mut handles = Vec::new();
+        let mut handles = tokio::task::JoinSet::new();
         let mut router_hosts = Vec::new();
         let client = RobotClient::new(&config)?;
 
@@ -302,25 +310,37 @@ impl Crawler {
                 router_hosts.clone(),
             )?;
 
-            handles.push(tokio::spawn(async move {
-                worker.run().await;
-            }));
+            handles.spawn(worker.run());
         }
 
         Ok(Self { writer, handles })
     }
 
-    pub async fn run(self) {
-        for handle in self.handles {
-            handle.await.ok();
+    pub async fn run(mut self) -> Result<()> {
+        let mut failure = None;
+        while let Some(result) = self.handles.join_next().await {
+            let error = match result {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(error),
+                Err(error) if error.is_cancelled() && failure.is_some() => None,
+                Err(error) => Some(Error::from(anyhow!("Crawler worker failed: {error}"))),
+            };
+            if let Some(error) = error {
+                failure.get_or_insert(error);
+                self.handles.abort_all();
+            }
         }
-
-        self.writer.finish().await.unwrap();
+        self.writer.finish().await?;
+        failure.map_or(Ok(()), Err)
     }
 }
 
 pub trait DatumSink: Send + Sync {
     fn write(&self, crawl_datum: CrawlDatum) -> impl Future<Output = Result<()>> + Send;
+    /// Confirm all preceding writes; the default requires write itself to be durable.
+    fn checkpoint(&self) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
     fn finish(&self) -> impl Future<Output = Result<()>> + Send;
 }
 

@@ -159,7 +159,8 @@ class SummaryContracts(unittest.TestCase):
 
 
 class ReportAcceptanceContracts(unittest.TestCase):
-    def run_report(self, extra_args, *, mismatch=False, source_changes=False, collapsed_origins=False):
+    def run_report(self, extra_args, *, mismatch=False, source_changes=False, collapsed_origins=False,
+                   observer_decision_changes=False):
         class FakeServer:
             current = None
 
@@ -194,6 +195,20 @@ class ReportAcceptanceContracts(unittest.TestCase):
                 "requests_by_origin": by_origin, "blocked_outbound": int("/redirect/external" in paths),
                 "saved_pages": len(hosts), "saved_bytes": 100 * len(hosts), "warc_verified": True,
                 "resources_io": {"write_bytes": 100},
+                "crawl_policy": {"network_policy": "public_only", "max_redirect_hops": 10,
+                                 "observer_controls_behavior": False},
+                "job_outcomes": {host: {
+                    "status": "completed",
+                    "counters": {"useful_pages": 1, "page_http_attempts": len(paths), "redirect_hops": 0},
+                    "urls": [
+                        {"url": f"http://{host}{path}", "outcome": (
+                            {"kind": "durable_success", "final_url": f"https://{host}{path}"}
+                            if index == 0 else {"kind": "skipped", "reason": (
+                                "observer_changed_decision" if observer_decision_changes and config["observer"] else "fixture_skip"
+                            )})}
+                        for index, path in enumerate(config["paths"])
+                    ],
+                } for host in hosts},
             }
             config_path.with_name("result.json").write_text(json.dumps(result))
             return {"cpu_seconds": 0.01, "rss_peak_bytes": 1_048_576,
@@ -226,6 +241,36 @@ class ReportAcceptanceContracts(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(report["acceptance"]["full_matrix"])
         self.assertFalse(report["acceptance"]["passed"])
+
+    def test_c02_accepts_18_equivalent_runs_without_claiming_full_c01_matrix(self):
+        code, report = self.run_report(["--acceptance-profile", "c02"])
+        self.assertEqual(code, 0)
+        self.assertTrue(report["acceptance"]["passed"])
+        self.assertFalse(report["acceptance"]["full_matrix"])
+        self.assertTrue(report["acceptance"]["c02_matrix"])
+        self.assertTrue(report["acceptance"]["observer_equivalent"])
+        self.assertTrue(report["acceptance"]["explicit_outcomes"])
+        self.assertEqual(report["configuration"]["origins"], [2])
+        self.assertEqual(sum(len(row["runs"]) for row in report["scenarios"]), 18)
+        self.assertEqual(report["configuration"]["scenario_paths"]["adversarial"][-1], "/error/429")
+        bodies = {entry["id"]: b"" for entry in report["corpus"]["files"]}
+        self.assertNotEqual(RUNNER.scenario_paths(bodies)["adversarial"][-1], "/error/429")
+        self.assertIn("# C02", RUNNER.markdown_report(report))
+        self.assertNotIn("diferencias actuales", RUNNER.markdown_report(report))
+
+    def test_c02_rejects_observer_decisions_even_when_request_totals_match(self):
+        code, report = self.run_report(["--acceptance-profile", "c02"], observer_decision_changes=True)
+        self.assertEqual(code, 1)
+        self.assertFalse(report["acceptance"]["observer_equivalent"])
+        self.assertTrue(report["acceptance"]["requests_reconciled"])
+        self.assertTrue(report["acceptance"]["explicit_outcomes"])
+
+    def test_c02_requires_all_workloads_and_two_origins(self):
+        for arguments in (["--scenarios", "balanced"], ["--origins", "32"]):
+            with self.subTest(arguments=arguments):
+                code, report = self.run_report(["--acceptance-profile", "c02", *arguments])
+                self.assertEqual(code, 1)
+                self.assertFalse(report["acceptance"]["c02_matrix"])
 
     def test_disagreeing_server_count_blocks_full_matrix_acceptance(self):
         code, report = self.run_report([], mismatch=True)

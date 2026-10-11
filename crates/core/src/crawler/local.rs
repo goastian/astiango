@@ -6,7 +6,10 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -17,14 +20,15 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::{
-    config::{CrawlerConfig, S3Config, UserAgent},
+    config::{default_max_redirect_hops, CrawlNetworkPolicy, CrawlerConfig, S3Config, UserAgent},
     warc,
     webpage::Html,
 };
 
 use super::{
     observer::{Counters, FrontierState, Observer, Snapshot, Warc},
-    robot_client::RobotClient,
+    outcome::{FetchOutcome, JobOutcome, JobStatus},
+    robot_client::{validate_seed_urls, RobotClient},
     CrawlDatum, DatumSink, Domain, Job, JobExecutor, WeightedUrl,
 };
 
@@ -41,6 +45,10 @@ pub struct Config {
     pub min_crawl_delay_ms: u64,
     pub timeout_seconds: u64,
     pub user_agent: UserAgent,
+    #[serde(default)]
+    pub network_policy: CrawlNetworkPolicy,
+    #[serde(default = "default_max_redirect_hops")]
+    pub max_redirect_hops: u8,
     #[serde(default = "default_frontier_capacity")]
     pub max_frontier: usize,
     #[serde(default = "default_revisit_interval")]
@@ -55,10 +63,38 @@ fn default_revisit_interval() -> u64 {
 }
 
 impl Config {
+    fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.network_policy == CrawlNetworkPolicy::PublicOnly,
+            "The local crawler requires network_policy = public_only"
+        );
+        anyhow::ensure!(
+            (1..=32).contains(&self.num_worker_threads),
+            "num_worker_threads must be 1..32"
+        );
+        anyhow::ensure!(
+            (1..=10_000).contains(&self.pages_per_domain),
+            "pages_per_domain must be 1..10000"
+        );
+        anyhow::ensure!(
+            self.min_crawl_delay_ms >= 10_000,
+            "Minimum per-domain crawl delay is 10000ms"
+        );
+        anyhow::ensure!(
+            self.timeout_seconds > 0
+                && self.max_frontier > 0
+                && self.revisit_interval_seconds >= 60,
+            "Invalid crawler limits"
+        );
+        Ok(())
+    }
+
     fn crawler_config(&self) -> CrawlerConfig {
         CrawlerConfig {
             num_worker_threads: self.num_worker_threads,
             user_agent: self.user_agent.clone(),
+            network_policy: self.network_policy,
+            max_redirect_hops: self.max_redirect_hops,
             robots_txt_cache_sec: 3600,
             min_politeness_factor: 0,
             start_politeness_factor: 0,
@@ -120,6 +156,14 @@ struct Queue {
     pending: VecDeque<Job>,
     active: BTreeMap<String, Job>,
     seen: HashSet<String>,
+    #[serde(default)]
+    delayed: VecDeque<DelayedJob>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DelayedJob {
+    job: Job,
+    not_before: chrono::DateTime<Utc>,
 }
 
 struct Frontier {
@@ -172,8 +216,11 @@ impl Frontier {
 
     fn persist(&self, queue: &Queue) -> Result<()> {
         atomic_write(&self.path, &serde_json::to_vec(queue)?)?;
-        self.observer
-            .frontier(queue.pending.len(), queue.seen.len(), self.capacity);
+        self.observer.frontier(
+            queue.pending.len() + queue.delayed.len(),
+            queue.seen.len(),
+            self.capacity,
+        );
         Ok(())
     }
 
@@ -181,7 +228,7 @@ impl Frontier {
         let mut queue = self.queue.lock().unwrap();
         let mut changed = false;
         for mut url in urls {
-            if queue.pending.len() >= self.capacity {
+            if queue.pending.len() + queue.delayed.len() + queue.active.len() >= self.capacity {
                 break;
             }
             if !matches!(url.scheme(), "https" | "http")
@@ -211,7 +258,20 @@ impl Frontier {
     }
 
     fn claim(&self) -> Result<Option<Job>> {
+        self.claim_at(Utc::now())
+    }
+
+    fn claim_at(&self, now: chrono::DateTime<Utc>) -> Result<Option<Job>> {
         let mut queue = self.queue.lock().unwrap();
+        let mut waiting = VecDeque::new();
+        while let Some(delayed) = queue.delayed.pop_front() {
+            if delayed.not_before <= now {
+                queue.pending.push_back(delayed.job);
+            } else {
+                waiting.push_back(delayed);
+            }
+        }
+        queue.delayed = waiting;
         let job = queue.pending.pop_front();
         if let Some(job) = &job {
             queue.active.insert(job.domain.as_str().into(), job.clone());
@@ -226,11 +286,86 @@ impl Frontier {
         self.persist(&queue)
     }
 
+    fn resolve(
+        &self,
+        domain: &Domain,
+        outcome: &JobOutcome,
+        min_delay_ms: u64,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<()> {
+        match outcome.status {
+            JobStatus::Completed => return self.complete(domain),
+            JobStatus::StorageFailed => {
+                anyhow::bail!(
+                    "Crawler storage failed for {}; job remains active",
+                    domain.as_str()
+                );
+            }
+            JobStatus::Deferred | JobStatus::Cancelled => {}
+        }
+        let mut queue = self.queue.lock().unwrap();
+        let original = queue
+            .active
+            .get(domain.as_str())
+            .context("Missing active crawler job")?;
+        let mut delay_ms = min_delay_ms;
+        let mut urls = VecDeque::new();
+        let mut seen_urls = HashSet::new();
+        for entry in &outcome.urls {
+            match &entry.outcome {
+                FetchOutcome::Deferred { retry_after_ms, .. } => {
+                    delay_ms = delay_ms.max(retry_after_ms.unwrap_or(0));
+                }
+                FetchOutcome::Cancelled => {}
+                _ => continue,
+            }
+            if seen_urls.insert(entry.url.clone()) {
+                let weight = original
+                    .urls
+                    .iter()
+                    .find(|weighted| weighted.url == entry.url)
+                    .map_or(0.0, |weighted| weighted.weight);
+                urls.push_back(WeightedUrl {
+                    url: entry.url.clone(),
+                    weight,
+                });
+            }
+        }
+        let scheduled: HashSet<_> = original.urls.iter().map(|weighted| &weighted.url).collect();
+        let explored = outcome
+            .urls
+            .iter()
+            .filter(|entry| !scheduled.contains(&entry.url))
+            .count();
+        let wandering_urls = original.wandering_urls.saturating_sub(explored as u64);
+        let job = if urls.is_empty() {
+            original.clone()
+        } else {
+            Job {
+                domain: domain.clone(),
+                urls,
+                wandering_urls,
+            }
+        };
+        let not_before = chrono::Duration::from_std(Duration::from_millis(delay_ms))
+            .ok()
+            .and_then(|delay| now.checked_add_signed(delay))
+            .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC);
+        queue.active.remove(domain.as_str());
+        queue.delayed.push_back(DelayedJob { job, not_before });
+        self.persist(&queue)
+    }
+
+    fn is_empty(&self) -> bool {
+        let queue = self.queue.lock().unwrap();
+        queue.pending.is_empty() && queue.active.is_empty() && queue.delayed.is_empty()
+    }
+
     fn restart_round(&self, seeds: Vec<Url>) -> Result<()> {
         {
             let mut queue = self.queue.lock().unwrap();
             anyhow::ensure!(
-                queue.pending.is_empty() && queue.active.is_empty(),
+                queue.pending.is_empty() && queue.active.is_empty() && queue.delayed.is_empty(),
                 "Cannot reset active frontier"
             );
             queue.seen.clear();
@@ -265,12 +400,6 @@ impl LocalWarcSink {
         let bytes = writer.finish()?;
         let filename = format!("{}.warc.gz", uuid::Uuid::new_v4());
         atomic_write(&self.directory.join(&filename), &bytes)?;
-        self.observer.saved(
-            &Domain::from(&datum.url),
-            datum,
-            filename,
-            bytes.len() as u64,
-        );
         if let Ok(html) = Html::parse(&datum.body, datum.url.as_str()) {
             self.frontier.discover(
                 html.anchor_links()
@@ -279,6 +408,12 @@ impl LocalWarcSink {
                     .take(super::MAX_OUTGOING_URLS_PER_PAGE),
             )?;
         }
+        self.observer.saved(
+            &Domain::from(&datum.url),
+            datum,
+            filename,
+            bytes.len() as u64,
+        );
         Ok(())
     }
 
@@ -301,6 +436,9 @@ impl DatumSink for LocalWarcSink {
     async fn finish(&self) -> super::Result<()> {
         self.check().map_err(super::Error::Anyhow)
     }
+    async fn checkpoint(&self) -> super::Result<()> {
+        self.check().map_err(super::Error::Anyhow)
+    }
 }
 
 async fn shutdown_signal() -> Result<()> {
@@ -319,24 +457,7 @@ async fn shutdown_signal() -> Result<()> {
 }
 
 pub async fn run(config: Config) -> Result<()> {
-    anyhow::ensure!(
-        (1..=32).contains(&config.num_worker_threads),
-        "num_worker_threads must be 1..32"
-    );
-    anyhow::ensure!(
-        (1..=10_000).contains(&config.pages_per_domain),
-        "pages_per_domain must be 1..10000"
-    );
-    anyhow::ensure!(
-        config.min_crawl_delay_ms >= 10_000,
-        "Minimum per-domain crawl delay is 10000ms"
-    );
-    anyhow::ensure!(
-        config.timeout_seconds > 0
-            && config.max_frontier > 0
-            && config.revisit_interval_seconds >= 60,
-        "Invalid crawler limits"
-    );
+    config.validate()?;
     let seeds = config.seed_urls()?;
     if let Some(parent) = config.status_path.parent() {
         fs::create_dir_all(parent)?;
@@ -350,7 +471,8 @@ pub async fn run(config: Config) -> Result<()> {
     lock.try_lock_exclusive()
         .context("Another local crawler already owns this state directory")?;
     let crawler_config = Arc::new(config.crawler_config());
-    let client = RobotClient::new_public(&crawler_config, &seeds).await?;
+    validate_seed_urls(&crawler_config, &seeds)?;
+    let client = RobotClient::new(&crawler_config)?;
     let run_id = uuid::Uuid::new_v4().to_string();
     let directory = config.output_path.join(&run_id);
     fs::create_dir_all(&directory)?;
@@ -359,7 +481,7 @@ pub async fn run(config: Config) -> Result<()> {
         config.status_path.clone(),
         Snapshot {
             schema_version: 1,
-            run_id,
+            run_id: run_id.clone(),
             pid: std::process::id(),
             started_at: now.clone(),
             updated_at: now,
@@ -396,16 +518,28 @@ pub async fn run(config: Config) -> Result<()> {
         frontier: frontier.clone(),
         fatal_error: Mutex::new(None),
     });
+    let job_directory = config
+        .status_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("jobs")
+        .join(&run_id);
+    fs::create_dir_all(&job_directory)?;
     let mut jobs = tokio::task::JoinSet::new();
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let mut shutting_down = false;
     let mut heartbeat = tokio::time::interval(Duration::from_secs(5));
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     let mut exhausted_at = None;
     let outcome: Result<()> = async {
         loop {
-            sink.check()?;
-            while jobs.len() < config.num_worker_threads {
+            observer.check()?;
+            while !shutting_down && jobs.len() < config.num_worker_threads {
                 let Some(job) = frontier.claim()? else { break };
+                if jobs.is_empty() {
+                    observer.phase("running");
+                }
                 observer.register_site(job.domain.as_str().into(), config.pages_per_domain);
                 let domain = job.domain.clone();
                 let executor = JobExecutor::new(
@@ -414,41 +548,75 @@ pub async fn run(config: Config) -> Result<()> {
                     sink.clone(),
                     client.clone(),
                 )
-                .with_observer(observer.clone());
-                jobs.spawn(async move {
-                    executor.run().await;
-                    domain
-                });
+                .with_observer(observer.clone())
+                .with_cancellation(cancellation.clone());
+                jobs.spawn(async move { (domain, executor.run().await) });
+            }
+            if shutting_down && jobs.is_empty() {
+                break;
             }
             if jobs.is_empty() {
-                let since = exhausted_at.get_or_insert_with(std::time::Instant::now);
                 observer.phase("idle");
-                if since.elapsed() >= Duration::from_secs(config.revisit_interval_seconds) {
-                    frontier.restart_round(seeds.clone())?;
+                if frontier.is_empty() {
+                    let since = exhausted_at.get_or_insert_with(std::time::Instant::now);
+                    if since.elapsed() >= Duration::from_secs(config.revisit_interval_seconds) {
+                        frontier.restart_round(seeds.clone())?;
+                        exhausted_at = None;
+                        continue;
+                    }
+                } else {
                     exhausted_at = None;
-                    observer.phase("running");
-                    continue;
                 }
+            } else {
+                exhausted_at = None;
             }
             tokio::select! {
-                stopped = &mut shutdown => { stopped?; break; }
+                stopped = &mut shutdown, if !shutting_down => {
+                    stopped?;
+                    shutting_down = true;
+                    cancellation.store(true, Ordering::Release);
+                }
                 _ = heartbeat.tick() => observer.heartbeat(),
                 result = jobs.join_next(), if !jobs.is_empty() => {
-                    let domain = result.unwrap().context("Crawler worker panicked")?;
+                    let (domain, job_outcome) = result.unwrap().context("Crawler worker panicked")?;
+                    persist_job_outcome(&job_directory, &domain, &job_outcome)?;
+                    if job_outcome.is_success() {
+                        tracing::info!(domain = domain.as_str(), "Crawler job durably resolved");
+                    } else {
+                        tracing::warn!(domain = domain.as_str(), status = ?job_outcome.status,
+                            "Crawler job finished with explicit non-success outcomes");
+                    }
+                    frontier.resolve(&domain, &job_outcome, config.min_crawl_delay_ms, Utc::now())?;
                     sink.check()?;
-                    frontier.complete(&domain)?;
                 }
             }
         }
         Ok(())
     }
     .await;
-    jobs.abort_all();
-    while jobs.join_next().await.is_some() {}
+    if outcome.is_err() {
+        cancellation.store(true, Ordering::Release);
+        jobs.abort_all();
+        while jobs.join_next().await.is_some() {}
+    }
     observer.finish(if outcome.is_ok() { "stopped" } else { "failed" });
     outcome?;
     sink.check()?;
     Ok(())
+}
+
+fn persist_job_outcome(directory: &Path, domain: &Domain, outcome: &JobOutcome) -> Result<()> {
+    let record = serde_json::json!({
+        "schema_version": 1,
+        "domain": domain.as_str(),
+        "finished_at": Utc::now(),
+        "successful": outcome.is_success(),
+        "outcome": outcome,
+    });
+    atomic_write(
+        &directory.join(format!("{}.json", uuid::Uuid::new_v4())),
+        &serde_json::to_vec(&record)?,
+    )
 }
 
 #[cfg(test)]
@@ -513,6 +681,227 @@ mod tests {
         let restored = Frontier::open(path, 2, 5, telemetry).unwrap();
         assert_eq!(restored.claim().unwrap().unwrap().domain, second.domain);
         assert!(restored.claim().unwrap().is_none());
+    }
+
+    #[test]
+    fn deferred_urls_survive_restart_and_cannot_run_before_retry_after() {
+        let dir = tempfile::tempdir().unwrap();
+        let telemetry = observer(dir.path().join("status.json"));
+        let path = dir.path().join("frontier.json");
+        let frontier = Frontier::open(path.clone(), 2, 5, telemetry.clone()).unwrap();
+        let seed = Url::parse("https://example.org/").unwrap();
+        frontier.discover([seed.clone()]).unwrap();
+        let job = frontier.claim().unwrap().unwrap();
+        let retry = Url::parse("https://example.org/retry").unwrap();
+        let mut outcome = JobOutcome::default();
+        outcome.record(
+            seed.clone(),
+            FetchOutcome::DurableSuccess {
+                final_url: seed.clone(),
+            },
+        );
+        outcome.record(
+            retry.clone(),
+            FetchOutcome::Deferred {
+                reason: "http_429".into(),
+                retry_after_ms: Some(300_000),
+            },
+        );
+        outcome.record(
+            Url::parse("https://example.org/missing").unwrap(),
+            FetchOutcome::PermanentFailure {
+                reason: "http_404".into(),
+            },
+        );
+        let now = Utc::now();
+        frontier
+            .resolve(&job.domain, &outcome, 10_000, now)
+            .unwrap();
+        assert!(!frontier.is_empty());
+        assert!(frontier
+            .claim_at(now + chrono::Duration::seconds(299))
+            .unwrap()
+            .is_none());
+        assert!(frontier.restart_round(vec![seed]).is_err());
+        drop(frontier);
+        let restored = Frontier::open(path, 2, 5, telemetry).unwrap();
+        assert!(restored
+            .claim_at(now + chrono::Duration::seconds(299))
+            .unwrap()
+            .is_none());
+        let retried = restored
+            .claim_at(now + chrono::Duration::seconds(300))
+            .unwrap()
+            .unwrap();
+        assert_eq!(retried.urls.len(), 1);
+        assert_eq!(retried.urls[0].url, retry);
+        assert_eq!(retried.wandering_urls, 2);
+    }
+
+    #[test]
+    fn deferred_seed_preserves_unspent_exploration_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let telemetry = observer(dir.path().join("status.json"));
+        let frontier = Frontier::open(dir.path().join("frontier.json"), 2, 50, telemetry).unwrap();
+        let seed = Url::parse("https://example.org/").unwrap();
+        frontier.discover([seed.clone()]).unwrap();
+        let job = frontier.claim().unwrap().unwrap();
+        let mut outcome = JobOutcome::default();
+        outcome.record(
+            seed.clone(),
+            FetchOutcome::Deferred {
+                reason: "robots_unavailable".into(),
+                retry_after_ms: None,
+            },
+        );
+        let now = Utc::now();
+        frontier
+            .resolve(&job.domain, &outcome, 10_000, now)
+            .unwrap();
+        let retried = frontier
+            .claim_at(now + chrono::Duration::seconds(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(retried.urls[0].url, seed);
+        assert_eq!(retried.wandering_urls, 49);
+    }
+
+    #[test]
+    fn extreme_retry_after_saturates_without_early_retry_or_service_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let telemetry = observer(dir.path().join("status.json"));
+        let path = dir.path().join("frontier.json");
+        let frontier = Frontier::open(path.clone(), 2, 5, telemetry.clone()).unwrap();
+        let seed = Url::parse("https://example.org/").unwrap();
+        frontier.discover([seed.clone()]).unwrap();
+        let job = frontier.claim().unwrap().unwrap();
+        let mut outcome = JobOutcome::default();
+        outcome.record(
+            seed,
+            FetchOutcome::Deferred {
+                reason: "http_429".into(),
+                retry_after_ms: Some(u64::MAX),
+            },
+        );
+        frontier
+            .resolve(&job.domain, &outcome, 10_000, Utc::now())
+            .unwrap();
+        let persisted: Queue = serde_json::from_reader(fs::File::open(&path).unwrap()).unwrap();
+        assert_eq!(
+            persisted.delayed[0].not_before,
+            chrono::DateTime::<Utc>::MAX_UTC
+        );
+        assert!(persisted.active.is_empty());
+        drop(frontier);
+        let restored = Frontier::open(path, 2, 5, telemetry).unwrap();
+        assert!(!restored.is_empty());
+        assert!(restored
+            .claim_at(chrono::DateTime::<Utc>::MAX_UTC - chrono::Duration::seconds(1))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn cancellation_preserves_pending_urls_and_exploration_with_courtesy_delay() {
+        let dir = tempfile::tempdir().unwrap();
+        let telemetry = observer(dir.path().join("status.json"));
+        let path = dir.path().join("frontier.json");
+        let frontier = Frontier::open(path.clone(), 2, 5, telemetry.clone()).unwrap();
+        let seed = Url::parse("https://example.org/").unwrap();
+        frontier.discover([seed.clone()]).unwrap();
+        let job = frontier.claim().unwrap().unwrap();
+        let mut outcome = JobOutcome::default();
+        outcome.record(seed.clone(), FetchOutcome::Cancelled);
+        let now = Utc::now();
+        frontier
+            .resolve(&job.domain, &outcome, 10_000, now)
+            .unwrap();
+        drop(frontier);
+        let restored = Frontier::open(path, 2, 5, telemetry).unwrap();
+        assert!(restored
+            .claim_at(now + chrono::Duration::seconds(9))
+            .unwrap()
+            .is_none());
+        let retried = restored
+            .claim_at(now + chrono::Duration::seconds(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(retried.urls[0].url, seed);
+        assert_eq!(retried.wandering_urls, 4);
+    }
+
+    #[test]
+    fn storage_failure_keeps_active_job_and_outcome_durable_for_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let telemetry = observer(dir.path().join("status.json"));
+        let path = dir.path().join("frontier.json");
+        let frontier = Frontier::open(path.clone(), 2, 5, telemetry.clone()).unwrap();
+        let seed = Url::parse("https://example.org/").unwrap();
+        frontier.discover([seed.clone()]).unwrap();
+        let job = frontier.claim().unwrap().unwrap();
+        let mut outcome = JobOutcome::default();
+        outcome.record(
+            seed.clone(),
+            FetchOutcome::StorageFailure {
+                message: "disk full".into(),
+            },
+        );
+        let ledger = dir.path().join("jobs");
+        fs::create_dir(&ledger).unwrap();
+        persist_job_outcome(&ledger, &job.domain, &outcome).unwrap();
+        assert!(frontier
+            .resolve(&job.domain, &outcome, 10_000, Utc::now())
+            .is_err());
+        let persisted: Queue = serde_json::from_reader(fs::File::open(&path).unwrap()).unwrap();
+        assert_eq!(persisted.active.len(), 1);
+        assert!(persisted.delayed.is_empty());
+        let record = fs::read_dir(&ledger)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let record: serde_json::Value = serde_json::from_slice(&fs::read(record).unwrap()).unwrap();
+        assert_eq!(record["successful"], false);
+        assert_eq!(record["outcome"]["status"], "storage_failed");
+        drop(frontier);
+        let restored = Frontier::open(path, 2, 5, telemetry).unwrap();
+        assert_eq!(restored.claim().unwrap().unwrap().urls[0].url, seed);
+    }
+
+    #[test]
+    fn legacy_frontier_without_delayed_jobs_remains_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let telemetry = observer(dir.path().join("status.json"));
+        let path = dir.path().join("frontier.json");
+        fs::write(&path, r#"{"pending":[],"active":{},"seen":[]}"#).unwrap();
+        let frontier = Frontier::open(path, 2, 5, telemetry).unwrap();
+        assert!(frontier.is_empty());
+        assert!(frontier.claim().unwrap().is_none());
+    }
+
+    #[test]
+    fn local_config_migrates_to_public_only_and_rejects_private_mode() {
+        let source = include_str!("../../../../configs/crawler/local.toml");
+        let mut config: Config = toml::from_str(source).unwrap();
+        config.validate().unwrap();
+        assert_eq!(
+            config.crawler_config().network_policy,
+            CrawlNetworkPolicy::PublicOnly
+        );
+        assert_eq!(config.crawler_config().max_redirect_hops, 10);
+        let legacy = source
+            .lines()
+            .filter(|line| {
+                !line.starts_with("network_policy") && !line.starts_with("max_redirect_hops")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let migrated: Config = toml::from_str(&legacy).unwrap();
+        assert_eq!(migrated.network_policy, CrawlNetworkPolicy::PublicOnly);
+        assert_eq!(migrated.max_redirect_hops, 10);
+        config.network_policy = CrawlNetworkPolicy::AllowPrivate;
+        assert!(config.validate().is_err());
     }
 
     #[test]

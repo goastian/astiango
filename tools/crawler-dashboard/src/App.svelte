@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import Icon from "./Icon.svelte";
   import BenchmarkPanel from "./BenchmarkPanel.svelte";
+  import RequestOutcomes from "./RequestOutcomes.svelte";
   import {
     buildHistoryBars,
     summarizeOutcomes,
@@ -46,6 +47,9 @@
     waiting: "En espera",
     completed: "Finalizado",
     stopped: "Detenido",
+    deferred: "Aplazado",
+    cancelled: "Cancelado",
+    storage_failed: "Fallo de almacenamiento",
     failed: "Fallido",
   };
   const phases = {
@@ -83,7 +87,7 @@
           filter === "all" ||
           (filter === "active" &&
             ["crawling", "waiting"].includes(site.status)) ||
-          (filter === "errors" && site.failed > 0) ||
+          (filter === "errors" && incidents(site) > 0) ||
           (filter === "completed" && site.status === "completed");
         return matchesQuery && matchesFilter;
       })
@@ -93,8 +97,11 @@
           waiting: 1,
           queued: 2,
           failed: 3,
-          stopped: 4,
-          completed: 5,
+          storage_failed: 3,
+          deferred: 4,
+          cancelled: 5,
+          stopped: 6,
+          completed: 7,
         };
         return (
           priority[a.status] - priority[b.status] ||
@@ -176,8 +183,8 @@
   );
   const issues = $derived(
     (snapshot?.sites ?? [])
-      .filter((site) => site.failed > 0)
-      .sort((a, b) => b.failed - a.failed),
+      .filter((site) => incidents(site) > 0)
+      .sort((a, b) => incidents(b) - incidents(a)),
   );
   const domainTotal = $derived(
     snapshot?.frontier?.discovered_domains ?? snapshot?.counters.sites ?? 0,
@@ -210,6 +217,12 @@
   const hasHistory = $derived(historyBars.some((bar) => bar.observed));
   function shortTime(value: number) {
     return clock.format(new Date(value)).slice(0, 5);
+  }
+  function incidents(site: Site) {
+    return site.failed + (site.storage_failed ?? 0) + (site.deferred ?? 0) + (site.cancelled ?? 0);
+  }
+  function optionalCount(value: number | undefined) {
+    return value == null ? "—" : number.format(value);
   }
   function percent(value: number | null | undefined) {
     return value == null
@@ -550,7 +563,7 @@
         <h2>
           Descargas correctas <span
             class="info"
-            title="Páginas guardadas / (páginas guardadas + descargas fallidas). Excluye las omisiones."
+            title="Páginas guardadas / (guardadas + fallos permanentes + fallos de almacenamiento). Excluye omisiones, aplazamientos y cancelaciones."
             >i</span
           >
         </h2>
@@ -594,7 +607,7 @@
           </div>
           <div>
             <span class="legend-dot red"></span><strong
-              >{snapshot?.counters.failed ?? "—"}</strong
+              >{outcomes ? outcomes.failed + outcomes.storageFailed : "—"}</strong
             ><span>Fallidas</span>
           </div>
           <div>
@@ -659,6 +672,7 @@
         </div>
       </article>
     </section>
+    <RequestOutcomes counters={snapshot?.counters} />
     <div class="analysis-grid">
       <section class="panel issues-panel" aria-labelledby="issues-heading">
         <div class="card-heading">
@@ -668,7 +682,7 @@
           >
         </div>
         <p class="card-description">
-          Fallos del último trabajo de cada sitio · detalle disponible
+          Fallos, aplazamientos y cancelaciones del último trabajo de cada sitio
         </p>
         <div class="issue-list">
           {#each issues.slice(0, 5) as site}<button
@@ -686,12 +700,12 @@
                     "Detalle no disponible en el estado actual"}</span
                 ></span
               ><span class="issue-line"></span><strong class="issue-count"
-                >{number.format(site.failed)}</strong
+                >{number.format(incidents(site))}</strong
               ></button
             >{:else}<div class="empty-chart">
               <span class="empty-check" aria-hidden="true">✓</span><strong
                 >{snapshot
-                  ? "Sin fallos en los sitios recientes"
+                  ? "Sin incidencias en los sitios recientes"
                   : "Esperando datos del crawler"}</strong
               ><span>Las incidencias registradas aparecerán aquí.</span>
             </div>{/each}
@@ -712,12 +726,15 @@
             <span><i class="legend-dot green"></i>Guardadas</span><span
               ><i class="legend-dot amber"></i>Omitidas</span
             ><span><i class="legend-dot red"></i>Fallidas</span>
+            <span><i class="legend-dot blue"></i>Aplazadas</span>
+            <span><i class="legend-dot neutral"></i>Canceladas</span>
+            <span><i class="legend-dot purple"></i>Almacenamiento</span>
           </div>
         </div>
         <div
           class="distribution-chart"
           role="img"
-          aria-label="Comparación de páginas guardadas, omitidas y fallidas por sitio"
+          aria-label="Comparación de páginas guardadas, omitidas, fallidas, aplazadas, canceladas y fallos de almacenamiento por sitio"
         >
           <div class="distribution-axis">
             <span>{number.format(maxSiteTotal)}</span><span
@@ -730,11 +747,14 @@
                   <div
                     class="stacked-column"
                     style:height={`${(site.total / maxSiteTotal) * 100}%`}
-                    title={`${site.host}: ${site.downloaded} guardadas, ${site.skipped} omitidas, ${site.failed} fallidas`}
+                    title={`${site.host}: ${site.downloaded} guardadas, ${site.skipped} omitidas, ${site.failed} fallidas, ${site.deferred} aplazadas, ${site.cancelled} canceladas, ${site.storageFailed} fallos de almacenamiento`}
                   >
                     <span class="green" style:flex={site.downloaded}
                     ></span><span class="amber" style:flex={site.skipped}
                     ></span><span class="red" style:flex={site.failed}></span>
+                    <span class="blue" style:flex={site.deferred}></span>
+                    <span class="neutral" style:flex={site.cancelled}></span>
+                    <span class="purple" style:flex={site.storageFailed}></span>
                   </div>
                 </div>
                 <button
@@ -796,7 +816,7 @@
               <button
                 class:active={filter === "errors"}
                 onclick={() => (filter = "errors")}
-                aria-pressed={filter === "errors"}>Con errores</button
+                aria-pressed={filter === "errors"}>Con incidencias</button
               >
               <button
                 class:active={filter === "completed"}
@@ -859,6 +879,8 @@
                               ? "Pendiente de asignación"
                               : site.status === "completed"
                                 ? "Trabajo del sitio finalizado"
+                                : ["deferred", "cancelled", "storage_failed", "failed", "stopped"].includes(site.status)
+                                  ? "Sin solicitud en curso"
                                 : "Entre solicitudes")}</span
                         ></button
                       ></td
@@ -940,7 +962,7 @@
                   rel="noreferrer"
                   >{selected.current_url}<span aria-hidden="true"> ↗</span></a
                 >{:else}<p>
-                  {["completed", "stopped", "failed"].includes(selected.status)
+                  {["completed", "stopped", "failed", "deferred", "cancelled", "storage_failed"].includes(selected.status)
                     ? "Sin solicitud en curso."
                     : "Esperando la próxima solicitud."}
                 </p>{/if}
@@ -969,6 +991,30 @@
               <div>
                 <dt>Páginas omitidas</dt>
                 <dd>{selected.skipped}</dd>
+              </div>
+              <div>
+                <dt>HTTP de páginas y sitemaps</dt>
+                <dd>{optionalCount(selected.page_http_attempts)}</dd>
+              </div>
+              <div>
+                <dt>Saltos de redirección</dt>
+                <dd>{optionalCount(selected.redirect_hops)}</dd>
+              </div>
+              <div>
+                <dt>Páginas útiles durables</dt>
+                <dd>{optionalCount(selected.useful_pages)}</dd>
+              </div>
+              <div>
+                <dt>Aplazadas</dt>
+                <dd>{optionalCount(selected.deferred)}</dd>
+              </div>
+              <div>
+                <dt>Canceladas</dt>
+                <dd>{optionalCount(selected.cancelled)}</dd>
+              </div>
+              <div>
+                <dt>Fallos de almacenamiento</dt>
+                <dd>{optionalCount(selected.storage_failed)}</dd>
               </div>
               <div>
                 <dt>Próxima solicitud</dt>

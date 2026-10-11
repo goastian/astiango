@@ -106,6 +106,9 @@ test("download success excludes skipped URLs and does not infer in-flight reques
       downloaded: 8,
       failed: 2,
       skipped: 40,
+      storageFailed: 0,
+      deferred: 0,
+      cancelled: 0,
       settled: 10,
       successRate: 80,
     },
@@ -150,7 +153,35 @@ test("site distribution sorts actual outcomes and omits unmeasured sites", () =>
     { host: "empty.test", pages_downloaded: 0, failed: 0, skipped: 0 },
   ];
   assert.deepEqual(buildSiteOutcomes(sites, 1), [
-    { host: "b.test", downloaded: 5, failed: 1, skipped: 2, total: 8 },
+    { host: "b.test", downloaded: 5, failed: 1, skipped: 2, deferred: 0, cancelled: 0, storageFailed: 0, total: 8 },
   ]);
   assert.equal(sites.length, 3);
+});
+
+test("explicit outcomes keep deferred and cancelled work out of the success denominator", () => {
+  assert.deepEqual(
+    summarizeOutcomes({ downloaded: 8, failed: 1, skipped: 5, deferred: 40, cancelled: 6, storage_failed: 1 }),
+    { downloaded: 8, failed: 1, skipped: 5, deferred: 40, cancelled: 6, storageFailed: 1, settled: 10, successRate: 80 },
+  );
+  assert.equal(
+    summarizeOutcomes({ downloaded: 0, failed: 0, skipped: 0, deferred: 3, cancelled: 2 }).successRate,
+    null,
+  );
+  assert.deepEqual(buildSiteOutcomes([
+    { host: "deferred.test", pages_downloaded: 0, failed: 0, skipped: 0, deferred: 3, cancelled: 1, storage_failed: 2 },
+  ]), [
+    { host: "deferred.test", downloaded: 0, failed: 0, skipped: 0, deferred: 3, cancelled: 1, storageFailed: 2, total: 6 },
+  ]);
+});
+
+test("explicit outcome kinds determine the cause before retained HTTP status", () => {
+  assert.deepEqual(summarizeIssues([
+    { level: "error", kind: "storage_failed", message: "disk full", http_status: 503 },
+    { level: "warn", kind: "deferred", message: "retry later", http_status: 429 },
+    { level: "warn", kind: "cancelled", message: "stop", http_status: 200 },
+  ]), [
+    { key: "cancelled", label: "Trabajo cancelado", count: 1 },
+    { key: "deferred", label: "Trabajo aplazado", count: 1 },
+    { key: "storage", label: "Fallos de almacenamiento", count: 1 },
+  ]);
 });

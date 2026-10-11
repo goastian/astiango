@@ -54,6 +54,28 @@ const NEWS_FRACTION_THRESHOLD: f64 = 0.5;
 const MIN_CRAWL_DELAY: Duration = Duration::from_secs(30);
 const MAX_CRAWL_DELAY: Duration = Duration::from_secs(300);
 const TICK_INTERVAL: Duration = Duration::from_secs(5);
+const INDEX_ACK_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn require_index_acknowledgements<Id, E: std::fmt::Display>(
+    shards: Vec<Result<(Id, Vec<(std::net::SocketAddr, Result<(), E>)>)>>,
+) -> Result<()> {
+    let mut acknowledgements = 0;
+    for shard in shards {
+        let (_, replicas) = shard?;
+        anyhow::ensure!(
+            !replicas.is_empty(),
+            "index shard returned no acknowledgements"
+        );
+        for (address, reply) in replicas {
+            reply.map_err(|error| {
+                anyhow::anyhow!("index replica {address} rejected pages: {error}")
+            })?;
+            acknowledgements += 1;
+        }
+    }
+    anyhow::ensure!(acknowledgements > 0, "index returned no acknowledgements");
+    Ok(())
+}
 
 struct Client {
     live_index: Mutex<ReusableShardedClient<live_index::LiveIndexService>>,
@@ -83,29 +105,31 @@ impl Client {
     }
 
     pub async fn index(&self, pages: Vec<IndexableWebpage>) -> Result<()> {
-        let mut conn = self.live_conn().await;
-
-        let req = live_index::IndexWebpages {
-            pages,
-            consistency_fraction: Some(DEFAULT_CONSISTENCY_FRACTION),
-        };
-
-        while let Err(e) = conn
-            .send(req.clone(), &RandomShardSelector, &RandomReplicaSelector)
-            .await
-            .map_err(|e| anyhow::anyhow!("send failed: {e}"))
-            .and_then(|v| {
-                v.into_iter()
-                    .map(|v| v.map_err(|e| anyhow::anyhow!("shard failed: {e}")))
-                    .collect::<Result<Vec<_>>>()
-            })
-        {
-            tracing::error!("Failed to index pages: {e}");
-            tokio::time::sleep(Duration::from_millis(1_000)).await;
-            conn = self.live_conn().await;
-        }
-
-        Ok(())
+        tokio::time::timeout(INDEX_ACK_TIMEOUT, async {
+            let conn = self.live_conn().await;
+            let req = live_index::IndexWebpages {
+                pages,
+                consistency_fraction: Some(DEFAULT_CONSISTENCY_FRACTION),
+            };
+            let replies = conn
+                .send_with_timeout(
+                    req,
+                    &RandomShardSelector,
+                    &RandomReplicaSelector,
+                    INDEX_ACK_TIMEOUT,
+                )
+                .await?;
+            require_index_acknowledgements(
+                replies
+                    .into_iter()
+                    .map(|reply| {
+                        reply.map_err(|error| anyhow::anyhow!("index shard failed: {error}"))
+                    })
+                    .collect(),
+            )
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("index acknowledgement timed out"))?
     }
 
     pub async fn get_site_urls(&self, site: &str) -> Vec<Url> {
@@ -126,6 +150,8 @@ impl From<LiveCrawlerConfig> for CrawlerConfig {
         Self {
             num_worker_threads: 1,
             user_agent: config.user_agent,
+            network_policy: config.network_policy,
+            max_redirect_hops: config.max_redirect_hops,
             robots_txt_cache_sec: crate::config::defaults::Crawler::robots_txt_cache_sec(),
             min_politeness_factor: 0,
             start_politeness_factor: 1,
@@ -281,5 +307,42 @@ impl Crawler {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod acknowledgement_tests {
+    use super::*;
+
+    type Reply = Result<(u64, Vec<(std::net::SocketAddr, Result<(), &'static str>)>)>;
+
+    #[test]
+    fn indexing_requires_an_application_acknowledgement() {
+        assert!(require_index_acknowledgements::<u64, &str>(Vec::new()).is_err());
+        let empty: Vec<Reply> = vec![Ok((0, Vec::new()))];
+        assert!(require_index_acknowledgements(empty).is_err());
+        let acknowledged: Vec<Reply> =
+            vec![Ok((0, vec![("127.0.0.1:1".parse().unwrap(), Ok(()))]))];
+        require_index_acknowledgements(acknowledged).unwrap();
+    }
+
+    #[test]
+    fn indexing_propagates_transport_and_nested_application_failures() {
+        let transport: Vec<Reply> = vec![Err(anyhow::anyhow!("connection lost"))];
+        assert!(require_index_acknowledgements(transport)
+            .unwrap_err()
+            .to_string()
+            .contains("connection lost"));
+        let rejected: Vec<Reply> = vec![Ok((
+            0,
+            vec![(
+                "127.0.0.1:1".parse().unwrap(),
+                Err("insufficient replication"),
+            )],
+        ))];
+        assert!(require_index_acknowledgements(rejected)
+            .unwrap_err()
+            .to_string()
+            .contains("insufficient replication"));
     }
 }

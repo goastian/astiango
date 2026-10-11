@@ -165,6 +165,11 @@ try {
     if (!enabled) {
       await page.waitForTimeout(400);
       assert.equal(await page.locator("#banco-c01").count(), 0);
+      assert.deepEqual(
+        await page.locator(".request-metrics dd").allTextContents(),
+        ["—", "—", "—"],
+        "legacy snapshots do not fabricate C02 counters",
+      );
     } else {
       await page.getByRole("link", { name: "Banco C01 · local" }).click();
       await page.getByText("Aceptación verificada", { exact: true }).waitFor();
@@ -261,6 +266,38 @@ try {
       await page.setViewportSize({ width: 1440, height: 1000 });
     }
   }
+  const c02Snapshot = structuredClone(snapshot);
+  c02Snapshot.run_id = "c02-explicit-outcomes";
+  Object.assign(c02Snapshot.counters, {
+    failed: 2, skipped: 3, page_http_attempts: 107, redirect_hops: 8,
+    useful_pages: 91, deferred: 4, cancelled: 1, storage_failed: 2,
+  });
+  c02Snapshot.sites = ["deferred", "cancelled", "storage_failed"].map((status) => ({
+    host: `${status}.test`, status, current_url: null, pages_downloaded: 0,
+    failed: 0, skipped: 0, attempted: 1, budget: 5, bytes: 0,
+    last_activity_at: now, last_http_status: null, last_error: "Motivo explícito",
+    last_fetch_ms: null, next_request_at: null, page_http_attempts: 2,
+    redirect_hops: 1, useful_pages: 0, deferred: 0, cancelled: 0, storage_failed: 0,
+    [status]: 1,
+  }));
+  await writeFile(statePath, JSON.stringify(c02Snapshot));
+  const c02Server = createDashboardServer({ statePath });
+  servers.push(c02Server);
+  await new Promise((resolve) => c02Server.listen(0, "127.0.0.1", resolve));
+  await page.goto(`http://127.0.0.1:${c02Server.address().port}`);
+  await page.locator(".page-footer").filter({ hasText: "c02-explicit-outcomes" }).waitFor();
+  assert.deepEqual(await page.locator(".request-metrics dd").allTextContents(), ["107", "8", "91"]);
+  assert.deepEqual(await page.locator(".explicit-outcomes dd").allTextContents(), ["3", "2", "4", "1", "2"]);
+  await page.getByRole("button", { name: "Con incidencias", exact: true }).click();
+  assert.equal(await page.locator(".sites-table tbody tr").count(), 3);
+  await page.getByRole("button", { name: "storage_failed.test", exact: false }).first().click();
+  await page.locator(".detail-status").filter({ hasText: "Fallo de almacenamiento" }).waitFor();
+  assert.equal(await page.locator(".gauge-label strong").textContent(), "95,8%");
+  const screenshotDirectory = process.env.CRAWLER_SCREENSHOT_DIR;
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "c02-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "c02-mobile.png"), fullPage: true });
   assert.deepEqual(errors, []);
   console.log(
     JSON.stringify({
@@ -268,6 +305,8 @@ try {
       productionCounter: 91,
       benchmarkRows: 2,
       benchmarkVisibleWithoutProduction: true,
+      explicitOutcomes: true,
+      legacyCountersRemainUnknown: true,
       mobileOverflow: false,
       pageErrors: errors,
     }),

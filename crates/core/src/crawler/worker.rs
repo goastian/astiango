@@ -18,12 +18,20 @@ use hashbrown::HashSet;
 use itertools::Itertools;
 use rand::seq::SliceRandom;
 
-use std::{collections::VecDeque, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    net::SocketAddr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use url::Url;
 
 use crate::{
-    config::CrawlerConfig,
+    config::{CrawlNetworkPolicy, CrawlerConfig},
     crawler::MAX_URL_LEN_BYTES,
     dated_url::DatedUrl,
     distributed::{retry_strategy::ExponentialBackoff, sonic},
@@ -34,9 +42,12 @@ use crate::{
 };
 
 use super::{
-    robot_client::RobotClient, wander_prioritiser::WanderPrioritiser, CrawlDatum, DatumSink,
-    Domain, Error, Result, RetrieableUrl, Site, WarcWriter, WeightedUrl, WorkerJob,
-    MAX_CONTENT_LENGTH, MAX_OUTGOING_URLS_PER_PAGE,
+    outcome::{FetchOutcome, JobOutcome, JobStatus, UrlOutcome},
+    robot_client::RobotClient,
+    robots_txt::RobotAccess,
+    wander_prioritiser::WanderPrioritiser,
+    CrawlDatum, DatumSink, Domain, Error, Result, RetrieableUrl, Site, WarcWriter, WeightedUrl,
+    WorkerJob, MAX_CONTENT_LENGTH, MAX_OUTGOING_URLS_PER_PAGE,
 };
 
 const IGNORED_EXTENSIONS: [&str; 27] = [
@@ -48,12 +59,13 @@ const IGNORED_EXTENSIONS: [&str; 27] = [
 const INITIAL_WANDER_STEPS: u64 = 4;
 
 enum UrlVisit {
-    Skip(&'static str),
+    Stop(FetchOutcome),
     CanCrawl,
 }
 
 struct ProcessedUrl {
     new_urls: Vec<Url>,
+    final_url: Url,
 }
 
 pub struct WorkerThread {
@@ -92,9 +104,9 @@ impl WorkerThread {
         .map_err(|e| Error::from(anyhow!(e)))
     }
 
-    pub async fn run(self) {
+    pub async fn run(self) -> Result<()> {
         loop {
-            let mut conn = self.router_conn().await.unwrap();
+            let mut conn = self.router_conn().await?;
             let res = conn
                 .send_with_timeout(NewJob {}, Duration::from_secs(90))
                 .await;
@@ -107,10 +119,20 @@ impl WorkerThread {
                         self.writer.clone(),
                         self.client.clone(),
                     );
-                    executor.run().await;
+                    let outcome = executor.run().await;
+                    if outcome.status != JobStatus::Completed {
+                        return Err(anyhow!(
+                            "Crawler job incomplete: {}",
+                            serde_json::to_string(&outcome).unwrap_or_default()
+                        )
+                        .into());
+                    }
+                    if !outcome.is_success() {
+                        tracing::warn!(?outcome, "Crawler job contains permanent failures");
+                    }
                 }
                 Ok(None) => {
-                    return;
+                    return Ok(());
                 }
                 _ => {
                     tokio::time::sleep(Duration::from_secs(60)).await;
@@ -124,6 +146,12 @@ impl WorkerThread {
 /// JobExecutor receives a job from the coordinator and crawls the urls in the job.
 pub struct JobExecutor<S: DatumSink> {
     observer: Option<Arc<super::observer::Observer>>,
+    cancellation: Option<Arc<AtomicBool>>,
+    outcome: JobOutcome,
+    telemetry_time: Duration,
+    defer_remaining: Option<Option<u64>>,
+    max_redirect_hops: u8,
+    network_policy: CrawlNetworkPolicy,
     attempted: u64,
     attempt_limit: u64,
     seed_urls: Vec<Url>,
@@ -153,6 +181,12 @@ impl<S: DatumSink> JobExecutor<S> {
     ) -> Self {
         Self {
             observer: None,
+            cancellation: None,
+            outcome: JobOutcome::default(),
+            telemetry_time: Duration::ZERO,
+            defer_remaining: None,
+            max_redirect_hops: config.max_redirect_hops,
+            network_policy: config.network_policy,
             attempted: 0,
             attempt_limit: job.urls.len() as u64 + job.wandering_urls,
             seed_urls: job.urls.iter().map(|url| url.url().clone()).collect(),
@@ -179,7 +213,74 @@ impl<S: DatumSink> JobExecutor<S> {
         self
     }
 
-    pub async fn run(mut self) {
+    pub fn with_cancellation(mut self, cancellation: Arc<AtomicBool>) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+    }
+
+    async fn cancellable<T>(
+        &self,
+        future: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        if self.cancelled() {
+            return Err(anyhow!("cancelled").into());
+        }
+        match &self.cancellation {
+            Some(flag) => tokio::select! {
+                result = future => result,
+                _ = async {
+                    while !flag.load(Ordering::Acquire) { tokio::time::sleep(Duration::from_millis(100)).await; }
+                } => Err(anyhow!("cancelled").into()),
+            },
+            None => future.await,
+        }
+    }
+
+    async fn sleep(&self, duration: Duration) {
+        if self.cancellation.is_none() {
+            self.client.sleep(duration).await;
+            return;
+        }
+        let mut remaining = duration;
+        while !remaining.is_zero() && !self.cancelled() {
+            let step = remaining.min(Duration::from_millis(100));
+            self.client.sleep(step).await;
+            remaining = remaining.saturating_sub(step);
+        }
+    }
+
+    fn stopped(&self) -> bool {
+        self.cancelled()
+            || self.outcome.status == JobStatus::StorageFailed
+            || self.defer_remaining.is_some()
+    }
+
+    fn record(&mut self, url: Url, outcome: FetchOutcome) {
+        if matches!(outcome, FetchOutcome::DurableSuccess { .. }) {
+            self.outcome.urls.push(UrlOutcome { url, outcome });
+            return;
+        }
+        if let Some(observer) = &self.observer {
+            let (kind, message) = match &outcome {
+                FetchOutcome::DurableSuccess { .. } => ("fetch_completed", "Página almacenada"),
+                FetchOutcome::Skipped { reason } => ("skipped", reason.as_str()),
+                FetchOutcome::PermanentFailure { reason } => ("failed", reason.as_str()),
+                FetchOutcome::Deferred { reason, .. } => ("deferred", reason.as_str()),
+                FetchOutcome::Cancelled => ("cancelled", "Rastreo cancelado"),
+                FetchOutcome::StorageFailure { message } => ("storage_failed", message.as_str()),
+            };
+            observer.event(&self.job.domain, Some(&url), kind, message);
+        }
+        self.outcome.record(url, outcome);
+    }
+
+    pub async fn run(mut self) -> JobOutcome {
         tracing::info!("Processing job: {:?}", self.job.domain);
         if let Some(observer) = &self.observer {
             observer.event(
@@ -204,6 +305,7 @@ impl<S: DatumSink> JobExecutor<S> {
         while self.wandered_urls < self.job.wandering_urls
             && self.wander_prioritiser.known_urls() > 0
             && wander_steps < INITIAL_WANDER_STEPS
+            && !self.stopped()
         {
             self.wander().await;
             wander_steps += 1;
@@ -211,22 +313,81 @@ impl<S: DatumSink> JobExecutor<S> {
 
         self.scheduled_urls().await;
 
-        if self.wandered_urls < self.job.wandering_urls {
+        if self.wandered_urls < self.job.wandering_urls && !self.stopped() {
             self.crawl_sitemaps().await;
         }
 
         while self.wandered_urls < self.job.wandering_urls
             && self.wander_prioritiser.known_urls() > 0
+            && !self.stopped()
         {
             self.wander().await;
         }
+        self.confirm_storage().await;
+        if self.cancelled() && self.outcome.status != JobStatus::StorageFailed {
+            self.outcome.status = JobStatus::Cancelled;
+        }
         if let Some(observer) = &self.observer {
-            observer.event(
-                &self.job.domain,
-                None,
-                "site_completed",
-                "Cola del dominio finalizada",
-            );
+            let (kind, message) = match self.outcome.status {
+                JobStatus::Completed => ("site_completed", "Cola del dominio resuelta"),
+                JobStatus::Deferred => ("site_deferred", "Dominio con solicitudes aplazadas"),
+                JobStatus::Cancelled => ("site_cancelled", "Trabajo de dominio cancelado"),
+                JobStatus::StorageFailed => {
+                    ("site_storage_failed", "Falló almacenamiento del dominio")
+                }
+            };
+            observer.event(&self.job.domain, None, kind, message);
+        }
+        self.outcome
+    }
+
+    async fn confirm_storage(&mut self) {
+        let saved: Vec<_> = self
+            .outcome
+            .urls
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                matches!(entry.outcome, FetchOutcome::DurableSuccess { .. }).then_some(index)
+            })
+            .collect();
+        if saved.is_empty() {
+            return;
+        }
+        let confirmed = {
+            let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "sink");
+            self.writer.checkpoint().await
+        };
+        match confirmed {
+            Ok(()) => {
+                self.outcome.counters.useful_pages = saved.len() as u64;
+                for index in saved {
+                    if let Some(observer) = &self.observer {
+                        observer.event(
+                            &self.job.domain,
+                            Some(&self.outcome.urls[index].url),
+                            "fetch_completed",
+                            "Página almacenada y confirmada",
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                self.outcome.status = JobStatus::StorageFailed;
+                for index in saved {
+                    self.outcome.urls[index].outcome = FetchOutcome::StorageFailure {
+                        message: error.to_string(),
+                    };
+                    if let Some(observer) = &self.observer {
+                        observer.event(
+                            &self.job.domain,
+                            Some(&self.outcome.urls[index].url),
+                            "storage_failed",
+                            &error.to_string(),
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -251,7 +412,7 @@ impl<S: DatumSink> JobExecutor<S> {
             .unique_by(|(url, _)| url.clone())
             .collect();
 
-        urls.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+        urls.sort_by(|(url_a, a), (url_b, b)| b.total_cmp(a).then_with(|| url_a.cmp(url_b)));
 
         let urls: VecDeque<_> = urls
             .into_iter()
@@ -271,41 +432,36 @@ impl<S: DatumSink> JobExecutor<S> {
         self.process_urls(urls).await;
     }
 
-    async fn verify_url(&mut self, retryable_url: &RetrieableUrl) -> UrlVisit {
-        if Domain::from(retryable_url.url()) != self.job.domain {
-            return UrlVisit::Skip("Dominio fuera del trabajo asignado");
+    async fn verify_url(&self, url: &Url) -> UrlVisit {
+        let skipped = |reason: &str| {
+            UrlVisit::Stop(FetchOutcome::Skipped {
+                reason: reason.into(),
+            })
+        };
+        if Domain::from(url) != self.job.domain {
+            return skipped("outside_job_domain");
         }
-
-        if self.crawled_urls.contains(retryable_url.url()) {
-            return UrlVisit::Skip("URL ya visitada");
+        if self.crawled_urls.contains(url) {
+            return skipped("already_visited");
         }
-
-        if retryable_url.retries > self.max_url_slowdown_retry {
-            return UrlVisit::Skip("Límite de reintentos alcanzado");
+        if url.as_str().len() > MAX_URL_LEN_BYTES {
+            return skipped("url_too_long");
         }
-
-        if retryable_url.url().host_str().is_none()
-            || !matches!(retryable_url.url().scheme(), "http" | "https")
-        {
-            return UrlVisit::Skip("URL inválida o protocolo no permitido");
+        if let Err(error) = super::robot_client::validate_network_url(self.network_policy, url) {
+            return UrlVisit::Stop(self.error_outcome(error));
         }
-
-        if !self
-            .client
-            .robots_txt_manager()
-            .is_allowed(retryable_url.url())
-            .await
-        {
-            return UrlVisit::Skip("robots.txt deniega la URL o no se pudo verificar");
+        let access = self
+            .cancellable(async { Ok(self.client.robots_txt_manager().access(url).await) })
+            .await;
+        match access {
+            Err(_) => UrlVisit::Stop(FetchOutcome::Cancelled),
+            Ok(RobotAccess::Allowed) => UrlVisit::CanCrawl,
+            Ok(RobotAccess::Disallowed) => skipped("robots_disallowed"),
+            Ok(RobotAccess::Unreachable) => UrlVisit::Stop(FetchOutcome::Deferred {
+                reason: "robots_unavailable".into(),
+                retry_after_ms: None,
+            }),
         }
-
-        if let Some(port) = retryable_url.url().port() {
-            if port != 80 && port != 443 {
-                return UrlVisit::Skip("Puerto no permitido");
-            }
-        }
-
-        UrlVisit::CanCrawl
     }
 
     async fn crawl_sitemaps(&mut self) {
@@ -316,7 +472,18 @@ impl<S: DatumSink> JobExecutor<S> {
             if !self.crawled_sitemaps.contains(&site) {
                 self.crawled_sitemaps.insert(site.clone());
 
-                let sitemaps = self.client.robots_txt_manager().sitemaps(&url).await;
+                let sitemaps = self
+                    .cancellable(async {
+                        Ok(self.client.robots_txt_manager().sitemaps(&url).await)
+                    })
+                    .await;
+                let sitemaps = match sitemaps {
+                    Ok(value) => value,
+                    Err(_) => {
+                        self.record(url, FetchOutcome::Cancelled);
+                        return;
+                    }
+                };
 
                 for sitemap in sitemaps {
                     let res = self.urls_from_sitemap(sitemap, 5).await;
@@ -328,158 +495,113 @@ impl<S: DatumSink> JobExecutor<S> {
     }
 
     pub async fn process_urls(&mut self, mut urls: VecDeque<RetrieableUrl>) {
-        tracing::debug!("processing {} urls", urls.len());
         while let Some(mut retryable_url) = urls.pop_front() {
-            if self.observer.is_some() && self.attempted >= self.attempt_limit {
-                break;
-            }
             retryable_url.weighted_url.url.normalize_in_place();
-
+            let url = retryable_url.url().clone();
+            if self.cancelled() {
+                self.record(url, FetchOutcome::Cancelled);
+                continue;
+            }
+            if self.outcome.status == JobStatus::StorageFailed {
+                self.record(
+                    url,
+                    FetchOutcome::Deferred {
+                        reason: "storage_unavailable".into(),
+                        retry_after_ms: None,
+                    },
+                );
+                continue;
+            }
+            if let Some(retry_after_ms) = self.defer_remaining {
+                self.record(
+                    url,
+                    FetchOutcome::Deferred {
+                        reason: "origin_rate_limited".into(),
+                        retry_after_ms,
+                    },
+                );
+                continue;
+            }
+            if self.attempted >= self.attempt_limit {
+                self.record(
+                    url,
+                    FetchOutcome::Skipped {
+                        reason: "page_budget_exhausted".into(),
+                    },
+                );
+                continue;
+            }
             if let Some(observer) = &self.observer {
                 observer.event(
                     &self.job.domain,
-                    Some(retryable_url.url()),
+                    Some(&url),
                     "checking",
                     "Verificando robots.txt",
                 );
             }
-
-            if let UrlVisit::Skip(reason) = self.verify_url(&retryable_url).await {
-                tracing::debug!("skipping url: {}", retryable_url.url());
-                if let Some(observer) = &self.observer {
-                    observer.event(
-                        &self.job.domain,
-                        Some(retryable_url.url()),
-                        "skipped",
-                        reason,
-                    );
-                }
+            if let UrlVisit::Stop(outcome) = self.verify_url(&url).await {
+                self.record(url, outcome);
                 continue;
             }
-
-            if let Some(delay) = self
-                .client
-                .robots_txt_manager()
-                .crawl_delay(retryable_url.url())
-                .await
-            {
-                if delay > self.min_crawl_delay {
-                    // A declared robots delay is a lower bound, even when it
-                    // exceeds our adaptive backoff ceiling.
-                    self.min_crawl_delay = delay;
-                    self.max_crawl_delay = self.max_crawl_delay.max(delay);
-                }
-            }
-
+            self.attempted += 1;
             if let Some(observer) = &self.observer {
-                self.attempted += 1;
                 observer.event(
                     &self.job.domain,
-                    Some(retryable_url.url()),
+                    Some(&url),
                     "fetching",
                     "Descargando página",
                 );
             }
-            let started = self.client.now();
-            let res = self.process_url(retryable_url.url().clone()).await;
-            let fetch_time = self.client.now().duration_since(started);
-
-            if let (Some(observer), Err(error)) = (&self.observer, &res) {
-                let kind = match error {
-                    Error::FetchFailed { status_code, .. } if status_code.is_redirection() => {
-                        "redirect"
-                    }
-                    _ => "failed",
-                };
-                observer.event(
-                    &self.job.domain,
-                    Some(retryable_url.url()),
-                    kind,
-                    &error.to_string(),
-                );
-            }
-
-            if let (Some(metrics), Err(error)) = (self.client.metrics(), &res) {
-                metrics.error(error);
-            }
-            match res {
-                Ok(res) => {
-                    if !self.has_gotten_429_response {
-                        self.decrease_politeness();
-                    }
-
-                    let weight = retryable_url.weighted_url.weight;
-
-                    for new_url in res.new_urls {
-                        if new_url.host_str().is_none() {
-                            continue;
-                        }
-
-                        if new_url.root_domain() != retryable_url.url().root_domain() {
-                            continue;
-                        }
-
-                        self.wander_prioritiser.inc(new_url, weight);
-                    }
-                }
-                Err(Error::FetchFailed {
-                    status_code,
-                    headers,
-                }) if status_code == 429 => {
-                    self.has_gotten_429_response = true;
-
-                    if headers.contains_key("retry-after") {
-                        let retry_after = headers["retry-after"].to_str().ok().and_then(|s| {
-                            s.parse::<u64>().ok().map(Duration::from_secs).or_else(|| {
-                                chrono::DateTime::parse_from_rfc2822(s).ok().map(|date| {
-                                    Duration::from_secs(
-                                        (date.with_timezone(&chrono::Utc) - self.client.utc_now())
-                                            .num_seconds()
-                                            .max(0) as u64,
-                                    )
-                                })
-                            })
-                        });
-
-                        if let Some(retry_after) = retry_after {
-                            if retry_after > self.max_crawl_delay {
-                                return; // don't crawl anymore from this site
-                            }
-
-                            if let Some(observer) = &self.observer {
-                                observer.waiting(&self.job.domain, retry_after);
-                            }
-                            self.client.sleep(retry_after).await;
+            match self.process_url(url.clone()).await {
+                Ok(processed) => {
+                    for new_url in processed.new_urls {
+                        if new_url.host_str().is_some() && Domain::from(&new_url) == self.job.domain
+                        {
+                            self.wander_prioritiser
+                                .inc(new_url, retryable_url.weighted_url.weight);
                         }
                     }
+                    self.record(
+                        url,
+                        FetchOutcome::DurableSuccess {
+                            final_url: processed.final_url,
+                        },
+                    );
+                }
+                Err(outcome) => self.record(url, outcome),
+            }
+        }
+    }
 
-                    self.increase_politeness();
-                    let mut retryable_url = retryable_url;
-                    retryable_url.retries += 1;
-                    urls.push_back(retryable_url);
+    fn error_outcome(&self, error: Error) -> FetchOutcome {
+        if self.cancelled() {
+            return FetchOutcome::Cancelled;
+        }
+        match error {
+            Error::DisallowedPath => FetchOutcome::Skipped {
+                reason: "robots_disallowed".into(),
+            },
+            Error::NonPublicDestination(reason) => FetchOutcome::Skipped { reason },
+            Error::RobotsUnavailable => FetchOutcome::Deferred {
+                reason: "robots_unavailable".into(),
+                retry_after_ms: None,
+            },
+            Error::FetchFailed { status_code, .. }
+                if status_code.is_server_error()
+                    || matches!(status_code.as_u16(), 408 | 425 | 429) =>
+            {
+                FetchOutcome::Deferred {
+                    reason: format!("http_{}", status_code.as_u16()),
+                    retry_after_ms: None,
                 }
-                Err(Error::FetchFailed {
-                    status_code,
-                    headers,
-                }) if matches!(status_code.as_u16(), 301 | 302 | 303 | 307 | 308) => {
-                    if let Some(new_url) = headers
-                        .get("location")
-                        .and_then(|location| std::str::from_utf8(location.as_bytes()).ok())
-                        .and_then(|location| {
-                            Url::parse_with_base_url(&retryable_url.weighted_url.url, location).ok()
-                        })
-                    {
-                        let mut retryable_url = retryable_url;
-                        retryable_url.weighted_url.url = new_url;
-                        retryable_url.retries += 1;
-                        urls.push_back(retryable_url);
-                    }
-                }
-                Err(_) => {}
             }
-            if self.observer.is_some() {
-                self.politeness_delay(fetch_time).await;
-            }
+            Error::ResponseBodyReadFailed | Error::Anyhow(_) => FetchOutcome::Deferred {
+                reason: error.to_string(),
+                retry_after_ms: None,
+            },
+            _ => FetchOutcome::PermanentFailure {
+                reason: error.to_string(),
+            },
         }
     }
 
@@ -526,54 +648,247 @@ impl<S: DatumSink> JobExecutor<S> {
             .collect()
     }
 
-    async fn process_url(&mut self, url: Url) -> Result<ProcessedUrl> {
-        let datum = self.polite_crawl_url(url.clone()).await?;
-        {
-            let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "sink");
-            self.writer.write(datum.clone()).await?;
-        }
-        let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "parse");
-
-        match Html::parse(&datum.body, datum.url.as_str()) {
-            Ok(html) => {
-                let root_domain = datum.url.root_domain();
-                let new_urls = self
-                    .new_urls(&html)
-                    .into_iter()
-                    .filter(|new_url| new_url.root_domain() == root_domain)
-                    .take(MAX_OUTGOING_URLS_PER_PAGE)
-                    .collect();
-                Ok(ProcessedUrl { new_urls })
+    async fn process_url(
+        &mut self,
+        mut url: Url,
+    ) -> std::result::Result<ProcessedUrl, FetchOutcome> {
+        let mut visited = HashSet::new();
+        let mut hops = 0;
+        let mut retries = 0;
+        loop {
+            if self.cancelled() {
+                return Err(FetchOutcome::Cancelled);
             }
-            Err(_) => Err(Error::InvalidHtml),
+            if let UrlVisit::Stop(outcome) = self.verify_url(&url).await {
+                return Err(outcome);
+            }
+            let crawl_delay = self
+                .cancellable(async { Ok(self.client.robots_txt_manager().crawl_delay(&url).await) })
+                .await
+                .map_err(|_| FetchOutcome::Cancelled)?;
+            if let Some(delay) = crawl_delay {
+                self.min_crawl_delay = self.min_crawl_delay.max(delay);
+                self.max_crawl_delay = self.max_crawl_delay.max(delay);
+            }
+            visited.insert(url.clone());
+            let started = self.client.now();
+            let telemetry_before = self.telemetry_time;
+            let response = self.fetch_with_https_priority(url.clone()).await;
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => {
+                    let elapsed = self
+                        .client
+                        .now()
+                        .duration_since(started)
+                        .saturating_sub(self.telemetry_time.saturating_sub(telemetry_before));
+                    if let Some(metrics) = self.client.metrics() {
+                        metrics.error(&error);
+                    }
+                    self.politeness_delay(elapsed).await;
+                    return Err(self.error_outcome(error));
+                }
+            };
+            let (fetched_url, response) = response;
+            let status = response.status();
+            let headers = response.headers().clone();
+            let fetched = if status == reqwest::StatusCode::OK {
+                match self.check_headers(&response) {
+                    Ok(payload_type) => self
+                        .cancellable(self.client.body(response))
+                        .await
+                        .map(|body| (body, payload_type)),
+                    Err(error) => Err(error),
+                }
+            } else {
+                Err(Error::FetchFailed {
+                    status_code: status,
+                    headers: headers.clone(),
+                })
+            };
+            let elapsed = self
+                .client
+                .now()
+                .duration_since(started)
+                .saturating_sub(self.telemetry_time.saturating_sub(telemetry_before));
+            if let Some(observer) = &self.observer {
+                observer.response(&self.job.domain, status.as_u16());
+            }
+            if let Err(error) = &fetched {
+                if let Some(metrics) = self.client.metrics() {
+                    metrics.error(error);
+                }
+            }
+            if matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
+                self.politeness_delay(elapsed).await;
+                let mut location = headers
+                    .get("location")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| fetched_url.join(value).ok())
+                    .ok_or_else(|| FetchOutcome::PermanentFailure {
+                        reason: "invalid_redirect".into(),
+                    })?;
+                location.normalize_in_place();
+                if visited.contains(&location) {
+                    return Err(FetchOutcome::PermanentFailure {
+                        reason: "redirect_cycle".into(),
+                    });
+                }
+                if hops >= self.max_redirect_hops {
+                    return Err(FetchOutcome::PermanentFailure {
+                        reason: "redirect_limit".into(),
+                    });
+                }
+                if let UrlVisit::Stop(outcome) = self.verify_url(&location).await {
+                    return Err(outcome);
+                }
+                hops += 1;
+                self.outcome.counters.redirect_hops += 1;
+                if let Some(observer) = &self.observer {
+                    observer.redirect(&self.job.domain, &location);
+                }
+                url = location;
+                continue;
+            }
+            if status.as_u16() == 429 {
+                self.has_gotten_429_response = true;
+                self.increase_politeness();
+                self.politeness_delay(elapsed).await;
+                let retry_after = headers
+                    .get("retry-after")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| {
+                        value
+                            .parse::<u64>()
+                            .ok()
+                            .map(Duration::from_secs)
+                            .or_else(|| {
+                                chrono::DateTime::parse_from_rfc2822(value)
+                                    .ok()
+                                    .map(|date| {
+                                        Duration::from_secs(
+                                            (date.with_timezone(&chrono::Utc)
+                                                - self.client.utc_now())
+                                            .num_seconds()
+                                            .max(0)
+                                                as u64,
+                                        )
+                                    })
+                            })
+                    });
+                if retries >= self.max_url_slowdown_retry
+                    || retry_after.is_some_and(|delay| delay > self.max_crawl_delay)
+                {
+                    let retry_after_ms =
+                        retry_after.map(|delay| delay.as_millis().min(u64::MAX as u128) as u64);
+                    self.defer_remaining = Some(retry_after_ms);
+                    return Err(FetchOutcome::Deferred {
+                        reason: "http_429".into(),
+                        retry_after_ms,
+                    });
+                }
+                if let Some(delay) = retry_after {
+                    if let Some(observer) = &self.observer {
+                        observer.waiting(&self.job.domain, delay);
+                    }
+                    self.sleep(delay).await;
+                }
+                retries += 1;
+                continue;
+            }
+            let (body, payload_type) = match fetched {
+                Ok(value) => value,
+                Err(error) => {
+                    self.politeness_delay(elapsed).await;
+                    return Err(self.error_outcome(error));
+                }
+            };
+            if self.cancelled() {
+                return Err(FetchOutcome::Cancelled);
+            }
+            let datum = CrawlDatum {
+                url: fetched_url.clone(),
+                body,
+                payload_type,
+                fetch_time_ms: elapsed.as_millis() as u64,
+                date: self.client.utc_now(),
+            };
+            {
+                let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "sink");
+                self.writer.write(datum.clone()).await.map_err(|error| {
+                    FetchOutcome::StorageFailure {
+                        message: error.to_string(),
+                    }
+                })?;
+            }
+            self.crawled_urls.insert(url.clone());
+            self.crawled_urls.insert(fetched_url.clone());
+            let new_urls = {
+                let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "parse");
+                Html::parse(&datum.body, datum.url.as_str())
+                    .ok()
+                    .map(|html| {
+                        self.new_urls(&html)
+                            .into_iter()
+                            .filter(|new_url| Domain::from(new_url) == self.job.domain)
+                            .take(MAX_OUTGOING_URLS_PER_PAGE)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            if !self.has_gotten_429_response {
+                self.decrease_politeness();
+            }
+            self.politeness_delay(elapsed).await;
+            return Ok(ProcessedUrl {
+                new_urls,
+                final_url: fetched_url,
+            });
         }
     }
 
-    async fn fetch(&self, url: Url) -> Result<reqwest::Response> {
-        self.client
-            .get(url)
-            .await?
-            .send()
-            .await
-            .map_err(|e| Error::from(anyhow!(e)))
+    async fn fetch(&mut self, url: Url) -> Result<reqwest::Response> {
+        if self.cancelled() {
+            return Err(anyhow!("cancelled").into());
+        }
+        let request = self.cancellable(self.client.get(url.clone())).await?;
+        if self.cancelled() {
+            return Err(anyhow!("cancelled").into());
+        }
+        self.outcome.counters.page_http_attempts += 1;
+        if let Some(observer) = &self.observer {
+            let observed_at = self.client.now();
+            observer.http_attempt(&self.job.domain, &url);
+            self.telemetry_time += self.client.now().duration_since(observed_at);
+        }
+        self.cancellable(request.send()).await
     }
 
-    async fn fetch_with_https_priority(&self, url: Url) -> Result<reqwest::Response> {
+    async fn fetch_with_https_priority(&mut self, url: Url) -> Result<(Url, reqwest::Response)> {
         if url.scheme() == "http" {
             let mut https = url.clone();
             https
                 .set_scheme("https")
                 .map_err(|_| anyhow!("set scheme on url failed"))?;
-
-            match self.fetch(https).await {
-                Ok(res) => Ok(res),
+            match self.fetch(https.clone()).await {
+                Ok(res) => Ok((https, res)),
+                Err(
+                    error @ (Error::DisallowedPath
+                    | Error::RobotsUnavailable
+                    | Error::NonPublicDestination(_)),
+                ) => Err(error),
+                Err(error) if self.cancelled() => Err(error),
                 Err(_) => {
-                    self.client.sleep(self.delay_duration()).await;
-                    self.fetch(url.clone()).await
+                    self.sleep(self.delay_duration()).await;
+                    self.fetch(url.clone())
+                        .await
+                        .map(|response| (url, response))
                 }
             }
         } else {
-            self.fetch(url.clone()).await
+            self.fetch(url.clone())
+                .await
+                .map(|response| (url, response))
         }
     }
 
@@ -604,7 +919,7 @@ impl<S: DatumSink> JobExecutor<S> {
         if let Some(observer) = &self.observer {
             observer.waiting(&self.job.domain, delay);
         }
-        self.client.sleep(delay).await;
+        self.sleep(delay).await;
     }
 
     fn check_headers(&self, res: &reqwest::Response) -> Result<warc::PayloadType> {
@@ -633,130 +948,42 @@ impl<S: DatumSink> JobExecutor<S> {
         }
     }
 
-    fn redirect_datum(
-        &self,
-        res: &reqwest::Response,
-        url: &Url,
-        payload_type: warc::PayloadType,
-    ) -> Result<Option<CrawlDatum>> {
-        let status_code = res.status().as_u16();
-
-        if status_code == 301 || status_code == 302 {
-            let location = res
-                .headers()
-                .get("location")
-                .ok_or(Error::InvalidRedirect)?;
-
-            let location = location.to_str().map_err(|_| Error::InvalidRedirect)?;
-
-            let url = Url::parse(location)
-                .or_else(|_| url.join(location))
-                .map_err(|_| Error::InvalidRedirect)?;
-
-            Ok(Some(CrawlDatum {
-                url,
-                payload_type,
-                body: String::new(),
-                fetch_time_ms: 0,
-                date: self.client.utc_now(),
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-
-    async fn unpolite_crawl_url(&mut self, url: Url) -> Result<CrawlDatum> {
-        tracing::debug!("crawling url: {}", url);
-
-        let res = self.fetch_with_https_priority(url.clone()).await?;
-
-        let payload_type = self.check_headers(&res);
-        let status_code = res.status();
-        if let Some(observer) = &self.observer {
-            observer.response(&self.job.domain, status_code.as_u16());
-        }
-        let mut res_url = res.url().clone();
-
-        if self.observer.is_none() {
-            if let Ok(payload_type) = payload_type {
-                if let Ok(Some(datum)) = self.redirect_datum(&res, &url, payload_type) {
-                    return Ok(datum);
-                }
-            }
-        }
-        if status_code != reqwest::StatusCode::OK {
-            return Err(Error::FetchFailed {
-                status_code,
-                headers: res.headers().clone(),
-            });
-        }
-
-        let body = self.client.body(res).await;
-
-        self.crawled_urls.insert(url.clone());
-
-        res_url.normalize_in_place();
-
-        self.crawled_urls.insert(res_url.clone());
-
-        Ok(CrawlDatum {
-            url: res_url,
-            body: body?,
-            payload_type: payload_type?,
-            fetch_time_ms: 0,
-            date: self.client.utc_now(),
-        })
-    }
-
-    async fn polite_crawl_url(&mut self, url: Url) -> Result<CrawlDatum> {
-        let mut url = url;
-        url.normalize_in_place();
-
-        if self.crawled_urls.contains(&url) {
-            return Err(Error::from(anyhow!("url already crawled: {}", url)));
-        }
-
-        let start = self.client.now();
-        let res = self.unpolite_crawl_url(url).await;
-        let fetch_time = self.client.now().duration_since(start);
-        if self.observer.is_none() {
-            self.politeness_delay(fetch_time).await;
-        }
-        let mut datum = res?;
-        datum.fetch_time_ms = fetch_time.as_millis() as u64;
-        Ok(datum)
-    }
-
     async fn urls_from_sitemap(&mut self, sitemap: Url, max_depth: usize) -> Vec<DatedUrl> {
         let mut stack = vec![(sitemap, 0)];
         let mut urls = vec![];
 
         while let Some((url, depth)) = stack.pop() {
+            if self.stopped() {
+                break;
+            }
             if depth >= max_depth {
                 continue;
             }
 
-            let res = self.fetch_with_https_priority(url).await;
-            self.client.sleep(self.delay_duration()).await;
-
-            if res.is_err() {
+            let response = self.fetch_with_https_priority(url.clone()).await;
+            self.sleep(self.delay_duration()).await;
+            let (_, response) = match response {
+                Ok(value) => value,
+                Err(error) => {
+                    self.record(url, self.error_outcome(error));
+                    continue;
+                }
+            };
+            if response.status() != reqwest::StatusCode::OK {
+                let error = Error::FetchFailed {
+                    status_code: response.status(),
+                    headers: response.headers().clone(),
+                };
+                self.record(url, self.error_outcome(error));
                 continue;
             }
-
-            let res = res.unwrap();
-
-            if res.status() != reqwest::StatusCode::OK {
-                continue;
-            }
-
-            let body = self.client.body(res).await;
-
-            if body.is_err() {
-                continue;
-            }
-
-            let body = body.unwrap();
-
+            let body = match self.cancellable(self.client.body(response)).await {
+                Ok(body) => body,
+                Err(error) => {
+                    self.record(url, self.error_outcome(error));
+                    continue;
+                }
+            };
             let entries = parse_sitemap(&body);
 
             for entry in entries {
@@ -774,3 +1001,7 @@ impl<S: DatumSink> JobExecutor<S> {
         urls
     }
 }
+
+#[cfg(test)]
+#[path = "worker_tests.rs"]
+mod tests;

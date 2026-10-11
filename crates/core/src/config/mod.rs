@@ -391,10 +391,28 @@ pub struct UserAgent {
     pub token: String,
 }
 
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CrawlNetworkPolicy {
+    #[default]
+    PublicOnly,
+    AllowPrivate,
+}
+
+pub fn default_max_redirect_hops() -> u8 {
+    10
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct CrawlerConfig {
     pub num_worker_threads: usize,
     pub user_agent: UserAgent,
+
+    #[serde(default)]
+    pub network_policy: CrawlNetworkPolicy,
+
+    #[serde(default = "default_max_redirect_hops")]
+    pub max_redirect_hops: u8,
 
     #[serde(default = "defaults::Crawler::robots_txt_cache_sec")]
     pub robots_txt_cache_sec: u64,
@@ -431,6 +449,8 @@ impl CrawlerConfig {
                 full: "test".to_string(),
                 token: "test".to_string(),
             },
+            network_policy: CrawlNetworkPolicy::default(),
+            max_redirect_hops: default_max_redirect_hops(),
             robots_txt_cache_sec: defaults::Crawler::robots_txt_cache_sec(),
             min_politeness_factor: defaults::Crawler::min_politeness_factor(),
             start_politeness_factor: defaults::Crawler::start_politeness_factor(),
@@ -508,6 +528,10 @@ pub struct LiveCrawlerConfig {
     pub host_centrality_path: PathBuf,
     pub user_agent: UserAgent,
     pub num_worker_threads: usize,
+    #[serde(default)]
+    pub network_policy: CrawlNetworkPolicy,
+    #[serde(default = "default_max_redirect_hops")]
+    pub max_redirect_hops: u8,
     #[serde(default)]
     pub check_intervals: CheckIntervals,
     #[serde(default)]

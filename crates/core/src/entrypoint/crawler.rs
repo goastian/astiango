@@ -26,7 +26,7 @@ use crate::{
 pub async fn worker(config: config::CrawlerConfig) -> Result<()> {
     let crawler = Crawler::new(config).await?;
 
-    crawler.run().await;
+    crawler.run().await?;
 
     Ok(())
 }

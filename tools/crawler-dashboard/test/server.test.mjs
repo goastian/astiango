@@ -79,3 +79,17 @@ test("static files support conditional requests and reject encoded path traversa
     assert.equal(status, 403);
   }
 });
+
+test("status preserves additive C02 counters and explicit site outcomes", async (t) => {
+  const { base, statePath } = await setup(t);
+  const snapshot = {
+    schema_version: 1,
+    pid: process.pid,
+    counters: { downloaded: 2, attempted: 4, page_http_attempts: 8, redirect_hops: 3, useful_pages: 2, failed: 0, deferred: 1, cancelled: 0, storage_failed: 1 },
+    sites: [{ host: "example.test", status: "storage_failed", page_http_attempts: 8, useful_pages: 2, storage_failed: 1 }],
+  };
+  await writeFile(statePath, JSON.stringify(snapshot));
+  const response = await fetch(`${base}/api/status`);
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).snapshot, snapshot);
+});

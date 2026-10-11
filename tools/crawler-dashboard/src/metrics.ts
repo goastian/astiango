@@ -20,6 +20,9 @@ export interface SiteOutcome {
   downloaded: number;
   failed: number;
   skipped: number;
+  deferred: number;
+  cancelled: number;
+  storageFailed: number;
   total: number;
 }
 
@@ -89,16 +92,20 @@ export function buildHistoryBars(
   return bars;
 }
 
-/** Success is measured only among downloaded pages and recorded failures. */
+/** Deferred and cancelled work is not a definitive success or failure. */
 export function summarizeOutcomes(counters: Snapshot["counters"]) {
   const downloaded = nonnegative(counters.downloaded);
   const failed = nonnegative(counters.failed);
   const skipped = nonnegative(counters.skipped);
-  const settled = downloaded + failed;
+  const storageFailed = nonnegative(counters.storage_failed ?? 0);
+  const settled = downloaded + failed + storageFailed;
   return {
     downloaded,
     failed,
     skipped,
+    storageFailed,
+    deferred: nonnegative(counters.deferred ?? 0),
+    cancelled: nonnegative(counters.cancelled ?? 0),
     settled,
     successRate: settled > 0 ? (downloaded / settled) * 100 : null,
   };
@@ -106,6 +113,12 @@ export function summarizeOutcomes(counters: Snapshot["counters"]) {
 
 function issueCategory(event: CrawlEvent): [string, string] {
   const message = event.message.toLowerCase();
+  if (event.kind === "storage_failed" || event.kind === "site_storage_failed")
+    return ["storage", "Fallos de almacenamiento"];
+  if (event.kind === "deferred" || event.kind === "site_deferred")
+    return ["deferred", "Trabajo aplazado"];
+  if (event.kind === "cancelled" || event.kind === "site_cancelled")
+    return ["cancelled", "Trabajo cancelado"];
   if (message.includes("robots.txt"))
     return ["robots", "Restricciones de robots.txt"];
   // A skipped URL can retain a previous HTTP status in the observer snapshot.
@@ -156,12 +169,18 @@ export function buildSiteOutcomes(sites: Site[], limit = 8): SiteOutcome[] {
       const downloaded = nonnegative(site.pages_downloaded);
       const failed = nonnegative(site.failed);
       const skipped = nonnegative(site.skipped);
+      const deferred = nonnegative(site.deferred ?? 0);
+      const cancelled = nonnegative(site.cancelled ?? 0);
+      const storageFailed = nonnegative(site.storage_failed ?? 0);
       return {
         host: site.host,
         downloaded,
         failed,
         skipped,
-        total: downloaded + failed + skipped,
+        deferred,
+        cancelled,
+        storageFailed,
+        total: downloaded + failed + skipped + deferred + cancelled + storageFailed,
       };
     })
     .filter((site) => site.total > 0)
