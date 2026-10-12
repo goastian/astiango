@@ -8,7 +8,8 @@ const { chromium } = await import(
   process.env.CRAWLER_PLAYWRIGHT_MODULE ||
     new URL("../../../frontend/node_modules/playwright/index.mjs", import.meta.url).href
 );
-const base = process.env.CRAWLER_LIVE_URL || "http://127.0.0.1:3100/";
+const base = process.env.CRAWLER_LIVE_URL || "http://127.0.0.1:3101/";
+const expectBenchmark = process.env.CRAWLER_EXPECT_BENCHMARK === "1";
 const expectPipeline = process.env.CRAWLER_EXPECT_PIPELINE === "1";
 const expectExtraction = expectPipeline || process.env.CRAWLER_EXPECT_EXTRACTION === "1";
 const expectBody = expectExtraction || process.env.CRAWLER_EXPECT_BODY === "1";
@@ -29,8 +30,11 @@ if (expectExtraction) assert.ok(initial.snapshot.extraction, "the operational cr
 if (process.env.CRAWLER_EXPECTED_PID)
   assert.equal(initial.snapshot.pid, Number(process.env.CRAWLER_EXPECTED_PID));
 const benchmark = await fetch(endpoint("/api/benchmarks"));
-assert.equal(benchmark.status, 404);
-assert.equal((await benchmark.json()).code, "BENCHMARK_DISABLED");
+assert.equal(benchmark.status, expectBenchmark ? 200 : 404);
+const benchmarkData = await benchmark.json();
+if (expectBenchmark) assert.ok(benchmarkData.report);
+else assert.equal(benchmarkData.code, "BENCHMARK_DISABLED");
+assert.equal(initial.snapshot.sites.some((site) => site.host.endsWith(".test")), false);
 await mkdir(dirname(output), { recursive: true });
 
 const browser = await chromium.launch({
@@ -186,7 +190,7 @@ try {
   }
   const visibleAgeMs = Math.max(0, Date.now() - Date.parse(stats.last_published_at));
   assert.ok(visibleAgeMs <= 5000, `visible telemetry is ${visibleAgeMs} ms old`);
-  assert.equal(await page.locator("#banco-c01").count(), 0);
+  assert.equal(await page.locator("#banco-c01").count(), expectBenchmark ? 1 : 0);
   const desktopOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   assert.equal(desktopOverflow, false);
   await page.getByRole("button", { name: "Reanudar lectura", exact: true }).click();
@@ -213,7 +217,7 @@ try {
     ...(expectPipeline ? { pipeline_verified: rendered.snapshot.pipeline } : {}),
     counters_verified: rendered.snapshot.counters,
     retained_events: rendered.snapshot.recent_events.length,
-    benchmark_disabled: true, fixtures_visible: false,
+    benchmark_disabled: !expectBenchmark, operational_fixture_sites: false,
     desktop: { width: 1440, overflow: desktopOverflow, screenshot: `${output}-desktop.png` },
     mobile: { width: 390, overflow: mobileOverflow, screenshot: `${output}-mobile.png` },
     page_errors: errors, blocked_requests: blockedRequests,

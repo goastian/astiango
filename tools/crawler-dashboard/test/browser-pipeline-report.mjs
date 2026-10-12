@@ -7,7 +7,7 @@ import { isBenchmarkReport } from "../benchmark-report.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const reportPath = resolve(process.env.CRAWLER_PIPELINE_REPORT || `${root}/data/crawler-pipeline-bench/report.json`);
 const persistentBase = process.env.CRAWLER_PIPELINE_URL;
-const output = `${root}/data/crawler-c07-${persistentBase ? "persistent-bank" : "benchmark"}-dashboard`;
+const output = process.env.CRAWLER_PIPELINE_OUTPUT || `${root}/data/crawler-c07-${persistentBase ? "persistent-bank" : "benchmark"}-dashboard`;
 const report = JSON.parse(await readFile(reportPath, "utf8"));
 assert.equal(isBenchmarkReport(report), true);
 assert.equal(report.acceptance.passed, true);
