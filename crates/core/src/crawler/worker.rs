@@ -397,7 +397,7 @@ impl<S: DatumSink> JobExecutor<S> {
             .into_iter()
             .chain(self.sitemap_urls.drain().map(|url| (url.clone(), 0.0)))
             .map(|(mut url, score)| {
-                url.normalize_in_place();
+                url.set_fragment(None);
                 (url, score)
             })
             .filter(|(url, _)| !self.crawled_urls.contains(url))
@@ -412,7 +412,7 @@ impl<S: DatumSink> JobExecutor<S> {
             .into_iter()
             .map(|(url, _)| url)
             .map(|mut url| {
-                url.normalize_in_place();
+                url.set_fragment(None);
                 url
             })
             .filter(|url| !self.crawled_urls.contains(url))
@@ -490,7 +490,7 @@ impl<S: DatumSink> JobExecutor<S> {
 
     pub async fn process_urls(&mut self, mut urls: VecDeque<RetrieableUrl>) {
         while let Some(mut retryable_url) = urls.pop_front() {
-            retryable_url.weighted_url.url.normalize_in_place();
+            retryable_url.weighted_url.url.set_fragment(None);
             let url = retryable_url.url().clone();
             if self.cancelled() {
                 self.record(url, FetchOutcome::Cancelled);
@@ -638,6 +638,18 @@ impl<S: DatumSink> JobExecutor<S> {
         &mut self,
         mut url: Url,
     ) -> std::result::Result<ProcessedUrl, FetchOutcome> {
+        let requested_url = url.clone();
+        let fetch_id = self
+            .writer
+            .reserve_url(&requested_url)
+            .await
+            .map_err(|error| FetchOutcome::StorageFailure {
+                message: error.to_string(),
+            })?
+            .ok_or_else(|| FetchOutcome::Skipped {
+                reason: "URL already durable, leased or outside the origin budget".into(),
+            })?;
+        let mut redirects = Vec::new();
         let mut visited = HashSet::new();
         let mut hops = 0;
         let mut retries = 0;
@@ -686,6 +698,11 @@ impl<S: DatumSink> JobExecutor<S> {
                 }
             };
             let (fetched_url, response) = response;
+            let captured_response = crate::capture::HttpResponse::received(
+                &response,
+                &fetched_url,
+                self.client.utc_now(),
+            );
             let status = response.status();
             let headers = response.headers().clone();
             let admitted = self
@@ -726,7 +743,7 @@ impl<S: DatumSink> JobExecutor<S> {
                     .ok_or_else(|| FetchOutcome::PermanentFailure {
                         reason: "invalid_redirect".into(),
                     })?;
-                location.normalize_in_place();
+                location.set_fragment(None);
                 if visited.contains(&location) {
                     return Err(FetchOutcome::PermanentFailure {
                         reason: "redirect_cycle".into(),
@@ -740,6 +757,7 @@ impl<S: DatumSink> JobExecutor<S> {
                 if let UrlVisit::Stop(outcome) = self.verify_url(&location).await {
                     return Err(outcome);
                 }
+                redirects.push(captured_response);
                 hops += 1;
                 self.outcome.counters.redirect_hops += 1;
                 if let Some(observer) = &self.observer {
@@ -804,8 +822,39 @@ impl<S: DatumSink> JobExecutor<S> {
             if self.cancelled() {
                 return Err(FetchOutcome::Cancelled);
             }
-            let (body, body_lease) = body.into_parts();
+            let (body, payload, charset, decoded_limit_bytes, body_lease) =
+                body.into_capture_parts();
+            let robots =
+                crate::capture::Robots::from_headers(&captured_response, self.client.agent_token());
+            let transformations = captured_response.transformations();
+            let capture = crate::capture::Capture {
+                metadata: crate::capture::Metadata {
+                    schema_version: crate::capture::VERSION,
+                    identity_version: crate::capture::IDENTITY_VERSION,
+                    fetch_id,
+                    requested_url: crate::capture::url_key(&requested_url).map_err(|e| {
+                        FetchOutcome::PermanentFailure {
+                            reason: e.to_string(),
+                        }
+                    })?,
+                    response: captured_response,
+                    redirects,
+                    payload_sha256: String::new(),
+                    payload_bytes: payload.len(),
+                    decoded_bytes: body.len(),
+                    charset,
+                    decoded_limit_bytes,
+                    user_agent: self.client.agent_token().into(),
+                    robots,
+                    transformations,
+                    fetch_time_ms: elapsed.as_millis() as u64,
+                    discovery_urls: Vec::new(),
+                    internal_urls: Vec::new(),
+                },
+                payload,
+            };
             let datum = CrawlDatum {
+                capture: Some(capture),
                 url: fetched_url.clone(),
                 body,
                 payload_type,
@@ -838,7 +887,7 @@ impl<S: DatumSink> JobExecutor<S> {
             let new_urls = page
                 .extraction
                 .as_mut()
-                .map(|value| std::mem::take(&mut value.internal_urls))
+                .map(|value| value.internal_urls.clone())
                 .unwrap_or_default();
             {
                 let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "sink");

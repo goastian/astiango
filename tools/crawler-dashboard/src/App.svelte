@@ -9,6 +9,7 @@
   import ExtractionStatus from "./ExtractionStatus.svelte";
   import PipelineStatus from "./PipelineStatus.svelte";
   import SpoolStatus from "./SpoolStatus.svelte";
+  import CaptureFrontierStatus from "./CaptureFrontierStatus.svelte";
   import {
     buildHistoryBars,
     summarizeOutcomes,
@@ -564,7 +565,7 @@
           <span class="chart-zero">0</span>
         </div>
         <div class="chart-caption">
-          <span>Antes de comprimir</span><span>Últimos {windowMinutes} min</span
+          <span>{snapshot?.spool?.capture_records !== undefined ? "Vista decodificada" : "Antes de comprimir"}</span><span>Últimos {windowMinutes} min</span
           >
         </div>
       </article>
@@ -686,6 +687,7 @@
     <BodyStatus stats={snapshot?.body} readError={!!error} stale={stale && activeProcess} />
     <ExtractionStatus stats={snapshot?.extraction} readError={!!error} stale={stale && activeProcess} />
     <PipelineStatus stats={snapshot?.pipeline} readError={!!error} stale={stale && activeProcess} />
+    <CaptureFrontierStatus frontier={snapshot?.frontier_db} spool={snapshot?.spool} />
     <SpoolStatus stats={snapshot?.spool} readError={!!error} stale={stale && activeProcess} />
     <div class="analysis-grid">
       <section class="panel issues-panel" aria-labelledby="issues-heading">

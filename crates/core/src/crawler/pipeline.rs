@@ -516,7 +516,7 @@ pub struct PipelineStats {
 impl Pipeline {
     pub(crate) async fn prepare_page(
         &self,
-        datum: CrawlDatum,
+        mut datum: CrawlDatum,
         body_lease: BodyLease,
         admission: Lease,
         extractor: super::extraction::Extractor,
@@ -525,9 +525,9 @@ impl Pipeline {
         requested_url: url::Url,
     ) -> Result<PreparedPage, PipelineError> {
         self.parse
-            .run(datum.body.len(), move || {
-                let extraction = extractor
-                    .parse(
+            .run(datum.memory_bytes(), move || {
+                let mut extraction = extractor
+                    .parse_capture(
                         &datum.body,
                         &datum.url,
                         super::extraction::ExtractionContext {
@@ -535,8 +535,40 @@ impl Pipeline {
                             crawled_urls: &visited,
                             requested_url: &requested_url,
                         },
+                        datum
+                            .capture
+                            .as_ref()
+                            .map_or(crate::capture::DEFAULT_AGENT, |capture| {
+                                capture.metadata.user_agent.as_str()
+                            }),
                     )
                     .ok();
+                if let Some(capture) = datum.capture.as_mut() {
+                    capture.metadata.payload_sha256 = crate::capture::sha256(&capture.payload);
+                    if let Some(value) = extraction.as_mut() {
+                        for directive in &value.robots_directives {
+                            capture
+                                .metadata
+                                .robots
+                                .add(directive.clone(), &capture.metadata.user_agent);
+                        }
+                        capture.metadata.robots.directives_seen += value
+                            .robots_directives_seen
+                            .saturating_sub(value.robots_directives.len() as u64);
+                        capture.metadata.robots.directives_truncated |=
+                            value.robots_directives_truncated;
+                        capture.metadata.robots.no_index |= value.no_index;
+                        capture.metadata.robots.no_follow |= value.no_follow;
+                        value.no_index = capture.metadata.robots.no_index;
+                        value.no_follow = capture.metadata.robots.no_follow;
+                        if value.no_follow {
+                            value.discovery_urls.clear();
+                            value.internal_urls.clear();
+                        }
+                        capture.metadata.discovery_urls = value.discovery_urls.clone();
+                        capture.metadata.internal_urls = value.internal_urls.clone();
+                    }
+                }
                 PreparedPage {
                     datum,
                     extraction,

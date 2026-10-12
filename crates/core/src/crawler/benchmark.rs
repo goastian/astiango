@@ -168,6 +168,7 @@ impl BenchSink {
                 payload_type: Some(datum.payload_type),
             },
             metadata: warc::Metadata {
+                capture: None,
                 fetch_time_ms: datum.fetch_time_ms,
             },
         })?;

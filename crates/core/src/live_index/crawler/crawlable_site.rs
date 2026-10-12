@@ -199,6 +199,7 @@ impl<B: IndexBackend> crawler::DatumSink for LiveIndexSink<'_, B> {
             .index(
                 pending
                     .iter()
+                    .filter(|datum| datum.indexing_allowed())
                     .cloned()
                     .map(IndexableWebpage::from)
                     .collect(),
@@ -445,12 +446,34 @@ mod tests {
 
     fn datum() -> crawler::CrawlDatum {
         crawler::CrawlDatum {
+            capture: None,
             url: Url::parse("https://example.com/page").unwrap(),
             payload_type: crate::warc::PayloadType::Html,
             body: "<html><body>live fixture</body></html>".into(),
             fetch_time_ms: 4,
             date: chrono::Utc::now(),
         }
+    }
+
+    #[tokio::test]
+    async fn capture_noindex_is_acknowledged_without_indexing_the_payload() {
+        use crate::crawler::DatumSink;
+        let backend = FakeIndex::default();
+        let sink = LiveIndexSink::new(&backend);
+        let mut page = datum();
+        page.capture = Some(crate::capture::fixture(
+            &page.url,
+            uuid::Uuid::new_v4().to_string(),
+            page.body.as_bytes().to_vec(),
+            vec![crate::capture::Header {
+                name: "x-robots-tag".into(),
+                value_hex: crate::capture::hex(b"noindex"),
+            }],
+        ));
+        sink.write(page).await.unwrap();
+        sink.checkpoint().await.unwrap();
+        assert_eq!(*backend.acknowledged.lock().await, vec![0]);
+        assert!(sink.pending.lock().await.is_empty());
     }
 
     #[tokio::test]

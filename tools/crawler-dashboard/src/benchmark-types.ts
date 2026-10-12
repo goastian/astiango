@@ -171,3 +171,12 @@ export interface SpoolBenchmarkReport {
     compressed_bytes_per_page: number; sync_calls: number; files: number; rss_peak_bytes: number }>;
   checks: Array<{ name: string; repetition: number; passed: boolean }>;
 }
+
+export interface CaptureFrontierBenchmarkReport {
+  kind: "crawler_capture_frontier_benchmark";
+  schema_version: number; generated_at: string;
+  configuration: { smoke: boolean; repetitions: number; cache_bytes: number; batch_size: number; origins: number; sizes: number[] };
+  summaries: Array<{ urls: number; mode: "redb" | "json"; repetitions: number; metrics: Record<string, Distribution> }>;
+  comparisons: Array<{ urls: number; peak_rss_bytes_reduction_pct: number; update_cpu_ms_reduction_pct: number; update_ms_reduction_pct: number }>;
+  acceptance: { passed: boolean; crash_checks: number; capture_checks: number; rss_growth_bytes: number };
+}

@@ -52,8 +52,7 @@ enum Message {
 
 fn record_bytes(datum: &CrawlDatum) -> usize {
     datum
-        .body
-        .len()
+        .memory_bytes()
         .saturating_add(datum.url.as_str().len())
         .saturating_add(8192)
 }
@@ -216,18 +215,18 @@ async fn writer_task(
         match message {
             Message::Crawl(page, mut lease, reply) => {
                 lease.start();
-                let mut bytes = page.datum.body.len();
+                let mut bytes = page.datum.memory_bytes();
                 let mut batch = vec![(page, lease, reply)];
                 let deadline =
                     tokio::time::Instant::now() + Duration::from_millis(config.commit_wait_ms);
                 while batch.len() < config.commit_records && failure.is_none() {
                     match tokio::time::timeout_at(deadline, rx.recv()).await {
                         Ok(Some(Message::Crawl(page, mut lease, reply)))
-                            if bytes.saturating_add(page.datum.body.len())
+                            if bytes.saturating_add(page.datum.memory_bytes())
                                 <= pipeline.stats().storage.max_bytes =>
                         {
                             lease.start();
-                            bytes += page.datum.body.len();
+                            bytes += page.datum.memory_bytes();
                             batch.push((page, lease, reply));
                         }
                         Ok(Some(message)) => {

@@ -67,6 +67,7 @@ fn bodies(config: &Config) -> Result<Vec<String>> {
 }
 fn page(body: &str, index: usize) -> CrawlDatum {
     CrawlDatum {
+        capture: None,
         url: url::Url::parse(&format!(
             "https://origin-{:03}.spool.test/page/{index}",
             index % 128
@@ -230,6 +231,7 @@ pub async fn run(config: Config) -> Result<Value> {
                     payload_type: Some(datum.payload_type),
                 },
                 metadata: warc::Metadata {
+                    capture: None,
                     fetch_time_ms: datum.fetch_time_ms,
                 },
             })?;

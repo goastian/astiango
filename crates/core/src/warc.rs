@@ -34,6 +34,23 @@ use proptest::prelude::*;
 
 use tracing::{debug, trace};
 
+pub mod capture;
+
+impl WarcRecord {
+    pub fn indexing_allowed(&self) -> bool {
+        self.metadata
+            .capture
+            .as_ref()
+            .is_none_or(|capture| !capture.robots.no_index)
+    }
+    pub fn links_allowed(&self) -> bool {
+        self.metadata
+            .capture
+            .as_ref()
+            .is_none_or(|capture| !capture.robots.no_follow)
+    }
+}
+
 pub struct WarcFile {
     bytes: Vec<u8>,
 }
@@ -81,6 +98,7 @@ impl WarcFile {
         RecordIterator {
             reader: BufReader::new(MultiGzDecoder::new(&self.bytes[..])),
             num_reads: 0,
+            failed: false,
         }
     }
 
@@ -341,14 +359,36 @@ pub struct Response {
 
 impl Response {
     fn from_raw(record: RawWarcRecord) -> Result<Self> {
-        let content = decode_string(&record.content[..]);
-
-        let (_header, content) = content
-            .split_once("\r\n\r\n")
-            .ok_or(Error::WarcParse("Invalid http body".to_string()))?;
-
+        let separator = record
+            .content
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .ok_or_else(|| Error::WarcParse("Invalid HTTP body".into()))?;
+        let payload = &record.content[separator + 4..];
+        let body = if record.header.contains_key("ASTIAN-CAPTURE-VERSION") {
+            let headers = String::from_utf8_lossy(&record.content[..separator]);
+            let mut encoding = String::new();
+            let mut charset = "UTF-8".to_owned();
+            for line in headers.lines().skip(1) {
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-encoding") {
+                        encoding = value.trim().to_owned();
+                    }
+                    if name.eq_ignore_ascii_case("content-type") {
+                        if let Ok(mime) = value.trim().parse::<mime::Mime>() {
+                            if let Some(value) = mime.get_param("charset") {
+                                charset = value.as_str().into();
+                            }
+                        }
+                    }
+                }
+            }
+            crate::capture::decode(payload, &encoding, &charset, 128 * 1024 * 1024)?
+        } else {
+            decode_string(payload)
+        };
         Ok(Self {
-            body: content.to_string(),
+            body,
             payload_type: record
                 .header
                 .get("WARC-IDENTIFIED-PAYLOAD-TYPE")
@@ -372,12 +412,25 @@ impl Arbitrary for Response {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Clone, PartialEq))]
 pub struct Metadata {
+    pub capture: Option<crate::capture::Metadata>,
     // fetchTimeMs
     pub fetch_time_ms: u64,
 }
 
 impl Metadata {
     fn from_raw(record: RawWarcRecord) -> Result<Self> {
+        if record
+            .header
+            .get("CONTENT-TYPE")
+            .is_some_and(|s| s.starts_with("application/json"))
+        {
+            let capture: crate::capture::Metadata = serde_json::from_slice(&record.content)?;
+            capture.validate()?;
+            return Ok(Self {
+                fetch_time_ms: capture.fetch_time_ms,
+                capture: Some(capture),
+            });
+        }
         let r = BufReader::new(&record.content[..]);
 
         for line in r.lines() {
@@ -388,7 +441,10 @@ impl Metadata {
                 let key = line;
                 if key == "fetchTimeMs" {
                     let fetch_time_ms = value.parse::<u64>()?;
-                    return Ok(Self { fetch_time_ms });
+                    return Ok(Self {
+                        fetch_time_ms,
+                        capture: None,
+                    });
                 }
             }
         }
@@ -404,7 +460,10 @@ impl Arbitrary for Metadata {
 
     fn arbitrary_with(_args: ()) -> Self::Strategy {
         (0..10000u64)
-            .prop_map(|fetch_time_ms| Self { fetch_time_ms })
+            .prop_map(|fetch_time_ms| Self {
+                fetch_time_ms,
+                capture: None,
+            })
             .boxed()
     }
 }
@@ -412,14 +471,22 @@ impl Arbitrary for Metadata {
 pub struct RecordIterator<R: Read> {
     reader: BufReader<MultiGzDecoder<R>>,
     num_reads: usize,
+    failed: bool,
 }
 
 impl<R: Read> RecordIterator<R> {
+    pub fn new(reader: R) -> Self {
+        Self {
+            reader: BufReader::new(MultiGzDecoder::new(reader)),
+            num_reads: 0,
+            failed: false,
+        }
+    }
     fn next_raw(&mut self) -> Option<Result<RawWarcRecord>> {
         let mut version = String::new();
 
-        if let Err(_io) = self.reader.read_line(&mut version) {
-            return None;
+        if let Err(error) = self.reader.read_line(&mut version) {
+            return Some(Err(error.into()));
         }
 
         if version.is_empty() {
@@ -428,7 +495,7 @@ impl<R: Read> RecordIterator<R> {
 
         rtrim(&mut version);
 
-        if !version.to_uppercase().starts_with("WARC/1.") {
+        if !matches!(version.to_uppercase().as_str(), "WARC/1.0" | "WARC/1.1") {
             return Some(Err(
                 Error::WarcParse("Unknown WARC version".to_string()).into()
             ));
@@ -488,6 +555,16 @@ impl<R: Read> RecordIterator<R> {
         }
 
         let content_len = content_len.unwrap();
+        if content_len > 256 * 1024 * 1024 {
+            return Some(Err(anyhow::anyhow!("WARC record exceeds reader limit")));
+        }
+        if let Some(version) = header.get("ASTIAN-CAPTURE-VERSION") {
+            if version != "1" {
+                return Some(Err(anyhow::anyhow!(
+                    "unsupported capture schema version {version}; supported: 1"
+                )));
+            }
+        }
         let mut content = vec![0; content_len];
         if let Err(io) = self.reader.read_exact(&mut content) {
             return Some(Err(io.into()));
@@ -512,16 +589,27 @@ impl<R: Read> RecordIterator<R> {
 
 impl<R: Read> Iterator for RecordIterator<R> {
     type Item = Result<WarcRecord>;
-
     fn next(&mut self) -> Option<Self::Item> {
-        if self.num_reads == 0 {
-            self.next_raw()?.ok()?; // skip warc_info
+        if self.failed {
+            return None;
         }
+        let result = self.read_next();
+        if matches!(result, Some(Err(_))) {
+            self.failed = true;
+        }
+        result
+    }
+}
+
+impl<R: Read> RecordIterator<R> {
+    fn read_next(&mut self) -> Option<Result<WarcRecord>> {
         self.num_reads += 1;
 
         let mut request = None;
         let mut response = None;
         let mut metadata = None;
+        let mut payload_digest = None;
+        let mut record_id = None;
 
         while let Some(item) = self.next_raw() {
             if item.is_err() {
@@ -559,6 +647,14 @@ impl<R: Read> Iterator for RecordIterator<R> {
                         .into()));
                     }
 
+                    if item.header.contains_key("ASTIAN-CAPTURE-VERSION") {
+                        payload_digest = item
+                            .content
+                            .windows(4)
+                            .position(|w| w == b"\r\n\r\n")
+                            .map(|offset| crate::capture::sha256(&item.content[offset + 4..]));
+                        record_id = item.header.get("WARC-RECORD-ID").cloned();
+                    }
                     match Response::from_raw(item) {
                         Ok(res) => {
                             response = Some(res);
@@ -569,7 +665,9 @@ impl<R: Read> Iterator for RecordIterator<R> {
                     };
                 } else if warc_type.as_str() == "metadata" {
                     if let Some(content_type) = item.header.get("CONTENT-TYPE") {
-                        if !content_type.starts_with("application/warc-fields") {
+                        if !content_type.starts_with("application/warc-fields")
+                            && !content_type.starts_with("application/json")
+                        {
                             continue;
                         }
                     }
@@ -583,6 +681,20 @@ impl<R: Read> Iterator for RecordIterator<R> {
 
                     match Metadata::from_raw(item) {
                         Ok(met) => {
+                            if let Some(capture) = &met.capture {
+                                if payload_digest.as_ref() != Some(&capture.payload_sha256)
+                                    || record_id.as_deref()
+                                        != Some(format!("<urn:uuid:{}>", capture.fetch_id).as_str())
+                                {
+                                    return Some(Err(anyhow::anyhow!(
+                                        "capture payload digest or fetch_id mismatch"
+                                    )));
+                                }
+                                request = Some(Request {
+                                    url: capture.response.url.clone(),
+                                    date: Some(capture.response.received_at),
+                                });
+                            }
                             metadata = Some(met);
                         }
                         Err(err) => return Some(Err(Error::WarcParse(err.to_string()).into())),
@@ -595,11 +707,28 @@ impl<R: Read> Iterator for RecordIterator<R> {
             }
         }
 
-        Some(Ok(WarcRecord {
-            request: request?,
-            response: response?,
-            metadata: metadata?,
-        }))
+        match (request, response, metadata) {
+            (Some(request), Some(response), Some(metadata)) => {
+                if let Some(capture) = &metadata.capture {
+                    if response.body.len() != capture.decoded_bytes
+                        || response.body.len() > capture.decoded_limit_bytes
+                    {
+                        return Some(Err(anyhow::anyhow!(
+                            "capture decoded body length/limit mismatch"
+                        )));
+                    }
+                }
+                Some(Ok(WarcRecord {
+                    request,
+                    response,
+                    metadata,
+                }))
+            }
+            (None, None, None) => None,
+            _ => Some(Err(anyhow::anyhow!(
+                "incomplete WARC capture: missing request, response or metadata"
+            ))),
+        }
     }
 }
 
@@ -902,6 +1031,7 @@ mod tests {
                 payload_type: Some(PayloadType::Html),
             },
             metadata: Metadata {
+                capture: None,
                 fetch_time_ms: 1337,
             },
         };
@@ -917,6 +1047,7 @@ mod tests {
                 payload_type: None,
             },
             metadata: Metadata {
+                capture: None,
                 fetch_time_ms: 4242,
             },
         };
@@ -955,7 +1086,10 @@ mod tests {
                 body: utf8.to_string(),
                 payload_type: Some(PayloadType::Html),
             },
-            metadata: Metadata { fetch_time_ms: 0 },
+            metadata: Metadata {
+                capture: None,
+                fetch_time_ms: 0,
+            },
         };
         writer.write(&record).unwrap();
 
@@ -988,7 +1122,10 @@ mod tests {
                 body: body.to_string(),
                 payload_type: Some(PayloadType::Html),
             },
-            metadata: Metadata { fetch_time_ms: 0 },
+            metadata: Metadata {
+                capture: None,
+                fetch_time_ms: 0,
+            },
         };
         writer.write(&record).unwrap();
 

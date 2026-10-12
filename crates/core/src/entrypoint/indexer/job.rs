@@ -70,7 +70,14 @@ impl Job {
 
             for chunk in file
                 .records()
-                .flatten()
+                .filter_map(|record| match record {
+                    Ok(record) => Some(record),
+                    Err(error) => {
+                        tracing::error!("WARC contract error: {error}");
+                        None
+                    }
+                })
+                .filter(|record| record.indexing_allowed())
                 .filter(|record| match &record.response.payload_type {
                     Some(payload_type) => matches!(payload_type, PayloadType::Html),
                     None => true,
@@ -136,5 +143,69 @@ impl Job {
         info!("{} done", name);
 
         index
+    }
+}
+
+#[cfg(test)]
+mod capture_contract_tests {
+    #[test]
+    fn header_noindex_is_archived_and_excluded_before_index_conversion() {
+        let url = url::Url::parse("https://example.org/page").unwrap();
+        let capture = crate::capture::fixture(
+            &url,
+            uuid::Uuid::new_v4().to_string(),
+            b"<html><title>Saved</title><body>Archive me</body></html>".to_vec(),
+            vec![crate::capture::Header {
+                name: "x-robots-tag".into(),
+                value_hex: crate::capture::hex(b"AstianGOBot: noindex"),
+            }],
+        );
+        let mut bytes = Vec::new();
+        crate::warc::capture::write(
+            &mut bytes,
+            &capture,
+            crate::warc::PayloadType::Html,
+            3,
+            true,
+        )
+        .unwrap();
+        let record = crate::warc::WarcFile::new(bytes)
+            .records()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert!(record.response.body.contains("Archive me"));
+        assert!(!record.indexing_allowed());
+        assert!(record.links_allowed());
+    }
+
+    #[test]
+    fn user_agent_meta_noindex_is_transmitted_by_the_capture_contract() {
+        let url = url::Url::parse("https://example.org/page").unwrap();
+        let body = "<html><head><title>Saved</title><meta name=AstianGOBot content=NOINDEX></head><body>Original</body></html>";
+        let mut capture = crate::capture::fixture(
+            &url,
+            uuid::Uuid::new_v4().to_string(),
+            body.as_bytes().to_vec(),
+            Vec::new(),
+        );
+        let html = crate::webpage::Html::parse_without_text(body, url.as_str()).unwrap();
+        capture.metadata.robots = html.robots_for_agent(crate::capture::DEFAULT_AGENT);
+        let mut bytes = Vec::new();
+        crate::warc::capture::write(
+            &mut bytes,
+            &capture,
+            crate::warc::PayloadType::Html,
+            3,
+            false,
+        )
+        .unwrap();
+        let record = crate::warc::WarcFile::new(bytes)
+            .records()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert!(!record.indexing_allowed());
+        assert_eq!(record.response.body, body);
     }
 }

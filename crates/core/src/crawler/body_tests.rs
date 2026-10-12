@@ -73,7 +73,7 @@ async fn admission_rejects_status_mime_encoding_and_declared_size_without_pollin
         (200, vec![], "unsupported_mime"),
         (
             200,
-            vec![("content-type", "text/html"), ("content-encoding", "gzip")],
+            vec![("content-type", "text/html"), ("content-encoding", "br")],
             "unsupported_encoding",
         ),
         (
@@ -217,7 +217,7 @@ async fn wire_overflow_drops_the_chunk_before_decoding_or_appending() {
         .await;
     assert_eq!(result.err().unwrap().reason(), "wire_limit_exceeded");
     assert_eq!(reader.stats().wire_bytes_received, 9);
-    assert_eq!(reader.stats().decoded_bytes_produced, 4);
+    assert_eq!(reader.stats().decoded_bytes_produced, 0);
     assert_eq!(reader.stats().active_bodies, 0);
     assert_eq!(reader.stats().reserved_bytes, 0);
 }
@@ -251,7 +251,7 @@ async fn decoded_expansion_has_its_own_limit_and_exact_limit_is_accepted() {
         .await;
     assert_eq!(result.err().unwrap().reason(), "decoded_limit_exceeded");
     assert_eq!(reader.stats().wire_bytes_received, 2);
-    assert_eq!(reader.stats().decoded_bytes_produced, 3);
+    assert_eq!(reader.stats().decoded_bytes_produced, 0);
     assert_eq!(reader.stats().reserved_bytes, 0);
 }
 
@@ -523,7 +523,7 @@ async fn legacy_decoder_preserves_status_and_mime_compatibility_with_bounded_dec
     let polls = Arc::new(AtomicU64::new(0));
     let error = super::super::encoded_body(pending_response(
         404,
-        &[("content-encoding", "gzip")],
+        &[("content-encoding", "br")],
         polls.clone(),
     ))
     .await

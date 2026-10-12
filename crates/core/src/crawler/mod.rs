@@ -40,14 +40,17 @@ pub use worker::JobExecutor;
 pub mod body;
 pub mod coordinator;
 pub mod extraction;
+pub mod frontier;
+#[cfg(feature = "crawler-bench")]
+pub mod capture_frontier_benchmark;
 pub mod pipeline;
 #[cfg(feature = "crawler-bench")]
 pub mod pipeline_benchmark;
-#[cfg(feature = "crawler-bench")]
-pub mod spool_benchmark;
 pub mod robots_txt;
 pub mod router;
 pub mod spool;
+#[cfg(feature = "crawler-bench")]
+pub mod spool_benchmark;
 pub use router::Router;
 #[cfg(feature = "crawler-bench")]
 pub mod benchmark;
@@ -295,11 +298,23 @@ impl From<Job> for WorkerJob {
 
 #[derive(Debug, Clone)]
 pub struct CrawlDatum {
+    pub capture: Option<crate::capture::Capture>,
     pub url: Url,
     pub payload_type: warc::PayloadType,
     pub body: String,
     pub fetch_time_ms: u64,
     pub date: chrono::DateTime<chrono::Utc>,
+}
+
+impl CrawlDatum {
+    pub fn memory_bytes(&self) -> usize {
+        self.body.len() + self.capture.as_ref().map_or(0, |c| c.payload.len())
+    }
+    pub fn indexing_allowed(&self) -> bool {
+        self.capture
+            .as_ref()
+            .is_none_or(|c| !c.metadata.robots.no_index)
+    }
 }
 
 pub struct Crawler {
@@ -372,6 +387,9 @@ impl Crawler {
 }
 
 pub trait DatumSink: Send + Sync {
+    fn reserve_url(&self, _url: &Url) -> impl Future<Output = Result<Option<String>>> + Send {
+        async { Ok(Some(uuid::Uuid::new_v4().to_string())) }
+    }
     fn write(&self, crawl_datum: CrawlDatum) -> impl Future<Output = Result<()>> + Send;
     /// Reuse the ephemeral extraction when the sink also discovers links.
     /// Existing sinks retain their original contract and durable acknowledgements.

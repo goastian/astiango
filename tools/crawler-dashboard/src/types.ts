@@ -32,6 +32,13 @@ export interface Site extends ExplicitCounters {
   last_fetch_ms: number | null;
   next_request_at: string | null;
 }
+
+export interface FrontierDbStats {
+  schema_version: number; identity_version: number; cache_bytes: number; batch_size: number;
+  urls: number; pending_urls: number; leased_urls: number; committed_urls: number; terminal_urls: number;
+  known_sites: number; pending_sites: number; active_sites: number; outbox_entries: number; commits: number;
+  transactions: number; recovered_leases: number; reconciled_captures: number; migrated_jobs: number; migration_complete: boolean;
+}
 export interface CrawlEvent {
   at: string;
   level: "info" | "warn" | "error";
@@ -128,6 +135,7 @@ export interface BodyStats {
   max_reserved_bytes: number;
 }
 export interface Snapshot {
+  frontier_db?: FrontierDbStats;
   spool?: SpoolStats;
   pipeline?: PipelineStats;
   extraction?: ExtractionStats;
@@ -172,6 +180,8 @@ export interface Snapshot {
 }
 
 export interface SpoolStats {
+  capture_records?: number; captured_payload_bytes?: number; decoded_payload_bytes?: number;
+  noindex_records?: number; nofollow_records?: number;
   records_durable: number; records_recovered: number;
   segments_total: number; segments_open: number; segments_pending: number; segments_published: number;
   spool_bytes: number; max_spool_bytes: number; max_segments: number; segment_bytes: number; gzip_level: number;

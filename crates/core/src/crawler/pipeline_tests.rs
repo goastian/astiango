@@ -22,6 +22,70 @@ fn pipeline() -> Pipeline {
 }
 
 #[tokio::test]
+async fn capture_retains_robots_truncation_and_total_rules_across_the_parse_stage() {
+    let pipeline = Pipeline::new(PipelineConfig::default()).unwrap();
+    let reader = super::super::body::BodyReader::new(Default::default()).unwrap();
+    let url = url::Url::parse("https://example.org/").unwrap();
+    let mut body = "<html><head>".to_owned();
+    for _ in 0..1000 {
+        body.push_str("<meta name=AstianGOBot content=index>");
+    }
+    body.push_str("<meta name=AstianGOBot content=none></head><body>Original</body></html>");
+    let response = http_02::Response::builder()
+        .header("content-type", "text/html; charset=UTF-8")
+        .body(reqwest::Body::from(body.clone()))
+        .unwrap()
+        .into();
+    let (_, body_lease) = reader
+        .read(response, super::super::body::BodyKind::Html)
+        .await
+        .unwrap()
+        .into_parts();
+    let capture = crate::capture::fixture(
+        &url,
+        uuid::Uuid::new_v4().to_string(),
+        body.as_bytes().to_vec(),
+        vec![
+            crate::capture::Header {
+                name: "content-type".into(),
+                value_hex: crate::capture::hex(b"text/html; charset=UTF-8"),
+            },
+            crate::capture::Header {
+                name: "x-robots-tag".into(),
+                value_hex: crate::capture::hex(b"index"),
+            },
+        ],
+    );
+    let datum = super::super::CrawlDatum {
+        url: url.clone(),
+        body,
+        payload_type: crate::warc::PayloadType::Html,
+        fetch_time_ms: 1,
+        date: chrono::Utc::now(),
+        capture: Some(capture),
+    };
+    let admission = pipeline.admit(datum.memory_bytes()).await.unwrap();
+    let prepared = pipeline
+        .prepare_page(
+            datum,
+            body_lease,
+            admission,
+            super::super::extraction::Extractor::default(),
+            super::super::Domain::from(&url),
+            Arc::new(Default::default()),
+            url,
+        )
+        .await
+        .unwrap();
+    let robots = &prepared.datum.capture.as_ref().unwrap().metadata.robots;
+    assert_eq!(robots.directives_seen, 1002);
+    assert_eq!(robots.directives.len(), 64);
+    assert!(robots.directives_truncated && robots.no_index && robots.no_follow);
+    drop(prepared);
+    pipeline.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_stage_reuses_its_fixed_workers_instead_of_spreading_allocations_over_new_threads() {
     let pipeline = pipeline();
     let threads = Arc::new(Mutex::new(std::collections::HashSet::new()));

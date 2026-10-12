@@ -203,18 +203,12 @@ struct Queue {
 }
 
 #[derive(Serialize, Deserialize)]
-struct DelayedJob {
-    job: Job,
-    not_before: chrono::DateTime<Utc>,
+pub(super) struct DelayedJob {
+    pub(super) job: Job,
+    pub(super) not_before: chrono::DateTime<Utc>,
 }
 
-struct Frontier {
-    path: PathBuf,
-    queue: Mutex<Queue>,
-    capacity: usize,
-    budget: u64,
-    observer: Arc<Observer>,
-}
+use super::frontier::Frontier;
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
@@ -229,191 +223,6 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         fs::File::open(parent)?.sync_all()?;
     }
     Ok(())
-}
-
-impl Frontier {
-    fn open(path: PathBuf, capacity: usize, budget: u64, observer: Arc<Observer>) -> Result<Self> {
-        let mut queue: Queue = if path.exists() {
-            serde_json::from_reader(fs::File::open(&path)?)
-                .with_context(|| format!("Invalid persisted crawler frontier {}", path.display()))?
-        } else {
-            Queue::default()
-        };
-        // A crash or stop can leave an in-flight job. Replaying it may revisit
-        // pages but cannot lose the job or overwrite an already committed WARC.
-        let active = std::mem::take(&mut queue.active);
-        for (_, job) in active {
-            queue.pending.push_front(job);
-        }
-        let frontier = Self {
-            path,
-            queue: Mutex::new(queue),
-            capacity,
-            budget,
-            observer,
-        };
-        frontier.persist(&frontier.queue.lock().unwrap())?;
-        Ok(frontier)
-    }
-
-    fn persist(&self, queue: &Queue) -> Result<()> {
-        atomic_write(&self.path, &serde_json::to_vec(queue)?)?;
-        self.observer.frontier(
-            queue.pending.len() + queue.delayed.len(),
-            queue.seen.len(),
-            self.capacity,
-        );
-        Ok(())
-    }
-
-    fn discover(&self, urls: impl IntoIterator<Item = Url>) -> Result<()> {
-        let mut queue = self.queue.lock().unwrap();
-        let mut changed = false;
-        for mut url in urls {
-            if queue.pending.len() + queue.delayed.len() + queue.active.len() >= self.capacity {
-                break;
-            }
-            if !matches!(url.scheme(), "https" | "http")
-                || !url.username().is_empty()
-                || url.password().is_some()
-                || url.port().is_some_and(|p| p != 80 && p != 443)
-            {
-                continue;
-            }
-            url.set_fragment(None);
-            let domain = Domain::from(&url);
-            if domain.as_str().is_empty() || queue.seen.contains(domain.as_str()) {
-                continue;
-            }
-            queue.seen.insert(domain.as_str().to_owned());
-            queue.pending.push_back(Job {
-                domain,
-                urls: VecDeque::from([WeightedUrl { url, weight: 1.0 }]),
-                wandering_urls: self.budget.saturating_sub(1),
-            });
-            changed = true;
-        }
-        if changed {
-            self.persist(&queue)?;
-        }
-        Ok(())
-    }
-
-    fn claim(&self) -> Result<Option<Job>> {
-        self.claim_at(Utc::now())
-    }
-
-    fn claim_at(&self, now: chrono::DateTime<Utc>) -> Result<Option<Job>> {
-        let mut queue = self.queue.lock().unwrap();
-        let mut waiting = VecDeque::new();
-        while let Some(delayed) = queue.delayed.pop_front() {
-            if delayed.not_before <= now {
-                queue.pending.push_back(delayed.job);
-            } else {
-                waiting.push_back(delayed);
-            }
-        }
-        queue.delayed = waiting;
-        let job = queue.pending.pop_front();
-        if let Some(job) = &job {
-            queue.active.insert(job.domain.as_str().into(), job.clone());
-            self.persist(&queue)?;
-        }
-        Ok(job)
-    }
-
-    fn complete(&self, domain: &Domain) -> Result<()> {
-        let mut queue = self.queue.lock().unwrap();
-        queue.active.remove(domain.as_str());
-        self.persist(&queue)
-    }
-
-    fn resolve(
-        &self,
-        domain: &Domain,
-        outcome: &JobOutcome,
-        min_delay_ms: u64,
-        now: chrono::DateTime<Utc>,
-    ) -> Result<()> {
-        match outcome.status {
-            JobStatus::Completed => return self.complete(domain),
-            JobStatus::StorageFailed => {
-                anyhow::bail!(
-                    "Crawler storage failed for {}; job remains active",
-                    domain.as_str()
-                );
-            }
-            JobStatus::Deferred | JobStatus::Cancelled => {}
-        }
-        let mut queue = self.queue.lock().unwrap();
-        let original = queue
-            .active
-            .get(domain.as_str())
-            .context("Missing active crawler job")?;
-        let mut delay_ms = min_delay_ms;
-        let mut urls = VecDeque::new();
-        let mut seen_urls = HashSet::new();
-        for entry in &outcome.urls {
-            match &entry.outcome {
-                FetchOutcome::Deferred { retry_after_ms, .. } => {
-                    delay_ms = delay_ms.max(retry_after_ms.unwrap_or(0));
-                }
-                FetchOutcome::Cancelled => {}
-                _ => continue,
-            }
-            if seen_urls.insert(entry.url.clone()) {
-                let weight = original
-                    .urls
-                    .iter()
-                    .find(|weighted| weighted.url == entry.url)
-                    .map_or(0.0, |weighted| weighted.weight);
-                urls.push_back(WeightedUrl {
-                    url: entry.url.clone(),
-                    weight,
-                });
-            }
-        }
-        let scheduled: HashSet<_> = original.urls.iter().map(|weighted| &weighted.url).collect();
-        let explored = outcome
-            .urls
-            .iter()
-            .filter(|entry| !scheduled.contains(&entry.url))
-            .count();
-        let wandering_urls = original.wandering_urls.saturating_sub(explored as u64);
-        let job = if urls.is_empty() {
-            original.clone()
-        } else {
-            Job {
-                domain: domain.clone(),
-                urls,
-                wandering_urls,
-            }
-        };
-        let not_before = chrono::Duration::from_std(Duration::from_millis(delay_ms))
-            .ok()
-            .and_then(|delay| now.checked_add_signed(delay))
-            .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC);
-        queue.active.remove(domain.as_str());
-        queue.delayed.push_back(DelayedJob { job, not_before });
-        self.persist(&queue)
-    }
-
-    fn is_empty(&self) -> bool {
-        let queue = self.queue.lock().unwrap();
-        queue.pending.is_empty() && queue.active.is_empty() && queue.delayed.is_empty()
-    }
-
-    fn restart_round(&self, seeds: Vec<Url>) -> Result<()> {
-        {
-            let mut queue = self.queue.lock().unwrap();
-            anyhow::ensure!(
-                queue.pending.is_empty() && queue.active.is_empty() && queue.delayed.is_empty(),
-                "Cannot reset active frontier"
-            );
-            queue.seen.clear();
-        }
-        self.discover(seeds)
-    }
 }
 
 #[derive(Clone)]
@@ -441,6 +250,7 @@ impl LocalWarcSink {
                 payload_type: Some(datum.payload_type),
             },
             metadata: warc::Metadata {
+                capture: None,
                 fetch_time_ms: datum.fetch_time_ms,
             },
         })?;
@@ -477,6 +287,18 @@ impl LocalWarcSink {
 }
 
 impl DatumSink for LocalWarcSink {
+    async fn reserve_url(&self, url: &Url) -> super::Result<Option<String>> {
+        if self.segmented.is_none() {
+            return Ok(Some(uuid::Uuid::new_v4().to_string()));
+        }
+        let frontier = self.frontier.clone();
+        let url = url.clone();
+        Ok(self
+            .pipeline
+            .control
+            .run_durable(url.as_str().len(), move || frontier.begin_url(&url))
+            .await??)
+    }
     async fn write(&self, datum: CrawlDatum) -> super::Result<()> {
         self.check().map_err(super::Error::Anyhow)?;
         let admission = self.pipeline.admit(datum.body.len()).await?;
@@ -649,6 +471,7 @@ pub async fn run(config: Config) -> Result<()> {
         config.pages_per_domain,
         observer.clone(),
     )?);
+    observer.observe_frontier(frontier.metrics.clone());
     frontier.discover(seeds.clone())?;
     let commit_frontier = frontier.clone();
     let commit_observer = observer.clone();
@@ -658,7 +481,10 @@ pub async fn run(config: Config) -> Result<()> {
             None,
             client.pipeline().clone(),
             Some(Arc::new(move |page, receipt| {
-                if let Some(extraction) = &page.extraction {
+                if let Some(capture) = &page.datum.capture {
+                    commit_frontier.commit_capture(&capture.metadata, receipt, false)?;
+                    commit_frontier.drain_outbox()?;
+                } else if let Some(extraction) = &page.extraction {
                     commit_frontier.discover(extraction.discovery_urls.iter().cloned())?;
                 }
                 commit_observer.saved(
@@ -673,6 +499,13 @@ pub async fn run(config: Config) -> Result<()> {
         .await?,
     );
     observer.observe_spool(segmented.metrics.clone());
+    let recovery_frontier = frontier.clone();
+    let recovery_path = config.spool_config().directory;
+    client
+        .pipeline()
+        .control
+        .run_durable(0, move || recovery_frontier.reconcile_spool(&recovery_path))
+        .await??;
     let sink = Arc::new(LocalWarcSink {
         directory,
         observer: observer.clone(),
@@ -965,12 +798,8 @@ mod tests {
         frontier
             .resolve(&job.domain, &outcome, 10_000, Utc::now())
             .unwrap();
-        let persisted: Queue = serde_json::from_reader(fs::File::open(&path).unwrap()).unwrap();
-        assert_eq!(
-            persisted.delayed[0].not_before,
-            chrono::DateTime::<Utc>::MAX_UTC
-        );
-        assert!(persisted.active.is_empty());
+        assert_eq!(frontier.metrics.snapshot().pending_sites, 1);
+        assert_eq!(frontier.metrics.snapshot().active_sites, 0);
         drop(frontier);
         let restored = Frontier::open(path, 2, 5, telemetry).unwrap();
         assert!(!restored.is_empty());
@@ -1031,9 +860,8 @@ mod tests {
         assert!(frontier
             .resolve(&job.domain, &outcome, 10_000, Utc::now())
             .is_err());
-        let persisted: Queue = serde_json::from_reader(fs::File::open(&path).unwrap()).unwrap();
-        assert_eq!(persisted.active.len(), 1);
-        assert!(persisted.delayed.is_empty());
+        assert_eq!(frontier.metrics.snapshot().active_sites, 1);
+        assert_eq!(frontier.metrics.snapshot().pending_sites, 0);
         let record = fs::read_dir(&ledger)
             .unwrap()
             .next()
@@ -1108,6 +936,7 @@ mod tests {
 
     fn test_datum() -> CrawlDatum {
         CrawlDatum {
+            capture: None,
             url: Url::parse("https://example.org/article").unwrap(),
             payload_type: warc::PayloadType::Html,
             body: "<html><body>durable page despite metrics failure</body></html>".into(),
@@ -1369,8 +1198,7 @@ mod tests {
             .resolve(&job.domain, &outcome, 10_000, Utc::now())
             .unwrap();
         assert!(frontier.is_empty());
-        let persisted: Queue = serde_json::from_slice(&fs::read(&frontier.path).unwrap()).unwrap();
-        assert!(persisted.active.is_empty());
+        assert_eq!(frontier.metrics.snapshot().active_sites, 0);
         let path = fs::read_dir(warcs).unwrap().next().unwrap().unwrap().path();
         let file = warc::WarcFile::open(&path).unwrap();
         let record = file.records().next().unwrap().unwrap();
@@ -1449,9 +1277,8 @@ mod tests {
         assert!(frontier
             .resolve(&job.domain, &outcome, 10_000, Utc::now())
             .is_err());
-        let persisted: Queue = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(persisted.active.len(), 1);
-        assert!(persisted.delayed.is_empty());
+        assert_eq!(frontier.metrics.snapshot().active_sites, 1);
+        assert_eq!(frontier.metrics.snapshot().pending_sites, 0);
         telemetry.flush().unwrap();
         let snapshot: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.path().join("status.json")).unwrap()).unwrap();
@@ -1478,7 +1305,10 @@ mod tests {
                     body: "<html><body>saved content</body></html>".into(),
                     payload_type: Some(warc::PayloadType::Html),
                 },
-                metadata: warc::Metadata { fetch_time_ms: 42 },
+                metadata: warc::Metadata {
+                    capture: None,
+                    fetch_time_ms: 42,
+                },
             })
             .unwrap();
         atomic_write(&path, &writer.finish().unwrap()).unwrap();

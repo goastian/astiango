@@ -186,3 +186,11 @@ required-features = ["crawler-bench"]
 [[example]]
 name = "crawler_spool_bench"
 required-features = ["crawler-bench"]
+
+[[example]]
+name = "crawler_capture_frontier_bench"
+required-features = ["crawler-bench"]
+
+[[example]]
+name = "crawler_archive_contract"
+required-features = ["crawler-bench"]

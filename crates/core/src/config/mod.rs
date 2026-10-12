@@ -452,7 +452,7 @@ pub struct CrawlerConfig {
     pub router_hosts: Vec<String>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "crawler-bench"))]
 impl CrawlerConfig {
     pub fn for_tests() -> Self {
         Self {

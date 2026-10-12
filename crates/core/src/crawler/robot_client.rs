@@ -155,6 +155,9 @@ pub struct RobotClient {
 }
 
 impl RobotClient {
+    pub(crate) fn agent_token(&self) -> &str {
+        &self.config.user_agent.token
+    }
     pub fn new(config: &CrawlerConfig) -> Result<Self> {
         let transport = SharedTransport::new(config, config.transport.clone())?;
         let body_reader = BodyReader::new(config.body.clone())?;

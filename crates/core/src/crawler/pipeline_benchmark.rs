@@ -217,6 +217,7 @@ pub async fn run(config: Config) -> Result<Measurement> {
                     .ok_or_else(|| anyhow!("missing admitted page MIME"))?;
                 let (body, body_lease) = body.into_parts();
                 let datum = CrawlDatum {
+                    capture: None,
                     url: url.clone(),
                     body,
                     payload_type,

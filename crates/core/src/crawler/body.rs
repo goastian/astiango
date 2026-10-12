@@ -280,6 +280,9 @@ impl Drop for BodyLease {
 }
 
 pub struct AdmittedBody {
+    raw: Arc<Vec<u8>>,
+    charset: String,
+    decoded_limit: usize,
     text: String,
     lease: BodyLease,
     kind: BodyKind,
@@ -305,6 +308,15 @@ impl AdmittedBody {
     pub fn payload_type(&self) -> Option<PayloadType> {
         self.payload_type
     }
+    pub fn into_capture_parts(self) -> (String, Arc<Vec<u8>>, String, usize, BodyLease) {
+        (
+            self.text,
+            self.raw,
+            self.charset,
+            self.decoded_limit,
+            self.lease,
+        )
+    }
     pub fn into_parts(self) -> (String, BodyLease) {
         (self.text, self.lease)
     }
@@ -320,6 +332,7 @@ struct Admission {
     kind: BodyKind,
     payload_type: Option<PayloadType>,
     encoding: &'static Encoding,
+    content_encoding: String,
     declared: Option<usize>,
     limits: BodyLimits,
 }
@@ -415,17 +428,20 @@ impl BodyReader {
         if !legacy && response.status() != reqwest::StatusCode::OK {
             return Err(BodyError::StatusRejected(response.status().as_u16()));
         }
-        for value in response.headers().get_all(CONTENT_ENCODING) {
-            let value = value
-                .to_str()
-                .map_err(|_| BodyError::UnsupportedEncoding("invalid header".into()))?;
-            if value
-                .split(',')
-                .any(|part| !part.trim().eq_ignore_ascii_case("identity"))
-            {
-                return Err(BodyError::UnsupportedEncoding(value.to_owned()));
-            }
-        }
+        let encodings: Vec<_> = response
+            .headers()
+            .get_all(CONTENT_ENCODING)
+            .iter()
+            .map(|v| {
+                v.to_str()
+                    .map(str::to_owned)
+                    .map_err(|_| BodyError::UnsupportedEncoding("invalid header".into()))
+            })
+            .collect::<Result<_, _>>()?;
+        let encodings = encodings.join(",");
+        let content_encoding = crate::capture::content_encoding(&encodings)
+            .map_err(|_| BodyError::UnsupportedEncoding(encodings.clone()))?
+            .to_owned();
         let content_type = response.headers().get(CONTENT_TYPE);
         let mime = content_type
             .and_then(|value| value.to_str().ok())
@@ -519,6 +535,7 @@ impl BodyReader {
             kind,
             payload_type,
             encoding,
+            content_encoding,
             declared,
             limits,
         })
@@ -591,10 +608,9 @@ impl BodyReader {
             .counters
             .bodies_admitted
             .fetch_add(1, Ordering::Relaxed);
-        let mut text = String::new();
-        text.try_reserve_exact(admission.limits.decoded_limit_bytes)
+        let mut raw = Vec::new();
+        raw.try_reserve_exact(admission.limits.wire_limit_bytes)
             .map_err(|_| BodyError::AllocationFailure)?;
-        let mut decoder = admission.encoding.new_decoder();
         let mut stream = response.bytes_stream();
         let mut received = 0usize;
         let mut last_progress = Instant::now();
@@ -634,14 +650,7 @@ impl BodyReader {
                     if !chunk.is_empty() {
                         last_progress = Instant::now();
                     }
-                    self.decode(
-                        &mut decoder,
-                        &chunk,
-                        false,
-                        &mut text,
-                        admission.limits.decoded_limit_bytes,
-                        deadline,
-                    )?;
+                    raw.extend_from_slice(&chunk);
                 }
                 Some(Err(error)) => {
                     return Err(if error.is_timeout() && Instant::now() >= deadline {
@@ -658,24 +667,74 @@ impl BodyReader {
                 return Err(BodyError::ContentLengthMismatch { declared, received });
             }
         }
-        self.decode(
-            &mut decoder,
-            &[],
-            true,
-            &mut text,
-            admission.limits.decoded_limit_bytes,
-            deadline,
-        )?;
-        self.inner
-            .counters
-            .bodies_completed
-            .fetch_add(1, Ordering::Relaxed);
-        Ok(AdmittedBody {
-            text,
-            lease,
-            kind: admission.kind,
-            payload_type: admission.payload_type,
+        let reader = self.clone();
+        tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut text = String::new();
+            text.try_reserve_exact(admission.limits.decoded_limit_bytes)
+                .map_err(|_| BodyError::AllocationFailure)?;
+            let mut decoder = admission.encoding.new_decoder();
+            let mut source: Box<dyn Read + Send + '_> = if matches!(
+                admission
+                    .content_encoding
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "gzip" | "x-gzip"
+            ) {
+                Box::new(flate2::read::MultiGzDecoder::new(raw.as_slice()))
+            } else {
+                Box::new(raw.as_slice())
+            };
+            let mut buffer = [0u8; 8192];
+            let mut decoded = 0usize;
+            loop {
+                if Instant::now() >= deadline {
+                    return Err(BodyError::TotalTimeout);
+                }
+                let size = source
+                    .read(&mut buffer)
+                    .map_err(|e| BodyError::StreamFailure(e.to_string()))?;
+                decoded = decoded
+                    .checked_add(size)
+                    .ok_or(BodyError::DecodedLimitExceeded {
+                        limit: admission.limits.decoded_limit_bytes,
+                    })?;
+                if decoded > admission.limits.decoded_limit_bytes {
+                    return Err(BodyError::DecodedLimitExceeded {
+                        limit: admission.limits.decoded_limit_bytes,
+                    });
+                }
+                reader.decode(
+                    &mut decoder,
+                    &buffer[..size],
+                    size == 0,
+                    &mut text,
+                    admission.limits.decoded_limit_bytes,
+                    deadline,
+                )?;
+                if size == 0 {
+                    break;
+                }
+            }
+            drop(source);
+            reader
+                .inner
+                .counters
+                .bodies_completed
+                .fetch_add(1, Ordering::Relaxed);
+            Ok(AdmittedBody {
+                text,
+                raw: Arc::new(raw),
+                charset: admission.encoding.name().into(),
+                decoded_limit: admission.limits.decoded_limit_bytes,
+                lease,
+                kind: admission.kind,
+                payload_type: admission.payload_type,
+            })
         })
+        .await
+        .map_err(|e| BodyError::StreamFailure(e.to_string()))?
     }
 
     fn decode(

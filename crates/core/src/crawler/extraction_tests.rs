@@ -1,5 +1,28 @@
 use super::*;
 
+#[test]
+fn capture_identity_retains_queries_while_the_legacy_entry_keeps_its_contract() {
+    let url = Url::parse("https://example.org/").unwrap();
+    let domain = Domain::from(&url);
+    let visited = VisitedUrls::new();
+    let context = || ExtractionContext {
+        domain: &domain,
+        crawled_urls: &visited,
+        requested_url: &url,
+    };
+    let body = "<html><body><a href='/page?b=2&amp;utm_source=one&amp;a=%2f#part'>one</a><a href='/page?b=2&amp;utm_source=two&amp;a=%2f'>two</a></body></html>";
+    let captured =
+        CrawlExtraction::parse_capture(body, &url, context(), crate::capture::DEFAULT_AGENT)
+            .unwrap();
+    assert_eq!(captured.internal_urls.len(), 2);
+    assert_eq!(
+        captured.internal_urls[0].as_str(),
+        "https://example.org/page?b=2&utm_source=one&a=%2f"
+    );
+    let legacy = compare(body, &url, &visited);
+    assert_eq!(legacy.internal_urls.len(), 1);
+}
+
 fn compare(body: &str, url: &Url, visited: &VisitedUrls) -> CrawlExtraction {
     let domain = Domain::from(url);
     let context = || ExtractionContext {

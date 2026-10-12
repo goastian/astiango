@@ -28,6 +28,11 @@ pub struct ExtractionContext<'a> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CrawlExtraction {
+    pub robots_directives: Vec<crate::capture::Directive>,
+    #[serde(default)]
+    pub robots_directives_seen: u64,
+    #[serde(default)]
+    pub robots_directives_truncated: bool,
     pub schema_version: u32,
     pub url: Url,
     pub base_url: Url,
@@ -46,8 +51,27 @@ pub struct CrawlExtraction {
 
 impl CrawlExtraction {
     pub fn parse(body: &str, url: &Url, context: ExtractionContext<'_>) -> anyhow::Result<Self> {
+        Self::parse_with_policy(body, url, context, crate::capture::DEFAULT_AGENT, true)
+    }
+
+    pub fn parse_capture(
+        body: &str,
+        url: &Url,
+        context: ExtractionContext<'_>,
+        agent: &str,
+    ) -> anyhow::Result<Self> {
+        Self::parse_with_policy(body, url, context, agent, false)
+    }
+
+    fn parse_with_policy(
+        body: &str,
+        url: &Url,
+        context: ExtractionContext<'_>,
+        agent: &str,
+        legacy_urls: bool,
+    ) -> anyhow::Result<Self> {
         let html = Html::parse_without_text(body, url.as_str())?;
-        let mut result = Self::metadata(&html);
+        let mut result = Self::metadata_for_agent(&html, agent);
         // This set contains only retained internal URLs, never all page anchors.
         let mut seen: HashMap<Url, ()> = HashMap::default();
         result.anchors_visited = html.visit_anchor_destinations(|destination| {
@@ -56,7 +80,11 @@ impl CrawlExtraction {
             }
             if result.internal_urls.len() < MAX_OUTGOING_URLS_PER_PAGE {
                 let mut normalized = destination;
-                normalized.normalize_in_place();
+                if legacy_urls {
+                    normalized.normalize_in_place();
+                } else {
+                    normalized.set_fragment(None);
+                }
                 if admissible_internal(&normalized, &result.url, &context)
                     && !seen.contains_key(&normalized)
                 {
@@ -75,13 +103,20 @@ impl CrawlExtraction {
     }
 
     fn metadata(html: &Html) -> Self {
+        Self::metadata_for_agent(html, crate::capture::DEFAULT_AGENT)
+    }
+    fn metadata_for_agent(html: &Html, agent: &str) -> Self {
+        let robots = html.robots_for_agent(agent);
         Self {
+            robots_directives: robots.directives,
+            robots_directives_seen: robots.directives_seen,
+            robots_directives_truncated: robots.directives_truncated,
             schema_version: 1,
             url: html.url().clone(),
             base_url: html.base_url().clone(),
             canonical_url: html.canonical_url(),
-            no_index: html.is_no_index(),
-            no_follow: html.is_no_follow(),
+            no_index: robots.no_index,
+            no_follow: robots.no_follow,
             discovery_urls: Vec::new(),
             internal_urls: Vec::new(),
             anchors_visited: 0,
@@ -182,9 +217,28 @@ impl Extractor {
         url: &Url,
         context: ExtractionContext<'_>,
     ) -> anyhow::Result<CrawlExtraction> {
+        self.measure(body, url, context, crate::capture::DEFAULT_AGENT, true)
+    }
+    pub fn parse_capture(
+        &self,
+        body: &str,
+        url: &Url,
+        context: ExtractionContext<'_>,
+        agent: &str,
+    ) -> anyhow::Result<CrawlExtraction> {
+        self.measure(body, url, context, agent, false)
+    }
+    fn measure(
+        &self,
+        body: &str,
+        url: &Url,
+        context: ExtractionContext<'_>,
+        agent: &str,
+        legacy_urls: bool,
+    ) -> anyhow::Result<CrawlExtraction> {
         let started = Instant::now();
         let cpu = thread_cpu_us();
-        let result = CrawlExtraction::parse(body, url, context);
+        let result = CrawlExtraction::parse_with_policy(body, url, context, agent, legacy_urls);
         let stats = &self.0;
         stats
             .wall_us

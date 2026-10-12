@@ -16,6 +16,7 @@ fn config(path: &Path) -> SpoolConfig {
 }
 fn datum(index: usize) -> CrawlDatum {
     CrawlDatum {
+        capture: None,
         url: url::Url::parse(&format!("https://example.org/{index}")).unwrap(),
         body: format!(
             "<html><body>日本語 español {index} {}</body></html>",

@@ -51,16 +51,45 @@ impl InsertEnumMapKey for RobotsMeta {
 }
 
 impl Html {
+    pub fn robots_for_agent(&self, agent: &str) -> crate::capture::Robots {
+        let mut robots = crate::capture::Robots::default();
+        for node in self.root.select("meta").unwrap() {
+            let attributes = node.attributes.borrow();
+            if let (Some(name), Some(content)) = (attributes.get("name"), attributes.get("content"))
+            {
+                if name.eq_ignore_ascii_case("robots") || name.eq_ignore_ascii_case(agent) {
+                    robots.add(
+                        crate::capture::Directive {
+                            agent: if name.eq_ignore_ascii_case("robots") {
+                                None
+                            } else {
+                                Some(name.to_owned())
+                            },
+                            source: "html".into(),
+                            value: content.to_owned(),
+                        },
+                        agent,
+                    );
+                }
+            }
+        }
+        robots
+    }
     pub fn parse_robots_meta(&self) -> Option<EnumSet<RobotsMeta>> {
         let mut robots = EnumSet::new();
 
         for node in self.root.select("meta").unwrap() {
             if let Some(element) = node.as_node().as_element() {
                 if let Some(name) = element.attributes.borrow().get("name") {
-                    if name == "robots" {
+                    if name.eq_ignore_ascii_case("robots") {
                         if let Some(content) = element.attributes.borrow().get("content") {
-                            for part in content.split(',') {
-                                let part = part.trim();
+                            for part in content.split(|c: char| c == ',' || c.is_ascii_whitespace())
+                            {
+                                let part = part.trim().to_ascii_lowercase();
+                                if part == "none" {
+                                    robots.insert(RobotsMeta::NoIndex);
+                                    robots.insert(RobotsMeta::NoFollow);
+                                }
                                 if let Ok(meta) = part.parse::<RobotsMeta>() {
                                     robots.insert(meta);
                                 }

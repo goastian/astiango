@@ -553,6 +553,31 @@ impl SharedTransport {
         .await;
         match result {
             Ok(Ok(mut response)) => {
+                if let Some(peer) = response.remote_addr() {
+                    let verified = answer.addresses.contains(&peer.ip());
+                    if !verified {
+                        return Err(Error::NonPublicDestination(
+                            "connected peer is outside verified DNS addresses".into(),
+                        ));
+                    }
+                    let policy = match self.inner.config.network_policy {
+                        CrawlNetworkPolicy::PublicOnly => "public_only",
+                        CrawlNetworkPolicy::AllowPrivate => "allow_private",
+                    };
+                    #[cfg(any(test, feature = "crawler-bench"))]
+                    let policy = if self.inner.fixture.is_some() {
+                        "fixture_allowlist"
+                    } else {
+                        policy
+                    };
+                    response
+                        .extensions_mut()
+                        .insert(crate::capture::VerifiedPeer {
+                            ip: peer.ip(),
+                            validated: true,
+                            policy: policy.into(),
+                        });
+                }
                 self.inner
                     .counters
                     .headers_received

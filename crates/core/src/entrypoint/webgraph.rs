@@ -89,7 +89,17 @@ impl WebgraphWorker {
         pin!(warc_files);
 
         for file in warc_files.by_ref() {
-            for record in file.records().flatten() {
+            for record in file.records() {
+                let record = match record {
+                    Ok(record) => record,
+                    Err(error) => {
+                        tracing::error!("WARC contract error: {error}");
+                        continue;
+                    }
+                };
+                if !record.links_allowed() {
+                    continue;
+                }
                 let webpage =
                     match Html::parse_without_text(&record.response.body, &record.request.url) {
                         Ok(webpage) => webpage,
@@ -99,6 +109,9 @@ impl WebgraphWorker {
                         }
                     };
 
+                if webpage.is_no_follow() {
+                    continue;
+                }
                 let mut source = webpage.url().clone();
                 if let Some(index) = &self.canonical_index {
                     source = canonical_or_self(index, source);
@@ -260,5 +273,43 @@ impl Webgraph {
         crate::mv(graph.path(), &config.graph_base_path)?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod capture_contract_tests {
+    #[test]
+    fn header_nofollow_excludes_edges_but_noindex_alone_keeps_them() {
+        for (directive, allowed) in [
+            ("noindex", true),
+            ("nofollow", false),
+            ("otherbot: none", true),
+        ] {
+            let url = url::Url::parse("https://example.org/page").unwrap();
+            let capture = crate::capture::fixture(
+                &url,
+                uuid::Uuid::new_v4().to_string(),
+                b"<html><body><a href='https://other.org/'>link</a></body></html>".to_vec(),
+                vec![crate::capture::Header {
+                    name: "x-robots-tag".into(),
+                    value_hex: crate::capture::hex(directive.as_bytes()),
+                }],
+            );
+            let mut bytes = Vec::new();
+            crate::warc::capture::write(
+                &mut bytes,
+                &capture,
+                crate::warc::PayloadType::Html,
+                3,
+                true,
+            )
+            .unwrap();
+            let record = crate::warc::WarcFile::new(bytes)
+                .records()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.links_allowed(), allowed);
+        }
     }
 }

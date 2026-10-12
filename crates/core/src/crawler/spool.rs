@@ -96,6 +96,11 @@ impl SpoolConfig {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct SpoolStats {
+    pub capture_records: u64,
+    pub captured_payload_bytes: u64,
+    pub decoded_payload_bytes: u64,
+    pub noindex_records: u64,
+    pub nofollow_records: u64,
     pub records_durable: u64,
     pub records_recovered: u64,
     pub segments_total: u64,
@@ -147,6 +152,8 @@ pub enum Publication {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Segment {
     pub schema_version: u32,
+    #[serde(default)]
+    pub capture_versions: Vec<u32>,
     pub id: String,
     pub file: String,
     pub bytes: u64,
@@ -162,6 +169,10 @@ pub struct Segment {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Receipt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_offset: Option<u64>,
     pub capture_id: String,
     pub segment: String,
     pub start: u64,
@@ -309,7 +320,9 @@ impl Spool {
             let segment: Segment =
                 serde_json::from_reader(File::open(&path)?.take(JOURNAL_LINE_LIMIT))?;
             anyhow::ensure!(
-                segment.schema_version == 1 && uuid::Uuid::parse_str(&segment.id).is_ok(),
+                matches!(segment.schema_version, 1 | 2)
+                    && segment.capture_versions.iter().all(|version| *version == 1)
+                    && uuid::Uuid::parse_str(&segment.id).is_ok(),
                 "invalid segment identity"
             );
             anyhow::ensure!(
@@ -442,6 +455,10 @@ impl Spool {
             .is_some_and(|(name, _, _)| name == point)
         {
             let (_, crash, errno) = self.fault.take().unwrap();
+            #[cfg(feature = "crawler-bench")]
+            if crash && errno == 0 {
+                super::capture_frontier_benchmark::barrier(point);
+            }
             if crash {
                 std::process::exit(86);
             }
@@ -510,7 +527,8 @@ impl Spool {
         journal.sync_all()?;
         File::open(self.config.directory.join("segments"))?.sync_all()?;
         let segment = Segment {
-            schema_version: 1,
+            schema_version: 2,
+            capture_versions: vec![1],
             id: id.clone(),
             file,
             bytes: 0,
@@ -568,8 +586,19 @@ impl Spool {
         let mut index = 0;
         while index < records.len() {
             let first = records[index];
-            let bound = first.body.len() as u64
-                + first.body.len() as u64 / 100
+            let payload_size = first
+                .capture
+                .as_ref()
+                .map_or(first.body.len(), |c| c.payload.len());
+            let metadata_size = first
+                .capture
+                .as_ref()
+                .map(|c| serde_json::to_vec(&c.metadata).map(|v| v.len()))
+                .transpose()?
+                .unwrap_or(0);
+            let bound = payload_size as u64
+                + metadata_size as u64 * 2
+                + payload_size as u64 / 100
                 + first.url.as_str().len() as u64
                 + 8192;
             anyhow::ensure!(
@@ -639,20 +668,36 @@ impl Spool {
                     segment_digest: &mut active.digest,
                     bytes: 0,
                 };
-                warc::write_gzip_members(
-                    &mut output,
-                    &warc::RecordRef {
-                        url: datum.url.as_str(),
-                        date: Some(&datum.date),
-                        body: &datum.body,
-                        payload_type: Some(datum.payload_type),
-                        fetch_time_ms: datum.fetch_time_ms,
-                    },
-                    self.config.gzip_level,
-                    offset == 0,
-                )?;
+                let response_offset = if let Some(capture) = &datum.capture {
+                    Some(warc::capture::write(
+                        &mut output,
+                        capture,
+                        datum.payload_type,
+                        self.config.gzip_level,
+                        offset == 0,
+                    )?)
+                } else {
+                    warc::write_gzip_members(
+                        &mut output,
+                        &warc::RecordRef {
+                            url: datum.url.as_str(),
+                            date: Some(&datum.date),
+                            body: &datum.body,
+                            payload_type: Some(datum.payload_type),
+                            fetch_time_ms: datum.fetch_time_ms,
+                        },
+                        self.config.gzip_level,
+                        offset == 0,
+                    )?;
+                    None
+                };
                 receipts.push(Receipt {
-                    capture_id: uuid::Uuid::new_v4().to_string(),
+                    capture_version: datum.capture.as_ref().map(|c| c.metadata.schema_version),
+                    record_offset: response_offset.map(|relative| offset + relative),
+                    capture_id: datum.capture.as_ref().map_or_else(
+                        || uuid::Uuid::new_v4().to_string(),
+                        |c| c.metadata.fetch_id.clone(),
+                    ),
                     segment: format!("{}.warc.gz", active.id),
                     start: offset,
                     end: offset + output.bytes,
@@ -695,6 +740,25 @@ impl Spool {
         let segment = self.segments.get_mut(&active.id).unwrap();
         segment.bytes = end;
         segment.records = active.records;
+        for datum in records {
+            if let Some(capture) = &datum.capture {
+                if !segment
+                    .capture_versions
+                    .contains(&capture.metadata.schema_version)
+                {
+                    segment
+                        .capture_versions
+                        .push(capture.metadata.schema_version);
+                }
+                self.metrics.update(|stats| {
+                    stats.capture_records += 1;
+                    stats.captured_payload_bytes += capture.payload.len() as u64;
+                    stats.decoded_payload_bytes += datum.body.len() as u64;
+                    stats.noindex_records += u64::from(capture.metadata.robots.no_index);
+                    stats.nofollow_records += u64::from(capture.metadata.robots.no_follow);
+                });
+            }
+        }
         self.metrics.update(|s| s.group_commits += 1);
         self.refresh()?;
         Ok(receipts)

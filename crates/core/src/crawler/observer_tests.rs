@@ -37,6 +37,7 @@ fn observer() -> (tempfile::TempDir, Observer) {
 
 fn datum(url: url::Url) -> super::super::CrawlDatum {
     super::super::CrawlDatum {
+        capture: None,
         url,
         payload_type: crate::warc::PayloadType::Html,
         body: "<html>saved</html>".into(),

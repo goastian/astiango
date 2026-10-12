@@ -51,6 +51,7 @@ mod block_on;
 pub mod canon_index;
 mod collector;
 pub mod config;
+pub mod capture;
 pub mod crawler;
 mod dated_url;
 pub mod distributed;
