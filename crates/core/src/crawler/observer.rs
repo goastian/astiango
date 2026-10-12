@@ -1,13 +1,24 @@
-//! Persisted observations from real crawler work. No estimates or generated samples.
+//! Reconstructible crawler observations, projected independently of durable crawl data.
 
-use std::{collections::HashSet, fs, io::Write, path::PathBuf, sync::Mutex};
+use std::{
+    collections::{HashMap, VecDeque},
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Condvar, Mutex,
+    },
+    thread,
+    time::{Duration, Instant},
+};
 
 use chrono::Utc;
 use serde::Serialize;
 
 use super::Domain;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Snapshot {
     pub schema_version: u32,
     pub run_id: String,
@@ -29,140 +40,14 @@ pub struct Snapshot {
     pub history: Vec<Sample>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn observer() -> (tempfile::TempDir, Observer) {
-        let directory = tempfile::tempdir().unwrap();
-        let now = Utc::now().to_rfc3339();
-        let observer = Observer::new(
-            directory.path().join("status.json"),
-            Snapshot {
-                schema_version: 1,
-                run_id: "observer-c02-test".into(),
-                pid: std::process::id(),
-                started_at: now.clone(),
-                updated_at: now,
-                finished_at: None,
-                phase: "running".into(),
-                user_agent: "test".into(),
-                workers: 1,
-                min_crawl_delay_ms: 1,
-                pages_per_domain: 5,
-                continuous: false,
-                frontier: FrontierState::default(),
-                counters: Counters::default(),
-                sites: Vec::new(),
-                recent_events: Vec::new(),
-                warc: Warc {
-                    directory: directory.path().display().to_string(),
-                    files: 0,
-                    bytes: 0,
-                    current_file: None,
-                },
-                history: Vec::new(),
-            },
-        )
-        .unwrap();
-        (directory, observer)
-    }
-
-    fn datum(url: url::Url) -> super::super::CrawlDatum {
-        super::super::CrawlDatum {
-            url,
-            payload_type: crate::warc::PayloadType::Html,
-            body: "<html>saved</html>".into(),
-            fetch_time_ms: 3,
-            date: Utc::now(),
-        }
-    }
-
-    #[test]
-    fn transport_and_explicit_outcomes_remain_separate() {
-        let (directory, observer) = observer();
-        let url = url::Url::parse("https://example.test/page").unwrap();
-        let domain = Domain::from(&url);
-        observer.register_site(domain.as_str().into(), 5);
-        observer.event(&domain, Some(&url), "fetching", "candidate");
-        for _ in 0..3 {
-            observer.http_attempt(&domain, &url);
-        }
-        observer.redirect(&domain, &url);
-        observer.saved(&domain, &datum(url.clone()), "saved.warc.gz".into(), 12);
-        for kind in [
-            "failed",
-            "skipped",
-            "deferred",
-            "cancelled",
-            "storage_failed",
-        ] {
-            observer.event(&domain, Some(&url), kind, kind);
-        }
-        observer.check().unwrap();
-        let snapshot: serde_json::Value =
-            serde_json::from_slice(&fs::read(directory.path().join("status.json")).unwrap())
-                .unwrap();
-        let counters = &snapshot["counters"];
-        assert_eq!(counters["attempted"], 1);
-        assert_eq!(counters["page_http_attempts"], 3);
-        assert_eq!(counters["redirect_hops"], 1);
-        assert_eq!(counters["downloaded"], 1);
-        assert_eq!(counters["useful_pages"], 1);
-        for kind in [
-            "failed",
-            "skipped",
-            "deferred",
-            "cancelled",
-            "storage_failed",
-        ] {
-            assert_eq!(counters[kind], 1);
-            assert_eq!(snapshot["sites"][0][kind], 1);
-        }
-    }
-
-    #[test]
-    fn finish_preserves_incomplete_outcomes_and_unknown_saved_domains_are_safe() {
-        let (_directory, observer) = observer();
-        for status in ["deferred", "cancelled", "storage_failed"] {
-            let url = url::Url::parse(&format!("https://{status}.test/page")).unwrap();
-            let domain = Domain::from(&url);
-            observer.register_site(domain.as_str().into(), 5);
-            observer.event(&domain, Some(&url), &format!("site_{status}"), status);
-        }
-        let url = url::Url::parse("https://unregistered.test/page").unwrap();
-        observer.saved(
-            &Domain::from(&url),
-            &datum(url),
-            "redirect.warc.gz".into(),
-            12,
-        );
-        observer.finish("stopped");
-        observer.check().unwrap();
-        let snapshot = observer.snapshot.lock().unwrap();
-        assert_eq!(snapshot.counters.downloaded, 1);
-        assert_eq!(snapshot.counters.useful_pages, 1);
-        assert_eq!(snapshot.counters.completed_sites, 0);
-        for (site, expected) in
-            snapshot
-                .sites
-                .iter()
-                .zip(["deferred", "cancelled", "storage_failed"])
-        {
-            assert_eq!(site.status, expected);
-            assert!(site.current_url.is_none());
-        }
-    }
-}
-
-#[derive(Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct FrontierState {
     pub pending_domains: usize,
     pub discovered_domains: usize,
     pub capacity: usize,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct Counters {
     pub downloaded: u64,
     pub failed: u64,
@@ -179,7 +64,7 @@ pub struct Counters {
     pub completed_sites: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Site {
     pub host: String,
     pub status: String,
@@ -230,7 +115,7 @@ impl Site {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Event {
     pub at: String,
     pub level: String,
@@ -244,7 +129,7 @@ pub struct Event {
     pub warc_file: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Warc {
     pub directory: String,
     pub files: u64,
@@ -252,7 +137,7 @@ pub struct Warc {
     pub current_file: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Sample {
     pub at: String,
     pub downloaded: u64,
@@ -260,116 +145,359 @@ pub struct Sample {
     pub bytes: u64,
 }
 
-pub struct Observer {
+const PROJECTION_INTERVAL: Duration = Duration::from_secs(1);
+const FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+const EVENT_CAPACITY: usize = 100;
+const HISTORY_CAPACITY: usize = 720;
+const SITE_CAPACITY: usize = 500;
+const MAX_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Clone, Default, Serialize)]
+pub struct ObserverStats {
+    pub projection_interval_ms: u64,
+    pub event_capacity: usize,
+    pub updates: u64,
+    pub events_total: u64,
+    /// Evictions from the visual ring, including events already published previously.
+    pub events_dropped: u64,
+    /// Successfully renamed snapshots, not serialization attempts.
+    pub snapshot_writes: u64,
+    pub write_calls: u64,
+    pub bytes_written: u64,
+    pub errors: u64,
+    pub pending_updates: u64,
+    pub last_error: Option<String>,
+    pub last_failure_at: Option<String>,
+    pub last_published_at: Option<String>,
+    pub last_publish_latency_ms: u64,
+    pub max_publish_latency_ms: u64,
+    pub legacy_write_estimate: u64,
+}
+
+#[derive(Default)]
+struct Rings {
+    events: VecDeque<Event>,
+    history: VecDeque<Sample>,
+    events_total: u64,
+    events_dropped: u64,
+    capacity: usize,
+    last_sample: Option<Instant>,
+}
+
+impl Rings {
+    fn event(&mut self, event: Event) {
+        self.events_total += 1;
+        if self.events.len() >= self.capacity {
+            self.events.pop_back();
+            self.events_dropped += 1;
+        }
+        self.events.push_front(event);
+    }
+}
+
+struct State {
+    snapshot: Snapshot,
+    rings: Rings,
+    // Identity/status metadata outlives the bounded visual site list so totals remain exact.
+    registered_domains: HashMap<String, bool>,
+    stats: ObserverStats,
+    version: u64,
+    published_version: u64,
+    attempts: u64,
+    dirty_since: Option<Instant>,
+    force: bool,
+    shutdown: bool,
+}
+
+#[derive(Default)]
+struct IoCounters {
+    calls: AtomicU64,
+    bytes: AtomicU64,
+}
+
+struct CountingWriter<'a> {
+    file: fs::File,
+    counters: &'a IoCounters,
+}
+
+impl Write for CountingWriter<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.counters.calls.fetch_add(1, Ordering::Relaxed);
+        let written = self.file.write(buffer)?;
+        self.counters
+            .bytes
+            .fetch_add(written as u64, Ordering::Relaxed);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
+#[derive(Serialize)]
+struct Projection {
+    #[serde(flatten)]
+    snapshot: Snapshot,
+    telemetry: ObserverStats,
+}
+
+type Publisher = dyn Fn(&Path, &Projection, &IoCounters, bool) -> anyhow::Result<()> + Send + Sync;
+
+struct Shared {
+    state: Mutex<State>,
+    wake: Condvar,
+    io: IoCounters,
     path: PathBuf,
-    metrics: Option<std::sync::Arc<super::runtime::Metrics>>,
-    snapshot: Mutex<Snapshot>,
-    persistence_error: Mutex<Option<String>>,
-    registered_domains: Mutex<HashSet<String>>,
+    interval: Duration,
+    publisher: Arc<Publisher>,
+    publication: Mutex<()>,
+    metrics: Mutex<Option<Arc<super::runtime::Metrics>>>,
+}
+
+pub struct Observer {
+    shared: Arc<Shared>,
+    projector: Mutex<Option<thread::JoinHandle<()>>>,
+    // The synchronous implementation is only constructible in tests/the benchmark feature.
+    legacy: bool,
 }
 
 impl Observer {
     pub fn new(path: PathBuf, snapshot: Snapshot) -> anyhow::Result<Self> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let observer = Self {
+        Self::create(
             path,
-            metrics: None,
-            snapshot: Mutex::new(snapshot),
-            persistence_error: Mutex::new(None),
-            registered_domains: Mutex::new(HashSet::new()),
+            snapshot,
+            PROJECTION_INTERVAL,
+            EVENT_CAPACITY,
+            false,
+            Arc::new(persist),
+        )
+    }
+
+    #[cfg(any(test, feature = "crawler-bench"))]
+    pub(super) fn new_legacy(path: PathBuf, snapshot: Snapshot) -> anyhow::Result<Self> {
+        Self::create(
+            path,
+            snapshot,
+            PROJECTION_INTERVAL,
+            EVENT_CAPACITY,
+            true,
+            Arc::new(persist),
+        )
+    }
+
+    fn create(
+        path: PathBuf,
+        mut snapshot: Snapshot,
+        interval: Duration,
+        capacity: usize,
+        legacy: bool,
+        publisher: Arc<Publisher>,
+    ) -> anyhow::Result<Self> {
+        let events = std::mem::take(&mut snapshot.recent_events);
+        let history = std::mem::take(&mut snapshot.history);
+        let mut rings = Rings {
+            capacity: capacity.max(1),
+            ..Rings::default()
         };
-        observer.persist(&observer.snapshot.lock().unwrap())?;
-        Ok(observer)
+        for event in events.into_iter().rev() {
+            rings.event(event);
+        }
+        rings
+            .history
+            .extend(history.into_iter().rev().take(HISTORY_CAPACITY));
+        rings.history.make_contiguous().reverse();
+        snapshot.sites.truncate(SITE_CAPACITY);
+        let registered_domains = snapshot
+            .sites
+            .iter()
+            .map(|site| (site.host.clone(), site.status == "completed"))
+            .collect();
+        let shared = Arc::new(Shared {
+            state: Mutex::new(State {
+                snapshot,
+                rings,
+                registered_domains,
+                stats: ObserverStats {
+                    projection_interval_ms: interval.as_millis() as u64,
+                    event_capacity: capacity.max(1),
+                    legacy_write_estimate: 1,
+                    ..ObserverStats::default()
+                },
+                version: 1,
+                published_version: 0,
+                attempts: 0,
+                dirty_since: Some(Instant::now()),
+                force: true,
+                shutdown: false,
+            }),
+            wake: Condvar::new(),
+            io: IoCounters::default(),
+            path,
+            interval,
+            publisher,
+            publication: Mutex::new(()),
+            metrics: Mutex::new(None),
+        });
+        let projector = if legacy {
+            publish(&shared, true);
+            None
+        } else {
+            let worker = shared.clone();
+            Some(
+                thread::Builder::new()
+                    .name("crawler-observer".into())
+                    .spawn(move || project(worker))?,
+            )
+        };
+        Ok(Self {
+            shared,
+            projector: Mutex::new(projector),
+            legacy,
+        })
     }
 
     #[cfg(feature = "crawler-bench")]
-    pub(super) fn with_metrics(mut self, metrics: std::sync::Arc<super::runtime::Metrics>) -> Self {
-        self.metrics = Some(metrics);
+    pub(super) fn with_metrics(self, metrics: Arc<super::runtime::Metrics>) -> Self {
+        *self.shared.metrics.lock().unwrap() = Some(metrics);
         self
     }
 
-    fn persist(&self, snapshot: &Snapshot) -> anyhow::Result<()> {
-        let tmp = self.path.with_extension("json.tmp");
-        let mut file = fs::File::create(&tmp)?;
-        serde_json::to_writer(&mut file, snapshot)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        fs::rename(tmp, &self.path)?;
-        Ok(())
-    }
-
-    fn update(&self, f: impl FnOnce(&mut Snapshot)) {
-        let _timer = super::runtime::StageTimer::optional(self.metrics.as_ref(), "observer");
-        let mut snapshot = self.snapshot.lock().unwrap();
-        f(&mut snapshot);
-        snapshot.updated_at = Utc::now().to_rfc3339();
-        if let Err(error) = self.persist(&snapshot) {
-            tracing::error!("Cannot persist crawler observation: {error}");
-            *self.persistence_error.lock().unwrap() = Some(error.to_string());
+    fn update(&self, f: impl FnOnce(&mut Snapshot, &mut Rings, &mut HashMap<String, bool>)) {
+        let metrics = self.shared.metrics.lock().unwrap().clone();
+        let _timer = super::runtime::StageTimer::optional(metrics.as_ref(), "observer");
+        {
+            let mut state = self.shared.state.lock().unwrap();
+            let State {
+                snapshot,
+                rings,
+                registered_domains,
+                ..
+            } = &mut *state;
+            f(snapshot, rings, registered_domains);
+            state.snapshot.updated_at = Utc::now().to_rfc3339();
+            state.stats.updates += 1;
+            state.stats.legacy_write_estimate += 1;
+            state.version += 1;
+            state.dirty_since.get_or_insert_with(Instant::now);
+        }
+        if self.legacy {
+            publish(&self.shared, true);
         }
     }
 
+    pub fn statistics(&self) -> ObserverStats {
+        let state = self.shared.state.lock().unwrap();
+        statistics(&self.shared, &state)
+    }
+
+    /// Diagnostic only. A telemetry failure must never cancel otherwise durable work.
     pub fn check(&self) -> anyhow::Result<()> {
-        if let Some(error) = self.persistence_error.lock().unwrap().as_ref() {
+        if let Some(error) = self.shared.state.lock().unwrap().stats.last_error.as_ref() {
             anyhow::bail!("Cannot persist crawler observation: {error}");
         }
         Ok(())
     }
 
+    /// Force publication outside the fetch path (tests, reports and graceful shutdown).
+    pub fn flush(&self) -> anyhow::Result<()> {
+        self.flush_timeout(FLUSH_TIMEOUT)
+    }
+
+    pub fn flush_timeout(&self, timeout: Duration) -> anyhow::Result<()> {
+        if self.legacy {
+            return self.check();
+        }
+        let started = Instant::now();
+        let mut state = self.shared.state.lock().unwrap();
+        let target = state.version;
+        let attempts = state.attempts;
+        state.force = true;
+        self.shared.wake.notify_one();
+        loop {
+            if state.published_version >= target {
+                return Ok(());
+            }
+            if state.attempts > attempts {
+                if let Some(error) = &state.stats.last_error {
+                    anyhow::bail!("Cannot persist crawler observation: {error}");
+                }
+            }
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                anyhow::bail!("Timed out waiting for crawler observation publication");
+            }
+            state = self.shared.wake.wait_timeout(state, remaining).unwrap().0;
+        }
+    }
+
     pub fn heartbeat(&self) {
-        self.update(|s| {
-            s.history.push(Sample {
+        self.update(|s, rings, _| {
+            if rings
+                .last_sample
+                .is_some_and(|sample| sample.elapsed() < Duration::from_secs(5))
+            {
+                return;
+            }
+            rings.last_sample = Some(Instant::now());
+            if rings.history.len() >= HISTORY_CAPACITY {
+                rings.history.pop_front();
+            }
+            rings.history.push_back(Sample {
                 at: Utc::now().to_rfc3339(),
                 downloaded: s.counters.downloaded,
                 failed: s.counters.failed,
                 bytes: s.counters.bytes,
             });
-            if s.history.len() > 720 {
-                s.history.remove(0);
-            }
         });
     }
 
     pub fn register_site(&self, host: String, budget: u64) {
-        let first_visit = self.registered_domains.lock().unwrap().insert(host.clone());
-        self.update(|s| {
-            let mut was_completed = false;
+        self.update(|s, _, registered| {
+            let previous = registered.insert(host.clone(), false);
             if let Some(index) = s.sites.iter().position(|site| site.host == host) {
-                was_completed = s.sites.remove(index).status == "completed";
+                s.sites.remove(index);
             }
-            if first_visit {
-                s.counters.sites += 1;
-            } else if was_completed {
-                s.counters.completed_sites = s.counters.completed_sites.saturating_sub(1);
-            }
-            // Keep the live snapshot bounded; global counters remain cumulative.
-            if s.sites.len() >= 500 {
-                if let Some(index) = s.sites.iter().position(|site| site.status == "completed") {
-                    s.sites.remove(index);
+            match previous {
+                None => s.counters.sites += 1,
+                Some(true) => {
+                    s.counters.completed_sites = s.counters.completed_sites.saturating_sub(1)
                 }
+                Some(false) => {}
+            }
+            if s.sites.len() >= SITE_CAPACITY {
+                let index = s
+                    .sites
+                    .iter()
+                    .position(|site| {
+                        matches!(
+                            site.status.as_str(),
+                            "completed" | "failed" | "deferred" | "cancelled" | "storage_failed"
+                        )
+                    })
+                    .unwrap_or(0);
+                s.sites.remove(index);
             }
             s.sites.push(Site::new(host, budget));
         });
     }
 
     pub fn frontier(&self, pending_domains: usize, discovered_domains: usize, capacity: usize) {
-        self.update(|s| {
+        self.update(|s, _, _| {
             s.frontier = FrontierState {
                 pending_domains,
                 discovered_domains,
                 capacity,
-            };
+            }
         });
     }
 
     pub fn phase(&self, phase: &str) {
-        self.update(|s| s.phase = phase.into());
+        self.update(|s, _, _| s.phase = phase.into());
     }
 
     pub fn finish(&self, phase: &str) {
-        self.update(|s| {
+        self.update(|s, _, _| {
             s.phase = phase.into();
             s.finished_at = Some(Utc::now().to_rfc3339());
             for site in &mut s.sites {
@@ -383,108 +511,106 @@ impl Observer {
                 }
             }
         });
+        if let Err(error) = self.flush() {
+            tracing::warn!("Crawler observation shutdown: {error}");
+        }
     }
 
     pub fn event(&self, domain: &Domain, url: Option<&url::Url>, kind: &str, message: &str) {
-        self.update(|s| {
+        self.update(|s, rings, registered| {
             let now = Utc::now().to_rfc3339();
-            let site = s
-                .sites
-                .iter_mut()
-                .find(|site| site.host == domain.as_str())
-                .unwrap();
-            site.last_activity_at = now.clone();
+            // Totals are independent of retained visual events and sites.
             match kind {
-                "site_started" => site.status = "crawling".into(),
-                "checking" => {
-                    site.status = "crawling".into();
-                    site.current_url = url.map(ToString::to_string);
-                    site.next_request_at = None;
-                }
-                "fetching" => {
-                    site.status = "crawling".into();
-                    site.current_url = url.map(ToString::to_string);
-                    site.next_request_at = None;
-                    site.last_http_status = None;
-                    site.attempted += 1;
-                    s.counters.attempted += 1;
-                }
-                "failed" => {
-                    site.failed += 1;
-                    site.last_error = Some(message.into());
-                    s.counters.failed += 1;
-                }
-                "skipped" => {
-                    site.skipped += 1;
-                    s.counters.skipped += 1;
-                }
-                "http_attempt" => {
-                    site.page_http_attempts += 1;
-                    s.counters.page_http_attempts += 1;
-                    site.current_url = url.map(ToString::to_string);
-                    site.last_http_status = None;
-                }
-                "redirect" => {
-                    site.redirect_hops += 1;
-                    s.counters.redirect_hops += 1;
-                }
-                "deferred" => {
-                    site.deferred += 1;
-                    s.counters.deferred += 1;
-                    site.last_error = Some(message.into());
-                }
-                "cancelled" => {
-                    site.cancelled += 1;
-                    s.counters.cancelled += 1;
-                    site.last_error = Some(message.into());
-                }
-                "storage_failed" => {
-                    site.storage_failed += 1;
-                    s.counters.storage_failed += 1;
-                    site.last_error = Some(message.into());
-                }
-                "site_deferred" | "site_cancelled" | "site_storage_failed" => {
-                    site.status = kind.trim_start_matches("site_").into();
-                    site.current_url = None;
-                    site.next_request_at = None;
-                }
+                "fetching" => s.counters.attempted += 1,
+                "failed" => s.counters.failed += 1,
+                "skipped" => s.counters.skipped += 1,
+                "http_attempt" => s.counters.page_http_attempts += 1,
+                "redirect" => s.counters.redirect_hops += 1,
+                "deferred" => s.counters.deferred += 1,
+                "cancelled" => s.counters.cancelled += 1,
+                "storage_failed" => s.counters.storage_failed += 1,
                 "site_completed" => {
-                    site.status = "completed".into();
-                    site.current_url = None;
-                    site.next_request_at = None;
-                    s.counters.completed_sites += 1;
+                    if registered.insert(domain.as_str().into(), true) != Some(true) {
+                        s.counters.completed_sites += 1;
+                    }
                 }
                 _ => {}
+            }
+            let site = s.sites.iter_mut().find(|site| site.host == domain.as_str());
+            let mut http_status = None;
+            if let Some(site) = site {
+                site.last_activity_at = now.clone();
+                match kind {
+                    "site_started" => site.status = "crawling".into(),
+                    "checking" | "fetching" => {
+                        site.status = "crawling".into();
+                        site.current_url = url.map(|url| bounded(url.as_str()));
+                        site.next_request_at = None;
+                        if kind == "fetching" {
+                            site.last_http_status = None;
+                            site.attempted += 1;
+                        }
+                    }
+                    "failed" => {
+                        site.failed += 1;
+                        site.last_error = Some(bounded(message));
+                    }
+                    "skipped" => site.skipped += 1,
+                    "http_attempt" => {
+                        site.page_http_attempts += 1;
+                        site.current_url = url.map(|url| bounded(url.as_str()));
+                        site.last_http_status = None;
+                    }
+                    "redirect" => site.redirect_hops += 1,
+                    "deferred" => {
+                        site.deferred += 1;
+                        site.last_error = Some(bounded(message));
+                    }
+                    "cancelled" => {
+                        site.cancelled += 1;
+                        site.last_error = Some(bounded(message));
+                    }
+                    "storage_failed" => {
+                        site.storage_failed += 1;
+                        site.last_error = Some(bounded(message));
+                    }
+                    "site_deferred"
+                    | "site_cancelled"
+                    | "site_storage_failed"
+                    | "site_completed" => {
+                        site.status = kind.trim_start_matches("site_").into();
+                        site.current_url = None;
+                        site.next_request_at = None;
+                    }
+                    _ => {}
+                }
+                http_status = site.last_http_status;
             }
             if kind == "checking" {
                 return;
             }
-            s.recent_events.insert(
-                0,
-                Event {
-                    at: now,
-                    level: if matches!(kind, "failed" | "storage_failed" | "site_storage_failed") {
-                        "error"
-                    } else if matches!(
-                        kind,
-                        "skipped" | "deferred" | "cancelled" | "site_deferred" | "site_cancelled"
-                    ) {
-                        "warn"
-                    } else {
-                        "info"
-                    }
-                    .into(),
-                    kind: kind.into(),
-                    message: message.into(),
-                    host: domain.as_str().into(),
-                    url: url.map(ToString::to_string),
-                    http_status: site.last_http_status,
-                    bytes: None,
-                    fetch_time_ms: None,
-                    warc_file: None,
-                },
-            );
-            s.recent_events.truncate(100);
+            rings.event(Event {
+                at: now,
+                level: if matches!(kind, "failed" | "storage_failed" | "site_storage_failed") {
+                    "error"
+                } else if matches!(
+                    kind,
+                    "skipped" | "deferred" | "cancelled" | "site_deferred" | "site_cancelled"
+                ) {
+                    "warn"
+                } else {
+                    "info"
+                }
+                .into(),
+                kind: bounded(kind),
+                message: bounded(message),
+                host: domain.as_str().into(),
+                url: url.map(|url| bounded(url.as_str())),
+                http_status,
+                bytes: None,
+                fetch_time_ms: None,
+                warc_file: None,
+            });
         });
     }
 
@@ -507,28 +633,25 @@ impl Observer {
     }
 
     pub fn response(&self, domain: &Domain, status: u16) {
-        self.update(|s| {
-            let site = s
-                .sites
-                .iter_mut()
-                .find(|site| site.host == domain.as_str())
-                .unwrap();
-            site.last_http_status = Some(status);
+        self.update(|s, _, _| {
+            if let Some(site) = s.sites.iter_mut().find(|site| site.host == domain.as_str()) {
+                site.last_http_status = Some(status);
+            }
         });
     }
 
-    pub fn waiting(&self, domain: &Domain, duration: std::time::Duration) {
-        self.update(|s| {
-            let site = s
-                .sites
-                .iter_mut()
-                .find(|site| site.host == domain.as_str())
-                .unwrap();
-            site.status = "waiting".into();
-            site.next_request_at = Some(
-                (Utc::now() + chrono::Duration::milliseconds(duration.as_millis() as i64))
-                    .to_rfc3339(),
-            );
+    pub fn waiting(&self, domain: &Domain, duration: Duration) {
+        self.update(|s, _, _| {
+            if let Some(site) = s.sites.iter_mut().find(|site| site.host == domain.as_str()) {
+                site.status = "waiting".into();
+                site.next_request_at = Some(
+                    chrono::Duration::from_std(duration)
+                        .ok()
+                        .and_then(|delay| Utc::now().checked_add_signed(delay))
+                        .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC)
+                        .to_rfc3339(),
+                );
+            }
         });
     }
 
@@ -539,7 +662,7 @@ impl Observer {
         file: String,
         compressed_bytes: u64,
     ) {
-        self.update(|s| {
+        self.update(|s, rings, _| {
             let now = Utc::now().to_rfc3339();
             let bytes = datum.body.len() as u64;
             let site = s.sites.iter_mut().find(|site| site.host == domain.as_str());
@@ -557,23 +680,204 @@ impl Observer {
             s.counters.bytes += bytes;
             s.warc.files += 1;
             s.warc.bytes += compressed_bytes;
-            s.warc.current_file = Some(file.clone());
-            s.recent_events.insert(
-                0,
-                Event {
-                    at: now,
-                    level: "info".into(),
-                    kind: "saved".into(),
-                    message: "Página guardada en WARC".into(),
-                    host: domain.as_str().into(),
-                    url: Some(datum.url.to_string()),
-                    http_status,
-                    bytes: Some(bytes),
-                    fetch_time_ms: Some(datum.fetch_time_ms),
-                    warc_file: Some(file),
-                },
-            );
-            s.recent_events.truncate(100);
+            s.warc.current_file = Some(bounded(&file));
+            rings.event(Event {
+                at: now,
+                level: "info".into(),
+                kind: "saved".into(),
+                message: "Página guardada en WARC".into(),
+                host: domain.as_str().into(),
+                url: Some(bounded(datum.url.as_str())),
+                http_status,
+                bytes: Some(bytes),
+                fetch_time_ms: Some(datum.fetch_time_ms),
+                warc_file: Some(bounded(&file)),
+            });
         });
     }
+}
+
+impl Drop for Observer {
+    fn drop(&mut self) {
+        // Never join an unresponsive filesystem operation. The final explicit flush is bounded.
+        let mut state = self.shared.state.lock().unwrap();
+        state.shutdown = true;
+        self.shared.wake.notify_one();
+        drop(state);
+        if let Some(handle) = self.projector.lock().unwrap().take() {
+            if handle.is_finished() {
+                let _ = handle.join();
+            }
+        }
+    }
+}
+
+fn bounded(value: &str) -> String {
+    let mut end = value.len().min(8192);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
+}
+
+fn statistics(shared: &Shared, state: &State) -> ObserverStats {
+    let mut stats = state.stats.clone();
+    stats.events_total = state.rings.events_total;
+    stats.events_dropped = state.rings.events_dropped;
+    stats.pending_updates = state.version.saturating_sub(state.published_version);
+    stats.write_calls = shared.io.calls.load(Ordering::Relaxed);
+    stats.bytes_written = shared.io.bytes.load(Ordering::Relaxed);
+    stats
+}
+
+fn project(shared: Arc<Shared>) {
+    let mut next = Instant::now();
+    loop {
+        let mut state = shared.state.lock().unwrap();
+        loop {
+            let dirty = state.version > state.published_version;
+            if state.shutdown && !dirty {
+                return;
+            }
+            if dirty && (state.force || state.shutdown || Instant::now() >= next) {
+                break;
+            }
+            let delay = next.saturating_duration_since(Instant::now());
+            let delay = if delay.is_zero() {
+                shared.interval
+            } else {
+                delay
+            };
+            state = shared.wake.wait_timeout(state, delay).unwrap().0;
+        }
+        let shutdown = state.shutdown;
+        state.force = false;
+        drop(state);
+        publish(&shared, false);
+        if shutdown {
+            return;
+        }
+        next = Instant::now() + shared.interval;
+    }
+}
+
+fn publish(shared: &Shared, legacy: bool) {
+    let _publication = shared.publication.lock().unwrap();
+    let (projection, version, dirty_since) = {
+        let mut state = shared.state.lock().unwrap();
+        let mut snapshot = state.snapshot.clone();
+        snapshot.recent_events = state.rings.events.iter().cloned().collect();
+        snapshot.history = state.rings.history.iter().cloned().collect();
+        let mut telemetry = statistics(shared, &state);
+        // This envelope is only visible after its atomic rename succeeds. IO counters
+        // describe previously completed publications; statistics() includes this one.
+        telemetry.last_published_at = Some(Utc::now().to_rfc3339());
+        telemetry.last_error = None;
+        telemetry.pending_updates = 0;
+        let version = state.version;
+        let dirty_since = state.dirty_since.take().unwrap_or_else(Instant::now);
+        (
+            Projection {
+                snapshot,
+                telemetry,
+            },
+            version,
+            dirty_since,
+        )
+    };
+    let metrics = shared.metrics.lock().unwrap().clone();
+    let _timer = super::runtime::StageTimer::optional(metrics.as_ref(), "observer_projection");
+    let result = (shared.publisher)(&shared.path, &projection, &shared.io, legacy);
+    let mut state = shared.state.lock().unwrap();
+    state.attempts += 1;
+    let mut warning = None;
+    match result {
+        Ok(()) => {
+            state.published_version = state.published_version.max(version);
+            state.stats.snapshot_writes += 1;
+            state.stats.last_error = None;
+            state.stats.last_published_at = Some(Utc::now().to_rfc3339());
+            state.stats.last_publish_latency_ms = dirty_since.elapsed().as_millis() as u64;
+            state.stats.max_publish_latency_ms = state
+                .stats
+                .max_publish_latency_ms
+                .max(state.stats.last_publish_latency_ms);
+        }
+        Err(error) => {
+            let message = bounded(&error.to_string());
+            if state.stats.last_error.as_ref() != Some(&message) {
+                warning = Some(message.clone());
+            }
+            state.stats.last_error = Some(message);
+            state.stats.last_failure_at = Some(Utc::now().to_rfc3339());
+            state.stats.errors += 1;
+            state.dirty_since = Some(
+                state
+                    .dirty_since
+                    .map_or(dirty_since, |pending| pending.min(dirty_since)),
+            );
+        }
+    }
+    drop(state);
+    shared.wake.notify_all();
+    if let Some(message) = warning {
+        tracing::warn!("Cannot persist reconstructible crawler observation: {message}");
+    }
+}
+
+struct SnapshotBuffer(Vec<u8>);
+
+impl Write for SnapshotBuffer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > MAX_SNAPSHOT_BYTES.saturating_sub(self.0.len()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "crawler snapshot exceeds 16 MiB",
+            ));
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn persist(
+    path: &Path,
+    projection: &Projection,
+    counters: &IoCounters,
+    legacy: bool,
+) -> anyhow::Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let mut writer = CountingWriter {
+        file: fs::File::create(&tmp)?,
+        counters,
+    };
+    if legacy {
+        serde_json::to_writer(&mut writer, projection)?;
+        writer.write_all(b"\n")?;
+        writer.file.sync_all()?;
+    } else {
+        // Event, site and history counts are bounded; serialization never holds producer locks.
+        let mut bytes = SnapshotBuffer(Vec::new());
+        serde_json::to_writer(&mut bytes, projection)?;
+        bytes.write_all(b"\n")?;
+        writer.write_all(&bytes.0)?;
+    }
+    drop(writer);
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    include!("observer_tests.rs");
 }

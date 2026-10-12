@@ -170,6 +170,7 @@ try {
         ["—", "—", "—"],
         "legacy snapshots do not fabricate C02 counters",
       );
+      assert.equal(await page.locator(".telemetry-panel").count(), 0);
     } else {
       await page.getByRole("link", { name: "Banco C01 · local" }).click();
       await page.getByText("Aceptación verificada", { exact: true }).waitFor();
@@ -298,6 +299,94 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
   if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "c02-mobile.png"), fullPage: true });
+  const c03Snapshot = structuredClone(snapshot);
+  c03Snapshot.run_id = "c03-observer-health";
+  c03Snapshot.phase = "running";
+  c03Snapshot.finished_at = null;
+  c03Snapshot.updated_at = new Date(Date.now() - 60_000).toISOString();
+  c03Snapshot.telemetry = {
+    projection_interval_ms: 1000, event_capacity: 100, updates: 240,
+    events_total: 250, events_dropped: 150, snapshot_writes: 20,
+    write_calls: 22, bytes_written: 2048, errors: 3, pending_updates: 4,
+    last_error: null, last_failure_at: c03Snapshot.updated_at,
+    last_published_at: new Date().toISOString(), last_publish_latency_ms: 30,
+    max_publish_latency_ms: 70, legacy_write_estimate: 241,
+  };
+  c03Snapshot.recent_events = Array.from({ length: 100 }, (_, index) => ({
+    at: now, level: "info", kind: "saved", message: `Página conservada ${index}`,
+    host: "example.test", url: null, http_status: 200, bytes: 1,
+    fetch_time_ms: 1, warc_file: null,
+  }));
+  await writeFile(statePath, JSON.stringify(c03Snapshot));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`http://127.0.0.1:${c02Server.address().port}`);
+  await page.locator(".page-footer").filter({ hasText: "c03-observer-health" }).waitFor();
+  await page.locator(".telemetry-health").filter({ hasText: "Publicación al día" }).waitFor();
+  assert.equal((await page.locator(".connection").textContent()).trim(), "En ejecución");
+  await page.locator(".telemetry-panel > summary").click();
+  const telemetryValue = (label) => page.locator(".telemetry-details dl > div").filter({ has: page.getByText(label, { exact: true }) }).locator("dd");
+  assert.equal(await telemetryValue("Publicaciones atómicas").textContent(), "20");
+  assert.equal(await telemetryValue("Llamadas de escritura").textContent(), "22");
+  assert.equal(await telemetryValue("Demora de última publicación").textContent(), "30 ms");
+  assert.equal(await telemetryValue("Eventos recibidos").textContent(), "250");
+  assert.equal(await telemetryValue("Eventos fuera del buffer").textContent(), "150");
+  assert.equal(await telemetryValue("Errores de publicación").textContent(), "3");
+  assert.match(await page.locator(".activity-section .section-note").textContent(), /100 eventos registrados.*150 fuera del buffer/s);
+  c03Snapshot.telemetry.last_error = "controlled metrics output failure";
+  await writeFile(statePath, JSON.stringify(c03Snapshot));
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".telemetry-health").filter({ hasText: "Salida de métricas degradada" }).waitFor();
+  assert.equal((await page.locator(".connection").textContent()).trim(), "En ejecución");
+  assert.equal((await page.locator(".pages-panel .metric-value strong").textContent()).trim(), "91");
+  if (screenshotDirectory) await page.locator(".telemetry-panel").screenshot({ path: join(screenshotDirectory, "c03-degraded.png") });
+  c03Snapshot.telemetry.last_error = null;
+  c03Snapshot.telemetry.last_published_at = c03Snapshot.updated_at;
+  await writeFile(statePath, JSON.stringify(c03Snapshot));
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".connection").filter({ hasText: "Telemetría sin actualizar" }).waitFor();
+  await page.locator(".telemetry-health").filter({ hasText: "Publicación sin actualizar" }).waitFor();
+  await writeFile(statePath, "{broken");
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".telemetry-health").filter({ hasText: "Lectura no disponible" }).waitFor();
+  assert.equal((await page.locator(".pages-panel .metric-value strong").textContent()).trim(), "91");
+  c03Snapshot.telemetry.last_published_at = new Date().toISOString();
+  await writeFile(statePath, JSON.stringify(c03Snapshot));
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".telemetry-health").filter({ hasText: "Publicación al día" }).waitFor();
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "c03-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "c03-mobile.png"), fullPage: true });
+  const c03Report = structuredClone(report);
+  c03Report.configuration.acceptance_profile = "c03";
+  c03Report.configuration.observer_modes = ["legacy_sync", "async"];
+  c03Report.scenarios.forEach((scenario, index) => {
+    scenario.observer = true;
+    scenario.observer_mode = index === 0 ? "legacy_sync" : "async";
+    scenario.metrics.observer_stats = { write_calls: metric, updates: metric, max_publish_latency_ms: metric };
+  });
+  Object.assign(c03Report.comparisons[0], {
+    behavior_equivalent: false,
+    write_calls_reduction_pct: { median: -2, min: -3, max: -1, mad: 1 },
+    writes_per_update_reduction_pct: { median: 95, min: 94, max: 96, mad: 1 },
+  });
+  await writeFile(benchmarkPath, JSON.stringify(c03Report));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`http://127.0.0.1:${servers[1].address().port}`);
+  await page.getByRole("link", { name: "Banco C03 · local", exact: true }).click();
+  await page.getByRole("cell", { name: "Sincrónico legado", exact: true }).waitFor();
+  await page.getByRole("cell", { name: "Asíncrono", exact: true }).waitFor();
+  await page.locator(".benchmark-table thead th").filter({ hasText: /^Reducción por actualización$/ }).waitFor();
+  await page.getByRole("cell", { name: "Decisiones o trabajo diferentes", exact: true }).waitFor();
+  await page.getByRole("cell", { name: "No comparable", exact: true }).waitFor();
+  await page.getByRole("combobox", { name: "Escenario para inspeccionar etapas" }).selectOption("1");
+  await page.getByRole("table", { name: "Recursos del observador por escenario" }).waitFor();
+  const c03Download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Descargar C03", exact: true }).click();
+  assert.match((await c03Download).suggestedFilename(), /^crawler-c03-/);
+  if (screenshotDirectory) await page.locator("#banco-c01").screenshot({ path: join(screenshotDirectory, "c03-benchmark.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
   assert.deepEqual(errors, []);
   console.log(
     JSON.stringify({
@@ -307,6 +396,11 @@ try {
       benchmarkVisibleWithoutProduction: true,
       explicitOutcomes: true,
       legacyCountersRemainUnknown: true,
+      telemetryHealthAndRecovery: true,
+      telemetryDroppedEvents: 150,
+      unreadableMetricsKeepLastSnapshot: true,
+      benchmarkObserverModes: ["legacy_sync", "async"],
+      benchmarkBehaviorDifferencesVisible: true,
       mobileOverflow: false,
       pageErrors: errors,
     }),

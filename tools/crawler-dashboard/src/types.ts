@@ -44,8 +44,27 @@ export interface CrawlEvent {
   fetch_time_ms: number | null;
   warc_file: string | null;
 }
+export interface ObserverStats {
+  projection_interval_ms: number;
+  event_capacity: number;
+  updates: number;
+  events_total: number;
+  events_dropped: number;
+  snapshot_writes: number;
+  write_calls: number;
+  bytes_written: number;
+  errors: number;
+  pending_updates: number;
+  last_error: string | null;
+  last_failure_at: string | null;
+  last_published_at: string | null;
+  last_publish_latency_ms: number;
+  max_publish_latency_ms: number;
+  legacy_write_estimate: number;
+}
 export interface Snapshot {
   schema_version: number;
+  telemetry?: ObserverStats;
   continuous?: boolean;
   frontier?: {
     pending_domains: number;

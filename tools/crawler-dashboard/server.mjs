@@ -112,7 +112,7 @@ export function createDashboardServer({
     if (pathname === "/api/benchmarks") {
       if (!benchmarkPath) {
         respondJson(response, 404, {
-          error: "El banco local C01 no está habilitado en este dashboard.",
+          error: "El banco local no está habilitado en este dashboard.",
           code: "BENCHMARK_DISABLED",
         });
         return;
@@ -125,7 +125,7 @@ export function createDashboardServer({
         const report = JSON.parse(source);
         if (!isBenchmarkReport(report)) {
           respondJson(response, 503, {
-            error: "El informe del banco C01 tiene un formato no compatible.",
+            error: "El informe del banco tiene un formato no compatible.",
             code: "BENCHMARK_INVALID",
           });
           return;
@@ -142,8 +142,8 @@ export function createDashboardServer({
         const invalid = error instanceof SyntaxError;
         respondJson(response, 503, {
           error: missing
-            ? "El banco C01 todavía no ha publicado su informe."
-            : "No se pudo leer el informe del banco C01.",
+            ? "El banco todavía no ha publicado su informe."
+            : "No se pudo leer el informe del banco.",
           code: missing
             ? "BENCHMARK_UNAVAILABLE"
             : invalid

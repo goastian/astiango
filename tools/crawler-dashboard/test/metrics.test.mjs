@@ -19,6 +19,8 @@ const {
   summarizeOutcomes,
   summarizeIssues,
   buildSiteOutcomes,
+  snapshotAgeMs,
+  observerHealth,
 } = await import(
   `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`
 );
@@ -30,6 +32,27 @@ const sample = (seconds, downloaded = 0, failed = 0, bytes = 0) => ({
   downloaded,
   failed,
   bytes,
+});
+
+test("publication age uses the observer snapshot time and supports legacy documents", () => {
+  assert.equal(snapshotAgeMs({ updated_at: at(5), telemetry: { last_published_at: at(55) } }, Date.parse(at(60))), 5000);
+  assert.equal(snapshotAgeMs({ updated_at: at(5) }, Date.parse(at(60))), 55000);
+  assert.equal(snapshotAgeMs({ updated_at: at(5), telemetry: { last_published_at: null } }, Date.parse(at(60))), 55000);
+  assert.equal(snapshotAgeMs({ updated_at: "invalid" }, Date.parse(at(60))), null);
+  assert.equal(snapshotAgeMs(undefined, Date.parse(at(60))), null);
+  assert.equal(snapshotAgeMs({ updated_at: at(65) }, Date.parse(at(60))), 0);
+});
+
+test("observer degradation and recovery never become crawler or WARC failures", () => {
+  const stats = { errors: 3, last_error: null, last_publish_latency_ms: 40 };
+  assert.deepEqual(observerHealth(stats), { label: "Publicación al día", warning: false });
+  assert.deepEqual(observerHealth({ ...stats, last_error: "metrics disk unavailable" }), { label: "Salida de métricas degradada", warning: true });
+  assert.deepEqual(observerHealth(stats, { stale: true }), { label: "Publicación sin actualizar", warning: true });
+  assert.deepEqual(observerHealth(stats, { readError: true }), { label: "Lectura no disponible", warning: true });
+  assert.deepEqual(observerHealth(stats, { stale: true, paused: true }), { label: "Lectura pausada", warning: false });
+  assert.deepEqual(observerHealth({ ...stats, last_publish_latency_ms: 5001 }), { label: "Publicación demorada", warning: true });
+  assert.deepEqual(observerHealth(undefined), { label: "Sin detalle del observador", warning: false });
+  assert.deepEqual(stats, { errors: 3, last_error: null, last_publish_latency_ms: 40 });
 });
 
 test("empty history and a lone baseline do not fabricate observations", () => {

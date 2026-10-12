@@ -199,6 +199,7 @@ async fn run_config(
     let mut executor = JobExecutor::new(job.into(), Arc::new(config), sink.clone(), client);
     let directory = tempfile::tempdir().unwrap();
     let observation = directory.path().join("observer.json");
+    let mut telemetry = None;
     if observed {
         let now = "2023-11-14T22:13:20Z".to_string();
         let observer = Arc::new(
@@ -233,12 +234,16 @@ async fn run_config(
             .unwrap(),
         );
         observer.register_site(domain.as_str().to_owned(), paths.len() as u64);
-        executor = executor.with_observer(observer);
+        executor = executor.with_observer(observer.clone());
+        telemetry = Some(observer);
     }
     if let Some(flag) = cancellation {
         executor = executor.with_cancellation(flag);
     }
     let outcome = executor.run().await;
+    if let Some(observer) = telemetry {
+        observer.flush().unwrap();
+    }
     let observation =
         observed.then(|| serde_json::from_slice(&std::fs::read(observation).unwrap()).unwrap());
     let requests = http.requests.lock().unwrap().clone();

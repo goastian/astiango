@@ -40,6 +40,7 @@ pub struct Config {
     pub seeds_file: Option<PathBuf>,
     pub output_path: PathBuf,
     pub status_path: PathBuf,
+    pub state_directory: Option<PathBuf>,
     pub pages_per_domain: u64,
     pub num_worker_threads: usize,
     pub min_crawl_delay_ms: u64,
@@ -63,6 +64,23 @@ fn default_revisit_interval() -> u64 {
 }
 
 impl Config {
+    fn state_directory(&self) -> &Path {
+        self.state_directory.as_deref().unwrap_or_else(|| {
+            self.status_path
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."))
+        })
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        if self.state_directory.is_some() {
+            self.state_directory().join("status.lock")
+        } else {
+            self.status_path.with_extension("lock")
+        }
+    }
+
     fn validate(&self) -> Result<()> {
         anyhow::ensure!(
             self.network_policy == CrawlNetworkPolicy::PublicOnly,
@@ -379,6 +397,7 @@ struct LocalWarcSink {
     observer: Arc<Observer>,
     frontier: Arc<Frontier>,
     fatal_error: Mutex<Option<String>>,
+    store_warc: fn(&Path, &[u8]) -> Result<()>,
 }
 
 impl LocalWarcSink {
@@ -399,7 +418,7 @@ impl LocalWarcSink {
         })?;
         let bytes = writer.finish()?;
         let filename = format!("{}.warc.gz", uuid::Uuid::new_v4());
-        atomic_write(&self.directory.join(&filename), &bytes)?;
+        (self.store_warc)(&self.directory.join(&filename), &bytes)?;
         if let Ok(html) = Html::parse(&datum.body, datum.url.as_str()) {
             self.frontier.discover(
                 html.anchor_links()
@@ -421,12 +440,13 @@ impl LocalWarcSink {
         if let Some(error) = self.fatal_error.lock().unwrap().as_ref() {
             anyhow::bail!("Crawler storage failed: {error}");
         }
-        self.observer.check()
+        Ok(())
     }
 }
 
 impl DatumSink for LocalWarcSink {
     async fn write(&self, datum: CrawlDatum) -> super::Result<()> {
+        self.check().map_err(super::Error::Anyhow)?;
         if let Err(error) = self.commit(&datum) {
             *self.fatal_error.lock().unwrap() = Some(error.to_string());
             return Err(super::Error::Anyhow(error));
@@ -459,15 +479,13 @@ async fn shutdown_signal() -> Result<()> {
 pub async fn run(config: Config) -> Result<()> {
     config.validate()?;
     let seeds = config.seed_urls()?;
-    if let Some(parent) = config.status_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    fs::create_dir_all(config.state_directory())?;
     let lock = fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(config.status_path.with_extension("lock"))?;
+        .open(config.lock_path())?;
     lock.try_lock_exclusive()
         .context("Another local crawler already owns this state directory")?;
     let crawler_config = Arc::new(config.crawler_config());
@@ -506,7 +524,7 @@ pub async fn run(config: Config) -> Result<()> {
         },
     )?);
     let frontier = Arc::new(Frontier::open(
-        config.status_path.with_file_name("frontier.json"),
+        config.state_directory().join("frontier.json"),
         config.max_frontier,
         config.pages_per_domain,
         observer.clone(),
@@ -517,24 +535,19 @@ pub async fn run(config: Config) -> Result<()> {
         observer: observer.clone(),
         frontier: frontier.clone(),
         fatal_error: Mutex::new(None),
+        store_warc: atomic_write,
     });
-    let job_directory = config
-        .status_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("jobs")
-        .join(&run_id);
+    let job_directory = config.state_directory().join("jobs").join(&run_id);
     fs::create_dir_all(&job_directory)?;
     let mut jobs = tokio::task::JoinSet::new();
     let cancellation = Arc::new(AtomicBool::new(false));
     let mut shutting_down = false;
-    let mut heartbeat = tokio::time::interval(Duration::from_secs(5));
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(2));
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     let mut exhausted_at = None;
     let outcome: Result<()> = async {
         loop {
-            observer.check()?;
             while !shutting_down && jobs.len() < config.num_worker_threads {
                 let Some(job) = frontier.claim()? else { break };
                 if jobs.is_empty() {
@@ -902,6 +915,170 @@ mod tests {
         assert_eq!(migrated.max_redirect_hops, 10);
         config.network_policy = CrawlNetworkPolicy::AllowPrivate;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn metrics_destination_is_independent_of_durable_state_and_legacy_paths_work() {
+        let source = include_str!("../../../../configs/crawler/local.toml");
+        let mut config: Config = toml::from_str(source).unwrap();
+        let original_state = config.state_directory().to_owned();
+        let original_lock = config.lock_path();
+        config.status_path = PathBuf::from("/unavailable-metrics/status.json");
+        assert_eq!(config.state_directory(), original_state);
+        assert_eq!(config.lock_path(), original_lock);
+
+        let legacy = source
+            .lines()
+            .filter(|line| !line.starts_with("state_directory"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut config: Config = toml::from_str(&legacy).unwrap();
+        assert_eq!(config.state_directory(), original_state);
+        assert_eq!(config.lock_path(), original_lock);
+        config.status_path = PathBuf::from("legacy/custom.json");
+        assert_eq!(config.state_directory(), Path::new("legacy"));
+        assert_eq!(config.lock_path(), PathBuf::from("legacy/custom.lock"));
+    }
+
+    fn test_datum() -> CrawlDatum {
+        CrawlDatum {
+            url: Url::parse("https://example.org/article").unwrap(),
+            payload_type: warc::PayloadType::Html,
+            body: "<html><body>durable page despite metrics failure</body></html>".into(),
+            fetch_time_ms: 42,
+            date: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_metrics_output_does_not_fail_warc_checkpoint_or_job_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = dir.path().join("status.json");
+        fs::create_dir(&status).unwrap();
+        let telemetry = observer(status);
+        assert!(telemetry.flush().is_err());
+        let frontier = Arc::new(
+            Frontier::open(dir.path().join("frontier.json"), 2, 5, telemetry.clone()).unwrap(),
+        );
+        let datum = test_datum();
+        frontier.discover([datum.url.clone()]).unwrap();
+        let job = frontier.claim().unwrap().unwrap();
+        telemetry.register_site(job.domain.as_str().into(), 5);
+        let warcs = dir.path().join("warc");
+        fs::create_dir(&warcs).unwrap();
+        let sink = LocalWarcSink {
+            directory: warcs.clone(),
+            observer: telemetry.clone(),
+            frontier: frontier.clone(),
+            fatal_error: Mutex::new(None),
+            store_warc: atomic_write,
+        };
+        sink.write(datum.clone()).await.unwrap();
+        sink.checkpoint().await.unwrap();
+        sink.finish().await.unwrap();
+        let mut outcome = JobOutcome::default();
+        outcome.record(
+            datum.url.clone(),
+            FetchOutcome::DurableSuccess {
+                final_url: datum.url.clone(),
+            },
+        );
+        let ledger = dir.path().join("jobs");
+        fs::create_dir(&ledger).unwrap();
+        persist_job_outcome(&ledger, &job.domain, &outcome).unwrap();
+        frontier
+            .resolve(&job.domain, &outcome, 10_000, Utc::now())
+            .unwrap();
+        assert!(frontier.is_empty());
+        let persisted: Queue = serde_json::from_slice(&fs::read(&frontier.path).unwrap()).unwrap();
+        assert!(persisted.active.is_empty());
+        let path = fs::read_dir(warcs).unwrap().next().unwrap().unwrap().path();
+        let file = warc::WarcFile::open(&path).unwrap();
+        let record = file.records().next().unwrap().unwrap();
+        assert_eq!(record.request.url, datum.url.as_str());
+        assert_eq!(record.response.body, datum.body);
+        let path = fs::read_dir(ledger)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let record: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(record["successful"], true);
+        assert!(telemetry.check().is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn kernel_disk_full_stops_warc_writes_and_retains_job_for_replay() {
+        fn full_device(_path: &Path, bytes: &[u8]) -> Result<()> {
+            fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")?
+                .write_all(bytes)?;
+            Ok(())
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let telemetry = observer(dir.path().join("status.json"));
+        let path = dir.path().join("frontier.json");
+        let frontier = Arc::new(Frontier::open(path.clone(), 2, 5, telemetry.clone()).unwrap());
+        let datum = test_datum();
+        frontier.discover([datum.url.clone()]).unwrap();
+        let job = frontier.claim().unwrap().unwrap();
+        telemetry.register_site(job.domain.as_str().into(), 5);
+        let warcs = dir.path().join("warc");
+        fs::create_dir(&warcs).unwrap();
+        let mut sink = LocalWarcSink {
+            directory: warcs.clone(),
+            observer: telemetry.clone(),
+            frontier: frontier.clone(),
+            fatal_error: Mutex::new(None),
+            store_warc: full_device,
+        };
+        let error = sink.write(datum.clone()).await.unwrap_err();
+        match &error {
+            super::super::Error::Anyhow(error) => {
+                assert_eq!(
+                    error
+                        .downcast_ref::<std::io::Error>()
+                        .unwrap()
+                        .raw_os_error(),
+                    Some(28)
+                );
+            }
+            other => panic!("Expected kernel ENOSPC, got {other:?}"),
+        }
+        assert!(sink.checkpoint().await.is_err());
+        // Even if storage recovers, this failed sink must not accept more work.
+        sink.store_warc = atomic_write;
+        assert!(sink.write(datum.clone()).await.is_err());
+        assert!(sink.finish().await.is_err());
+        assert_eq!(fs::read_dir(warcs).unwrap().count(), 0);
+        let mut outcome = JobOutcome::default();
+        outcome.record(
+            datum.url.clone(),
+            FetchOutcome::StorageFailure {
+                message: error.to_string(),
+            },
+        );
+        let ledger = dir.path().join("jobs");
+        fs::create_dir(&ledger).unwrap();
+        persist_job_outcome(&ledger, &job.domain, &outcome).unwrap();
+        assert!(frontier
+            .resolve(&job.domain, &outcome, 10_000, Utc::now())
+            .is_err());
+        let persisted: Queue = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted.active.len(), 1);
+        assert!(persisted.delayed.is_empty());
+        telemetry.flush().unwrap();
+        let snapshot: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join("status.json")).unwrap()).unwrap();
+        assert_eq!(snapshot["counters"]["downloaded"], 0);
+        assert_eq!(snapshot["warc"]["files"], 0);
+        drop(sink);
+        drop(frontier);
+        let restored = Frontier::open(path, 2, 5, telemetry).unwrap();
+        assert_eq!(restored.claim().unwrap().unwrap().urls[0].url, datum.url);
     }
 
     #[test]

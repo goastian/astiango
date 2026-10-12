@@ -1,4 +1,23 @@
-import type { CrawlEvent, Site, Snapshot } from "./types";
+import type { CrawlEvent, ObserverStats, Site, Snapshot } from "./types";
+
+export function snapshotAgeMs(snapshot: Snapshot | undefined, now: number): number | null {
+  if (!snapshot) return null;
+  const published = Date.parse(snapshot.telemetry?.last_published_at ?? snapshot.updated_at);
+  return Number.isFinite(published) ? Math.max(0, now - published) : null;
+}
+
+export function observerHealth(
+  stats: ObserverStats | undefined,
+  { readError = false, stale = false, paused = false } = {},
+): { label: string; warning: boolean } {
+  if (readError) return { label: "Lectura no disponible", warning: true };
+  if (stats?.last_error) return { label: "Salida de métricas degradada", warning: true };
+  if (paused) return { label: "Lectura pausada", warning: false };
+  if (stale) return { label: "Publicación sin actualizar", warning: true };
+  if (stats && stats.last_publish_latency_ms > 5_000)
+    return { label: "Publicación demorada", warning: true };
+  return { label: stats ? "Publicación al día" : "Sin detalle del observador", warning: false };
+}
 
 export interface HistoryBar {
   start: number;

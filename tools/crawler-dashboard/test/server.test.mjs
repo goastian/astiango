@@ -46,6 +46,7 @@ test("status preserves actual snapshot and reports a live process", async (t) =>
   const result = await response.json();
   assert.equal(response.status, 200);
   assert.deepEqual(result.snapshot, snapshot);
+  assert.equal(result.snapshot.telemetry, undefined);
   assert.equal(result.meta.process_alive, true);
   assert.equal(response.headers.get("cache-control"), "no-store");
   await writeFile(statePath, "{broken");
@@ -92,4 +93,29 @@ test("status preserves additive C02 counters and explicit site outcomes", async 
   const response = await fetch(`${base}/api/status`);
   assert.equal(response.status, 200);
   assert.deepEqual((await response.json()).snapshot, snapshot);
+});
+
+test("stale or degraded telemetry remains separate from process and WARC health", async (t) => {
+  const { base, statePath } = await setup(t);
+  const earlier = new Date(Date.now() - 60_000).toISOString();
+  const snapshot = {
+    schema_version: 1, pid: process.pid, phase: "running", updated_at: earlier,
+    counters: { downloaded: 91, failed: 0, storage_failed: 0 }, sites: [],
+    telemetry: {
+      projection_interval_ms: 1000, event_capacity: 100, updates: 240,
+      events_total: 250, events_dropped: 150, snapshot_writes: 20,
+      write_calls: 22, bytes_written: 2048, errors: 2, pending_updates: 4,
+      last_error: "metrics output unavailable", last_failure_at: earlier,
+      last_published_at: earlier, last_publish_latency_ms: 30,
+      max_publish_latency_ms: 70, legacy_write_estimate: 241,
+    },
+  };
+  await writeFile(statePath, JSON.stringify(snapshot));
+  const response = await fetch(`${base}/api/status`);
+  const result = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(result.meta.process_alive, true);
+  assert.deepEqual(result.snapshot, snapshot);
+  assert.equal(result.snapshot.counters.storage_failed, 0);
+  assert.equal(result.snapshot.telemetry.events_dropped, 150);
 });

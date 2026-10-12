@@ -69,7 +69,7 @@ test("benchmark is opt-in even if a report exists, without exposing paths", asyn
   const response = await fetch(`${base}/api/benchmarks`);
   assert.equal(response.status, 404);
   assert.deepEqual(await response.json(), {
-    error: "El banco local C01 no está habilitado en este dashboard.",
+    error: "El banco local no está habilitado en este dashboard.",
     code: "BENCHMARK_DISABLED",
   });
   assert.equal((await fetch(`${base}/report.json`)).status, 404);
@@ -155,6 +155,15 @@ test("incompatible distributions and scenario identities are rejected", async (t
       value.scenarios[0].observer = "unknown";
     },
     (value) => {
+      value.scenarios[0].observer_mode = "unknown";
+    },
+    (value) => {
+      value.scenarios[0].metrics.observer_stats = { write_calls: { ...metric, median: -1 } };
+    },
+    (value) => {
+      value.comparisons[0].write_calls_reduction_pct = { ...metric, mad: -1 };
+    },
+    (value) => {
       value.scenarios[0].repetitions = 0;
     },
     (value) => {
@@ -184,4 +193,27 @@ test("incompatible distributions and scenario identities are rejected", async (t
     assert.equal(response.status, 503, mutate.toString());
     assert.equal((await response.json()).code, "BENCHMARK_INVALID");
   }
+});
+
+test("C03 reports preserve both observer modes and signed measured reductions", async (t) => {
+  const { base, benchmarkPath } = await setup(t);
+  const value = report();
+  value.configuration.acceptance_profile = "c03";
+  value.configuration.observer_modes = ["legacy_sync", "async"];
+  const scenario = value.scenarios[0];
+  value.scenarios = ["legacy_sync", "async"].map((mode) => ({
+    ...scenario, observer: true, observer_mode: mode,
+    metrics: { ...scenario.metrics, observer_stats: { write_calls: metric, updates: metric } },
+    runs: [{ repetition: 1, observer_mode: mode, observer_stats: { write_calls: 12 } }],
+  }));
+  Object.assign(value.comparisons[0], {
+    behavior_equivalent: false,
+    write_calls_reduction_pct: { median: -2, min: -3, max: -1, mad: 1 },
+    writes_per_update_reduction_pct: { median: 95, min: 94, max: 96, mad: 1 },
+  });
+  await writeFile(benchmarkPath, JSON.stringify(value));
+  const response = await fetch(`${base}/api/benchmarks`);
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).report, value);
+  assert.equal((await fetch(`${base}/api/status`)).status, 503);
 });

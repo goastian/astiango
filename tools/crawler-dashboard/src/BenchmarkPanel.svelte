@@ -7,7 +7,7 @@
     BenchmarkRun,
   } from "./benchmark-types";
 
-  let { onavailability }: { onavailability: (available: boolean) => void } =
+  let { onavailability }: { onavailability: (available: boolean, profile?: string) => void } =
     $props();
   let report = $state<BenchmarkReport | null>(null);
   let enabled = $state(false);
@@ -16,6 +16,7 @@
   let selectedIndex = $state(0);
   let controller: AbortController | null = null;
   const selected = $derived(report?.scenarios[selectedIndex]);
+  const profile = $derived(report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
   const formatter = new Intl.NumberFormat("es-CO", {
     maximumFractionDigits: 2,
   });
@@ -42,6 +43,15 @@
     http_429: "HTTP 429 · límite de peticiones",
     content_too_large: "Cuerpo superior al límite",
     other: "Otros errores",
+  };
+  const observerStatsNames: Record<string, string> = {
+    updates: "Actualizaciones recibidas", snapshot_writes: "Publicaciones atómicas",
+    write_calls: "Llamadas de escritura", bytes_written: "Bytes escritos",
+    events_total: "Eventos recibidos", events_dropped: "Eventos fuera del buffer",
+    errors: "Errores de publicación", pending_updates: "Actualizaciones pendientes",
+    max_publish_latency_ms: "Demora máxima de publicación",
+    last_publish_latency_ms: "Demora de última publicación",
+    legacy_write_estimate: "Escrituras históricas estimadas",
   };
   function runErrors(run: BenchmarkRun) {
     if (!run.errors) return "No publicado";
@@ -86,7 +96,11 @@
   function distribution(scenario: BenchmarkScenario, key: string) {
     return scenario.metrics[key] as Distribution | undefined;
   }
-  function observer(value: BenchmarkScenario["observer"]) {
+  function observer(scenario: BenchmarkScenario) {
+    if (scenario.observer_mode === "legacy_sync") return "Sincrónico legado";
+    if (scenario.observer_mode === "async") return "Asíncrono";
+    if (scenario.observer_mode === "off") return "Sin observador";
+    const value = scenario.observer;
     return value === true || value === "on" || value === "enabled"
       ? "Con observador"
       : "Sin observador";
@@ -119,8 +133,9 @@
         return;
       }
       if (!response.ok)
-        throw new Error(data.error || "No se pudo consultar el informe C01.");
+        throw new Error(data.error || "No se pudo consultar el informe del banco.");
       report = data.report;
+      onavailability(true, profile);
       if (selectedIndex >= (report?.scenarios.length ?? 0)) selectedIndex = 0;
       error = "";
     } catch (cause) {
@@ -129,7 +144,7 @@
         error =
           cause instanceof Error && cause.name !== "AbortError"
             ? cause.message
-            : "La consulta del informe C01 agotó el tiempo de espera.";
+            : "La consulta del informe del banco agotó el tiempo de espera.";
     } finally {
       window.clearTimeout(timeout);
       loading = false;
@@ -142,7 +157,7 @@
     );
     const link = document.createElement("a");
     link.href = url;
-    link.download = `crawler-c01-${Date.parse(report.generated_at)}.json`;
+    link.download = `crawler-${profile.toLowerCase()}-${Date.parse(report.generated_at)}.json`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -166,7 +181,7 @@
   >
     <div class="benchmark-heading">
       <div>
-        <span class="benchmark-eyebrow">BANCO LOCAL · C01</span>
+        <span class="benchmark-eyebrow">BANCO LOCAL · {profile}</span>
         <h2 id="benchmark-heading">Capacidad y recursos</h2>
         <p>
           Pruebas controladas en loopback. Sus peticiones y páginas pertenecen
@@ -178,7 +193,7 @@
           >Actualizar banco</button
         >
         <button class="button" onclick={download} disabled={!report}
-          >Descargar C01</button
+          >Descargar {profile}</button
         >
       </div>
     </div>
@@ -223,7 +238,7 @@
           <tbody
             >{#each report.scenarios as scenario}<tr>
                 <th scope="row">{scenario.name}</th><td>{scenario.origins}</td
-                ><td>{observer(scenario.observer)}</td><td
+                ><td>{observer(scenario)}</td><td
                   >{scenario.repetitions}</td
                 >
                 {#each resources as resource}
@@ -251,16 +266,25 @@
         <div class="benchmark-detail">
           <h3>Comparación del observador</h3>
           <p>
-            Diferencia observada de duración mediana. Incluye variación entre
-            repeticiones y cambios actuales de pausas y presupuestos (C02); no
-            estima sobrecoste puro. Sólo se compara con peticiones y páginas
-            iguales.
+            {#if profile === "C03"}
+              Asíncrono frente a sincrónico legado. Reducción medida de llamadas
+              de escritura, en total y por actualización: un valor positivo
+              indica menos escrituras. Se conservan las diferencias de carga y decisiones.
+            {:else if profile === "C02"}
+              Diferencia de duración mediana con y sin observador. La comparación
+              conserva la equivalencia de peticiones, páginas y decisiones publicada.
+            {:else}
+              Diferencia observada de duración mediana. El informe C01 histórico
+              incluye cambios de pausas y presupuestos anteriores a C02; no estima
+              sobrecoste puro. Sólo se compara con peticiones y páginas iguales.
+            {/if}
           </p>
           <div class="benchmark-scroll">
             <table class="benchmark-table">
               <thead
                 ><tr
-                  ><th>Escenario</th><th>Orígenes</th><th>Duración</th><th
+                  ><th>Escenario</th><th>Orígenes</th><th>Duración</th>
+                  {#if profile === "C03"}<th>Reducción de escrituras</th><th>Reducción por actualización</th>{/if}<th
                     >Misma carga</th
                   ></tr
                 ></thead
@@ -272,22 +296,31 @@
                     >
                     <td
                       >{!comparison.requests_equal ||
-                      !comparison.saved_pages_equal
+                      !comparison.saved_pages_equal || comparison.behavior_equivalent === false
                         ? "No comparable"
                         : comparison.duration_overhead_pct == null
                           ? "—"
                           : `${comparison.duration_overhead_pct > 0 ? "+" : ""}${display(comparison.duration_overhead_pct)} %`}</td
                     >
+                    {#if profile === "C03"}
+                      {#each [comparison.write_calls_reduction_pct, comparison.writes_per_update_reduction_pct] as metric}
+                        <td class="benchmark-numeric"><strong>{display(metric?.median, "%")}</strong>
+                          {#if metric}<small>MAD {display(metric.mad, "%")}</small><small>{display(metric.min, "%")}–{display(metric.max, "%")}</small>{/if}
+                        </td>
+                      {/each}
+                    {/if}
                     <td
                       class:benchmark-failed={!comparison.requests_equal ||
-                        !comparison.saved_pages_equal}
+                        !comparison.saved_pages_equal || comparison.behavior_equivalent === false}
                     >
-                      {comparison.requests_equal && comparison.saved_pages_equal
-                        ? "Peticiones y páginas iguales"
-                        : "Peticiones o páginas diferentes"}
+                      {comparison.behavior_equivalent === false
+                        ? "Decisiones o trabajo diferentes"
+                        : comparison.requests_equal && comparison.saved_pages_equal
+                          ? comparison.behavior_equivalent ? "Trabajo y decisiones iguales" : "Peticiones y páginas iguales"
+                          : "Peticiones o páginas diferentes"}
                     </td>
                   </tr>{:else}<tr
-                    ><td colspan="4">Sin comparación publicada.</td></tr
+                    ><td colspan={profile === "C03" ? 6 : 4}>Sin comparación publicada.</td></tr
                   >{/each}</tbody
               >
             </table>
@@ -300,9 +333,7 @@
               ><span class="sr-only">Escenario para inspeccionar etapas</span
               ><select bind:value={selectedIndex}>
                 {#each report.scenarios as scenario, index}<option value={index}
-                    >{scenario.name} · {scenario.origins} orígenes · {observer(
-                      scenario.observer,
-                    )}</option
+                    >{scenario.name} · {scenario.origins} orígenes · {observer(scenario)}</option
                   >{/each}
               </select></label
             >
@@ -338,6 +369,23 @@
             </table>
           </div>
           {#if selected}
+            {#if selected.metrics.observer_stats}
+              <h3 class="benchmark-resource-title">Publicación del observador</h3>
+              <div class="benchmark-scroll">
+                <table class="benchmark-table" aria-label="Recursos del observador por escenario">
+                  <thead><tr><th>Métrica</th><th>Mediana</th><th>MAD</th><th>Rango</th></tr></thead>
+                  <tbody>
+                    {#each Object.entries(selected.metrics.observer_stats) as [key, metric]}
+                      {@const unit = key.endsWith("_ms") ? "ms" : key === "bytes_written" ? "bytes" : ""}
+                      <tr><th scope="row">{observerStatsNames[key] ?? key.replaceAll("_", " ")}</th>
+                        <td>{display(metric.median, unit)}</td><td>{display(metric.mad, unit)}</td>
+                        <td>{display(metric.min, unit)}–{display(metric.max, unit)}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
             <h3
               class="benchmark-resource-title"
               id="benchmark-run-errors-heading"

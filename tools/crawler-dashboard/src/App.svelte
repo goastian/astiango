@@ -3,10 +3,12 @@
   import Icon from "./Icon.svelte";
   import BenchmarkPanel from "./BenchmarkPanel.svelte";
   import RequestOutcomes from "./RequestOutcomes.svelte";
+  import TelemetryStatus from "./TelemetryStatus.svelte";
   import {
     buildHistoryBars,
     summarizeOutcomes,
     buildSiteOutcomes,
+    snapshotAgeMs,
   } from "./metrics";
   import type { StatusResponse, Site, SiteStatus } from "./types";
 
@@ -22,6 +24,7 @@
   let windowMinutes = $state(15);
   let showConfig = $state(false);
   let benchmarkAvailable = $state(false);
+  let benchmarkProfile = $state("C01");
   let lastRead = $state<string | null>(null);
   let abortController: AbortController | null = null;
 
@@ -64,7 +67,7 @@
     snapshot?.phase === "running" || snapshot?.phase === "idle",
   );
   const stale = $derived(
-    !!snapshot && now - Date.parse(snapshot.updated_at) > 15_000,
+    (snapshotAgeMs(snapshot, now) ?? 0) > 15_000,
   );
   const offline = $derived(
     response?.meta.process_alive === false && activeProcess,
@@ -132,7 +135,7 @@
           : paused
             ? "Lectura pausada"
             : stale && activeProcess
-              ? "Estado sin actualizar"
+              ? "Telemetría sin actualizar"
               : phases[snapshot.phase],
   );
   const elapsed = $derived(
@@ -443,7 +446,7 @@
         >Sitios</a
       ><a href="#actividad">Actividad</a><a href="#almacenamiento"
         >Archivos WARC</a
-      >{#if benchmarkAvailable}<a href="#banco-c01">Banco C01 · local</a
+      >{#if benchmarkAvailable}<a href="#banco-c01">Banco {benchmarkProfile} · local</a
         >{/if}<span>ASTIAN CRAWLER</span>
     </nav>
   </header>
@@ -460,10 +463,11 @@
             ? "El proceso del crawler ya no está activo."
             : paused
               ? "El crawler continúa de forma independiente."
-              : "El crawler no ha publicado un estado reciente.")}
+              : "El estado visible no se ha actualizado. Esta lectura no permite concluir que el crawler esté detenido.")}
         {#if snapshot}Se conserva el último estado recibido.{/if}
       </div>
     {/if}
+    <TelemetryStatus {snapshot} {now} readError={!!error} stale={stale && activeProcess} {paused} />
     <section
       class="overview-grid"
       id="resumen"
@@ -1094,7 +1098,7 @@
         </div>
         <div class="section-note">
           Últimos {snapshot?.recent_events.length ?? 0} eventos registrados · más
-          recientes primero
+          recientes primero{#if snapshot?.telemetry} · {number.format(snapshot.telemetry.events_dropped)} fuera del buffer{/if}
         </div>
       </section>
       <section
@@ -1135,7 +1139,10 @@
       </section>
     </div>
     <BenchmarkPanel
-      onavailability={(available) => (benchmarkAvailable = available)}
+      onavailability={(available, profile) => {
+        benchmarkAvailable = available;
+        if (profile) benchmarkProfile = profile;
+      }}
     />
     <footer class="page-footer">
       <span

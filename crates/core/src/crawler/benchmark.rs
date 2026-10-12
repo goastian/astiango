@@ -13,7 +13,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use futures::{stream, StreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{
@@ -41,11 +41,21 @@ pub struct Config {
     pub origins: Vec<Origin>,
     pub paths: Vec<String>,
     pub observer: bool,
+    #[serde(default)]
+    pub observer_mode: ObserverMode,
     pub output_dir: PathBuf,
     pub min_crawl_delay_ms: u64,
     pub max_crawl_delay_ms: u64,
     pub workers: usize,
     pub timeout_seconds: u64,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObserverMode {
+    #[default]
+    Async,
+    LegacySync,
 }
 
 struct LoopbackDns {
@@ -204,9 +214,6 @@ impl DatumSink for BenchSink {
         if let Some(error) = &*self.fatal.lock().unwrap() {
             return Err(anyhow!("benchmark storage failed: {error}").into());
         }
-        if let Some(observer) = &self.observer {
-            observer.check()?;
-        }
         Ok(())
     }
 }
@@ -216,37 +223,37 @@ fn observer(config: &Config, metrics: Arc<Metrics>) -> Result<Option<Arc<Observe
         return Ok(None);
     }
     let now = chrono::Utc::now().to_rfc3339();
-    Ok(Some(Arc::new(
-        Observer::new(
-            config.output_dir.join("observer.json"),
-            Snapshot {
-                schema_version: 1,
-                run_id: "isolated-benchmark".into(),
-                pid: std::process::id(),
-                started_at: now.clone(),
-                updated_at: now,
-                finished_at: None,
-                phase: "running".into(),
-                user_agent: "CrawlerBench/1.0".into(),
-                workers: config.workers,
-                min_crawl_delay_ms: config.min_crawl_delay_ms,
-                pages_per_domain: config.paths.len() as u64,
-                continuous: false,
-                frontier: FrontierState::default(),
-                counters: Counters::default(),
-                sites: Vec::new(),
-                recent_events: Vec::new(),
-                history: Vec::new(),
-                warc: Warc {
-                    directory: config.output_dir.join("warc").display().to_string(),
-                    files: 0,
-                    bytes: 0,
-                    current_file: None,
-                },
-            },
-        )?
-        .with_metrics(metrics),
-    )))
+    let path = config.output_dir.join("observer.json");
+    let snapshot = Snapshot {
+        schema_version: 1,
+        run_id: "isolated-benchmark".into(),
+        pid: std::process::id(),
+        started_at: now.clone(),
+        updated_at: now,
+        finished_at: None,
+        phase: "running".into(),
+        user_agent: "CrawlerBench/1.0".into(),
+        workers: config.workers,
+        min_crawl_delay_ms: config.min_crawl_delay_ms,
+        pages_per_domain: config.paths.len() as u64,
+        continuous: false,
+        frontier: FrontierState::default(),
+        counters: Counters::default(),
+        sites: Vec::new(),
+        recent_events: Vec::new(),
+        history: Vec::new(),
+        warc: Warc {
+            directory: config.output_dir.join("warc").display().to_string(),
+            files: 0,
+            bytes: 0,
+            current_file: None,
+        },
+    };
+    let observer = match config.observer_mode {
+        ObserverMode::Async => Observer::new(path, snapshot),
+        ObserverMode::LegacySync => Observer::new_legacy(path, snapshot),
+    }?;
+    Ok(Some(Arc::new(observer.with_metrics(metrics))))
 }
 
 fn process_io() -> BTreeMap<String, u64> {
@@ -417,6 +424,9 @@ pub async fn run(config: Config) -> Result<serde_json::Value> {
         job_outcomes.insert(domain, outcome);
     }
     sink.finish().await?;
+    if let Some(observer) = &observer {
+        let _ = observer.flush();
+    }
     let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
     let cpu_after = cpu_ticks();
     let io = process_io()
@@ -481,6 +491,29 @@ pub async fn run(config: Config) -> Result<serde_json::Value> {
     object.insert("resources_io".into(), serde_json::to_value(io)?);
     object.insert("resources_crawl".into(), resources_crawl);
     object.insert("job_outcomes".into(), serde_json::to_value(job_outcomes)?);
+    object.insert(
+        "observer_mode".into(),
+        if config.observer {
+            serde_json::to_value(config.observer_mode)?
+        } else {
+            "off".into()
+        },
+    );
+    if let Some(observer) = &observer {
+        object.insert(
+            "observer_stats".into(),
+            serde_json::to_value(observer.statistics())?,
+        );
+        let snapshot = fs::read(config.output_dir.join("observer.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        object.insert(
+            "observer_counters".into(),
+            snapshot
+                .and_then(|snapshot| snapshot.get("counters").cloned())
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
     object.insert(
         "crawl_policy".into(),
         serde_json::json!({

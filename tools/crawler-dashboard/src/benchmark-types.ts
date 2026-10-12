@@ -5,6 +5,7 @@ export type Distribution = {
   mad: number;
 };
 export type BenchmarkRun = {
+  observer_mode?: "legacy_sync" | "async" | "off";
   repetition?: number;
   errors?: Record<string, number>;
   request_failures?: number;
@@ -17,6 +18,7 @@ export type BenchmarkScenario = {
   name: string;
   origins: number;
   observer: boolean | "on" | "off" | "enabled" | "disabled";
+  observer_mode?: "legacy_sync" | "async" | "off";
   repetitions: number;
   requests_match: boolean;
   runs?: BenchmarkRun[];
@@ -27,6 +29,7 @@ export type BenchmarkScenario = {
     requests?: Distribution;
     saved_pages?: Distribution;
     stages_ms?: Record<string, Distribution>;
+    observer_stats?: Record<string, Distribution>;
     [name: string]: Distribution | Record<string, Distribution> | undefined;
   };
 };
@@ -45,6 +48,9 @@ export type BenchmarkReport = {
     duration_overhead_pct?: number | null;
     requests_equal: boolean;
     saved_pages_equal: boolean;
+    behavior_equivalent?: boolean;
+    write_calls_reduction_pct?: Distribution;
+    writes_per_update_reduction_pct?: Distribution;
   }[];
   acceptance: { passed: boolean; [key: string]: unknown };
 };

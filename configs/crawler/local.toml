@@ -3,6 +3,7 @@
 seeds_file = "data/crawler-local/seeds.txt"
 output_path = "data/crawler-local/warc"
 status_path = "data/crawler-local/status.json"
+state_directory = "data/crawler-local"
 pages_per_domain = 50
 num_worker_threads = 2
 min_crawl_delay_ms = 10000
