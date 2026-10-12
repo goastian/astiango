@@ -95,3 +95,33 @@ export type TransportBenchmarkReport = {
   hardware?: Record<string, unknown>;
   source_unchanged?: boolean;
 };
+
+export type BodyBenchmarkSummary = {
+  scenario: string;
+  expected_outcome: string;
+  passed: boolean;
+  repetitions: number;
+  metrics: Record<string, Distribution>;
+};
+export type BodyBenchmarkRun = {
+  scenario: string;
+  repetition: number;
+  configuration?: Record<string, unknown>;
+  outcomes: { path: string; cause: string; decoded_bytes: number }[];
+  body_stats: { wire_bytes_received: number; decoded_bytes_produced: number; [key: string]: unknown };
+  server: { requests: number; body_bytes_planned: number; body_bytes_written: number };
+  verification: { passed: boolean; checks?: Record<string, boolean> };
+};
+export type BodyBenchmarkReport = {
+  schema_version: 1;
+  kind: "crawler_body_benchmark";
+  generated_at: string;
+  configuration: { acceptance_profile: "c05"; profile: Record<string, unknown>; [key: string]: unknown };
+  summaries: BodyBenchmarkSummary[];
+  runs: BodyBenchmarkRun[];
+  acceptance: { passed: boolean; checks?: Record<string, boolean> };
+  code?: Record<string, unknown>;
+  binary?: Record<string, unknown>;
+  build?: Record<string, unknown>;
+  hardware?: Record<string, unknown>;
+};

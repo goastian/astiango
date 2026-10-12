@@ -64,3 +64,6 @@ pub trait Checker {
         self.get_urls().await
     }
 }
+
+#[cfg(test)]
+mod body_tests;

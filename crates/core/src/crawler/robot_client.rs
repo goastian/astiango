@@ -14,7 +14,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use super::{transport::SharedTransport, Error, Result};
+use super::{
+    body::{AdmittedBody, BodyKind, BodyReader},
+    transport::SharedTransport,
+    Error, Result,
+};
 use crate::config::{CrawlNetworkPolicy, CrawlerConfig};
 use crate::crawler::robots_txt::{RobotAccess, RobotsTxtManager};
 use anyhow::anyhow;
@@ -30,6 +34,10 @@ pub(super) fn client_builder(config: &CrawlerConfig) -> reqwest::ClientBuilder {
         reqwest::header::HeaderValue::from_static("text/html"),
     );
     headers.insert(
+        reqwest::header::ACCEPT_ENCODING,
+        reqwest::header::HeaderValue::from_static("identity"),
+    );
+    headers.insert(
         reqwest::header::ACCEPT_LANGUAGE,
         reqwest::header::HeaderValue::from_static("en-US,en;q=0.9,*;q=0.8"),
     );
@@ -37,6 +45,9 @@ pub(super) fn client_builder(config: &CrawlerConfig) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .timeout(timeout)
         .connect_timeout(timeout)
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
         .http2_keep_alive_interval(None)
         .default_headers(headers)
         .redirect(reqwest::redirect::Policy::none())
@@ -136,6 +147,7 @@ fn validate_public_addresses(host: &str, addresses: &[std::net::SocketAddr]) -> 
 pub struct RobotClient {
     robots_txt_manager: RobotsTxtManager,
     transport: SharedTransport,
+    body_reader: BodyReader,
     config: Arc<CrawlerConfig>,
     runtime: Option<Arc<super::runtime::Runtime>>,
 }
@@ -143,10 +155,16 @@ pub struct RobotClient {
 impl RobotClient {
     pub fn new(config: &CrawlerConfig) -> Result<Self> {
         let transport = SharedTransport::new(config, config.transport.clone())?;
+        let body_reader = BodyReader::new(config.body.clone())?;
         Ok(Self {
             runtime: None,
-            robots_txt_manager: RobotsTxtManager::with_transport(config, transport.clone()),
+            robots_txt_manager: RobotsTxtManager::with_readers(
+                config,
+                transport.clone(),
+                body_reader.clone(),
+            ),
             transport,
+            body_reader,
             config: Arc::new(config.clone()),
         })
     }
@@ -167,9 +185,15 @@ impl RobotClient {
         config: &CrawlerConfig,
         runtime: Arc<super::runtime::Runtime>,
     ) -> Result<Self> {
+        let body_reader = BodyReader::new(config.body.clone())?;
         Ok(Self {
             transport: SharedTransport::new(config, config.transport.clone())?,
-            robots_txt_manager: RobotsTxtManager::with_runtime(config, runtime.clone()),
+            robots_txt_manager: RobotsTxtManager::with_runtime_reader(
+                config,
+                runtime.clone(),
+                body_reader.clone(),
+            ),
+            body_reader,
             config: Arc::new(config.clone()),
             runtime: Some(runtime),
         })
@@ -185,9 +209,15 @@ impl RobotClient {
 
     #[cfg(any(test, feature = "crawler-bench"))]
     pub fn with_transport(config: &CrawlerConfig, transport: SharedTransport) -> Self {
+        let body_reader = BodyReader::new(config.body.clone()).expect("invalid body configuration");
         Self {
-            robots_txt_manager: RobotsTxtManager::with_transport(config, transport.clone()),
+            robots_txt_manager: RobotsTxtManager::with_readers(
+                config,
+                transport.clone(),
+                body_reader.clone(),
+            ),
             transport,
+            body_reader,
             config: Arc::new(config.clone()),
             runtime: None,
         }
@@ -212,11 +242,20 @@ impl RobotClient {
         }
     }
 
-    pub(crate) async fn body(&self, response: reqwest::Response) -> Result<String> {
-        match &self.runtime {
-            Some(runtime) => runtime.body(response).await,
-            None => super::encoded_body(response).await,
-        }
+    pub(crate) fn body_reader(&self) -> &BodyReader {
+        &self.body_reader
+    }
+
+    pub(crate) async fn body(
+        &self,
+        response: reqwest::Response,
+        kind: BodyKind,
+    ) -> Result<AdmittedBody> {
+        let _timer = super::runtime::StageTimer::optional(self.metrics(), "http_body");
+        self.body_reader
+            .read(response, kind)
+            .await
+            .map_err(Error::from)
     }
 
     pub fn robots_txt_manager(&self) -> &RobotsTxtManager {
@@ -232,7 +271,7 @@ impl RobotClient {
         }
 
         if let Some(runtime) = &self.runtime {
-            return Ok(RequestBuilder::injected(runtime.clone(), url));
+            return Ok(RequestBuilder::injected(runtime.clone(), url, &self.config));
         }
         Ok(RequestBuilder::managed(self.transport.clone(), url))
     }
@@ -240,7 +279,13 @@ impl RobotClient {
 
 pub struct RequestBuilder {
     request: Option<reqwest::RequestBuilder>,
-    injected: Option<(Arc<super::runtime::Runtime>, Url, Option<Duration>)>,
+    injected: Option<(
+        Arc<super::runtime::Runtime>,
+        Url,
+        Option<Duration>,
+        Duration,
+        Duration,
+    )>,
     managed: Option<(SharedTransport, Url, Option<Duration>)>,
 }
 
@@ -259,10 +304,21 @@ impl RequestBuilder {
         }
     }
 
-    pub(crate) fn injected(runtime: Arc<super::runtime::Runtime>, url: Url) -> Self {
+    pub(crate) fn injected(
+        runtime: Arc<super::runtime::Runtime>,
+        url: Url,
+        config: &CrawlerConfig,
+    ) -> Self {
         Self {
             request: None,
-            injected: Some((runtime, url, None)),
+            injected: Some((
+                runtime,
+                url,
+                None,
+                Duration::from_millis(config.body.header_timeout_ms),
+                Duration::from_millis(config.body.total_timeout_ms)
+                    .min(Duration::from_secs(config.timeout_seconds)),
+            )),
             managed: None,
         }
     }
@@ -276,8 +332,26 @@ impl RequestBuilder {
     }
 
     pub async fn send(self) -> Result<reqwest::Response> {
-        if let Some((runtime, url, timeout)) = self.injected {
-            return runtime.http.send(url, timeout).await;
+        if let Some((runtime, url, timeout, headers, total)) = self.injected {
+            let total = timeout.map_or(total, |timeout| timeout.min(total));
+            let started = std::time::Instant::now();
+            let mut response =
+                tokio::time::timeout(headers.min(total), runtime.http.send(url, Some(total)))
+                    .await
+                    .map_err(|_| {
+                        Error::Body(if headers < total {
+                            super::body::BodyError::HeadersTimeout
+                        } else {
+                            super::body::BodyError::TotalTimeout
+                        })
+                    })??;
+            response
+                .extensions_mut()
+                .insert(super::body::RequestDeadline {
+                    started,
+                    expires: started + total,
+                });
+            return Ok(response);
         }
         if let Some((transport, url, timeout)) = self.managed {
             return transport.send(url, timeout).await;
@@ -297,7 +371,7 @@ impl RequestBuilder {
     }
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        if let Some((_, _, value)) = &mut self.injected {
+        if let Some((_, _, value, _, _)) = &mut self.injected {
             *value = Some(timeout);
         }
         if let Some((_, _, value)) = &mut self.managed {
@@ -318,11 +392,13 @@ mod tests {
         legacy.as_object_mut().unwrap().remove("network_policy");
         legacy.as_object_mut().unwrap().remove("max_redirect_hops");
         legacy.as_object_mut().unwrap().remove("transport");
+        legacy.as_object_mut().unwrap().remove("body");
         let config: CrawlerConfig = serde_json::from_value(legacy.clone()).unwrap();
         assert_eq!(config.network_policy, CrawlNetworkPolicy::PublicOnly);
         assert_eq!(config.max_redirect_hops, 10);
         assert_eq!(config.transport.max_client_slots, 128);
         assert_eq!(config.transport.max_slots_per_origin, 4);
+        assert_eq!(config.body.html.wire_limit_bytes, 32 * 1024 * 1024);
 
         legacy["network_policy"] = serde_json::json!("allow_private");
         legacy["max_redirect_hops"] = serde_json::json!(3);

@@ -37,17 +37,17 @@ use crate::{
     distributed::{retry_strategy::ExponentialBackoff, sonic},
     entrypoint::crawler::router::{NewJob, RouterService},
     sitemap::{parse_sitemap, SitemapEntry},
-    warc,
     webpage::{url_ext::UrlExt, Html},
 };
 
 use super::{
+    body::BodyKind,
     outcome::{FetchOutcome, JobOutcome, JobStatus, UrlOutcome},
     robot_client::RobotClient,
     robots_txt::RobotAccess,
     wander_prioritiser::WanderPrioritiser,
     CrawlDatum, DatumSink, Domain, Error, Result, RetrieableUrl, Site, WarcWriter, WeightedUrl,
-    WorkerJob, MAX_CONTENT_LENGTH, MAX_OUTGOING_URLS_PER_PAGE,
+    WorkerJob, MAX_OUTGOING_URLS_PER_PAGE,
 };
 
 const IGNORED_EXTENSIONS: [&str; 27] = [
@@ -578,6 +578,13 @@ impl<S: DatumSink> JobExecutor<S> {
             return FetchOutcome::Cancelled;
         }
         match error {
+            Error::Body(error) if error.is_retryable() => FetchOutcome::Deferred {
+                reason: error.reason().into(),
+                retry_after_ms: None,
+            },
+            Error::Body(error) => FetchOutcome::Skipped {
+                reason: error.reason().into(),
+            },
             Error::DisallowedPath => FetchOutcome::Skipped {
                 reason: "robots_disallowed".into(),
             },
@@ -692,14 +699,16 @@ impl<S: DatumSink> JobExecutor<S> {
             let (fetched_url, response) = response;
             let status = response.status();
             let headers = response.headers().clone();
+            let admitted = self
+                .cancellable(self.client.body(response, BodyKind::Page))
+                .await;
             let fetched = if status == reqwest::StatusCode::OK {
-                match self.check_headers(&response) {
-                    Ok(payload_type) => self
-                        .cancellable(self.client.body(response))
-                        .await
-                        .map(|body| (body, payload_type)),
-                    Err(error) => Err(error),
-                }
+                admitted.map(|body| {
+                    let payload_type = body
+                        .payload_type()
+                        .expect("page admission guarantees a WARC payload type");
+                    (body, payload_type)
+                })
             } else {
                 Err(Error::FetchFailed {
                     status_code: status,
@@ -806,6 +815,7 @@ impl<S: DatumSink> JobExecutor<S> {
             if self.cancelled() {
                 return Err(FetchOutcome::Cancelled);
             }
+            let (body, body_lease) = body.into_parts();
             let datum = CrawlDatum {
                 url: fetched_url.clone(),
                 body,
@@ -836,6 +846,8 @@ impl<S: DatumSink> JobExecutor<S> {
                     })
                     .unwrap_or_default()
             };
+            drop(datum);
+            drop(body_lease);
             if !self.has_gotten_429_response {
                 self.decrease_politeness();
             }
@@ -922,32 +934,6 @@ impl<S: DatumSink> JobExecutor<S> {
         self.sleep(delay).await;
     }
 
-    fn check_headers(&self, res: &reqwest::Response) -> Result<warc::PayloadType> {
-        // check if content length is too large
-        if let Some(content_length) = res
-            .headers()
-            .get(reqwest::header::CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-        {
-            if content_length > MAX_CONTENT_LENGTH {
-                return Err(Error::ContentTooLarge);
-            }
-        }
-
-        // check if content type is html
-        match res
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|val| val.to_str().ok())
-        {
-            Some(ct) if ct.contains("text/html") => Ok(warc::PayloadType::Html),
-            Some(ct) if ct.contains("application/rss") => Ok(warc::PayloadType::Rss),
-            Some(ct) if ct.contains("application/atom") => Ok(warc::PayloadType::Atom),
-            ct => Err(Error::InvalidContentType(format!("{ct:?}"))),
-        }
-    }
-
     async fn urls_from_sitemap(&mut self, sitemap: Url, max_depth: usize) -> Vec<DatedUrl> {
         let mut stack = vec![(sitemap, 0)];
         let mut urls = vec![];
@@ -960,31 +946,28 @@ impl<S: DatumSink> JobExecutor<S> {
                 continue;
             }
 
-            let response = self.fetch_with_https_priority(url.clone()).await;
-            self.sleep(self.delay_duration()).await;
-            let (_, response) = match response {
-                Ok(value) => value,
-                Err(error) => {
-                    self.record(url, self.error_outcome(error));
-                    continue;
+            let entries = async {
+                let (_, response) = self.fetch_with_https_priority(url.clone()).await?;
+                if response.status() != reqwest::StatusCode::OK {
+                    return Err(Error::FetchFailed {
+                        status_code: response.status(),
+                        headers: response.headers().clone(),
+                    });
                 }
-            };
-            if response.status() != reqwest::StatusCode::OK {
-                let error = Error::FetchFailed {
-                    status_code: response.status(),
-                    headers: response.headers().clone(),
-                };
-                self.record(url, self.error_outcome(error));
-                continue;
+                let body = self
+                    .cancellable(self.client.body(response, BodyKind::Sitemap))
+                    .await?;
+                Ok(parse_sitemap(&body))
             }
-            let body = match self.cancellable(self.client.body(response)).await {
-                Ok(body) => body,
+            .await;
+            self.sleep(self.delay_duration()).await;
+            let entries = match entries {
+                Ok(entries) => entries,
                 Err(error) => {
                     self.record(url, self.error_outcome(error));
                     continue;
                 }
             };
-            let entries = parse_sitemap(&body);
 
             for entry in entries {
                 match entry {

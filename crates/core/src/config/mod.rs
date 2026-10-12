@@ -414,6 +414,9 @@ pub struct CrawlerConfig {
     #[serde(default)]
     pub transport: crate::crawler::transport::TransportConfig,
 
+    #[serde(default)]
+    pub body: crate::crawler::body::BodyConfig,
+
     #[serde(default = "default_max_redirect_hops")]
     pub max_redirect_hops: u8,
 
@@ -454,6 +457,7 @@ impl CrawlerConfig {
             },
             network_policy: CrawlNetworkPolicy::default(),
             transport: crate::crawler::transport::TransportConfig::default(),
+            body: crate::crawler::body::BodyConfig::default(),
             max_redirect_hops: default_max_redirect_hops(),
             robots_txt_cache_sec: defaults::Crawler::robots_txt_cache_sec(),
             min_politeness_factor: defaults::Crawler::min_politeness_factor(),
@@ -536,6 +540,8 @@ pub struct LiveCrawlerConfig {
     pub network_policy: CrawlNetworkPolicy,
     #[serde(default)]
     pub transport: crate::crawler::transport::TransportConfig,
+    #[serde(default)]
+    pub body: crate::crawler::body::BodyConfig,
     #[serde(default = "default_max_redirect_hops")]
     pub max_redirect_hops: u8,
     #[serde(default)]

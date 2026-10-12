@@ -67,6 +67,9 @@ export interface TransportStats {
   headers_received: number;
   request_failures: number;
   request_timeouts: number;
+  connect_timeouts?: number;
+  header_timeouts?: number;
+  total_timeouts?: number;
   bodies_completed: number;
   body_failures: number;
   body_timeouts: number;
@@ -97,10 +100,38 @@ export interface TransportStats {
   dns_blocking_inflight_peak?: number;
   dns_lookup_ms: number;
 }
+export interface BodyStats {
+  bodies_started: number;
+  bodies_admitted: number;
+  bodies_completed: number;
+  body_failures: number;
+  rejected_status: number;
+  rejected_mime: number;
+  rejected_content_length: number;
+  rejected_encoding: number;
+  wire_limit_exceeded: number;
+  decoded_limit_exceeded: number;
+  stream_failures: number;
+  allocation_failures: number;
+  idle_timeouts: number;
+  total_timeouts: number;
+  budget_timeouts: number;
+  budget_waits: number;
+  budget_wait_ms: number;
+  wire_bytes_received: number;
+  decoded_bytes_produced: number;
+  active_bodies: number;
+  reserved_bytes: number;
+  peak_active_bodies: number;
+  peak_reserved_bytes: number;
+  max_inflight_bodies: number;
+  max_reserved_bytes: number;
+}
 export interface Snapshot {
   schema_version: number;
   telemetry?: ObserverStats;
   transport?: TransportStats;
+  body?: BodyStats;
   continuous?: boolean;
   frontier?: {
     pending_domains: number;

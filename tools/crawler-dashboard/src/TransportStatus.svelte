@@ -15,6 +15,9 @@
       { label: "Cabeceras recibidas", value: stats?.headers_received },
       { label: "Fallos de petición", value: stats?.request_failures },
       { label: "Timeouts de petición", value: stats?.request_timeouts },
+      { label: "Timeouts de conexión", value: stats?.connect_timeouts },
+      { label: "Timeouts de cabeceras", value: stats?.header_timeouts },
+      { label: "Timeouts totales antes del cuerpo", value: stats?.total_timeouts },
       { label: "Cuerpos completados", value: stats?.bodies_completed },
       { label: "Fallos de cuerpo", value: stats?.body_failures },
       { label: "Timeouts de cuerpo", value: stats?.body_timeouts },
@@ -65,6 +68,7 @@
         pueden reutilizarse; estos contadores no miden conexiones TCP. Los tiempos
         son acumulados y los cuerpos interrumpidos no equivalen a fallos de almacenamiento.
         Los timeouts de petición incluyen la espera por DNS o por un cliente disponible.
+        Su desglose por conexión, cabeceras y plazo total no se suma de nuevo al total.
         Una consulta al resolver del sistema puede terminar después de cancelar la petición.
       </p>
       {#if readError || stale}

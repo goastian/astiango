@@ -89,6 +89,7 @@ impl Metrics {
                 format!("http_{}", status_code.as_u16())
             }
             super::Error::ContentTooLarge => "content_too_large".into(),
+            super::Error::Body(error) => error.reason().into(),
             super::Error::DisallowedPath => "robots_disallowed".into(),
             super::Error::InvalidHtml => "invalid_html".into(),
             _ => "other".into(),
@@ -135,10 +136,6 @@ impl Runtime {
     pub(crate) async fn sleep(&self, duration: Duration) {
         let _timer = self.metrics.timer("politeness");
         self.clock.sleep(duration).await;
-    }
-    pub(crate) async fn body(&self, response: reqwest::Response) -> Result<String> {
-        let _timer = self.metrics.timer("http_body");
-        super::encoded_body(response).await
     }
 }
 

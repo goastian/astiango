@@ -152,6 +152,7 @@ impl From<LiveCrawlerConfig> for CrawlerConfig {
             user_agent: config.user_agent,
             network_policy: config.network_policy,
             transport: config.transport,
+            body: config.body,
             max_redirect_hops: config.max_redirect_hops,
             robots_txt_cache_sec: crate::config::defaults::Crawler::robots_txt_cache_sec(),
             min_politeness_factor: 0,

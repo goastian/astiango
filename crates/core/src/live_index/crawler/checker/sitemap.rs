@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use url::Url;
 
+use crate::crawler::body::BodyKind;
 use crate::crawler::robot_client::RobotClient;
 use crate::dated_url::DatedUrl;
 use crate::sitemap::{parse_sitemap, SitemapEntry};
@@ -65,28 +66,14 @@ impl Sitemap {
             let Ok(req) = self.client.get(url).await else {
                 continue;
             };
-            let res = req.send().await;
-            tokio::time::sleep(SITEMAP_DELAY).await;
-
-            if res.is_err() {
-                continue;
+            let body = async {
+                let response = req.send().await?;
+                let body = self.client.body(response, BodyKind::Sitemap).await?;
+                Ok::<_, crate::crawler::Error>(parse_sitemap(&body))
             }
-
-            let res = res.unwrap();
-
-            if res.status() != reqwest::StatusCode::OK {
-                continue;
-            }
-
-            let body = res.text().await;
-
-            if body.is_err() {
-                continue;
-            }
-
-            let body = body.unwrap();
-
-            let entries = parse_sitemap(&body);
+            .await;
+            self.client.sleep(SITEMAP_DELAY).await;
+            let Ok(entries) = body else { continue };
 
             for entry in entries {
                 match entry {

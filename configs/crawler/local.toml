@@ -25,3 +25,30 @@ dns_cache_entries = 1024
 dns_positive_ttl_seconds = 60
 dns_negative_ttl_seconds = 5
 dns_max_inflight = 32
+
+# C05: admission and body allocations, shared by pages, robots, feeds and sitemaps.
+# timeout_seconds remains an upper bound on the complete request.
+[body]
+max_inflight_bodies = 8
+max_reserved_bytes = 536870912
+connect_timeout_ms = 10000
+header_timeout_ms = 30000
+idle_timeout_ms = 10000
+total_timeout_ms = 60000
+budget_wait_timeout_ms = 10000
+
+[body.html]
+wire_limit_bytes = 33554432
+decoded_limit_bytes = 33554432
+
+[body.feed]
+wire_limit_bytes = 33554432
+decoded_limit_bytes = 33554432
+
+[body.sitemap]
+wire_limit_bytes = 33554432
+decoded_limit_bytes = 33554432
+
+[body.robots]
+wire_limit_bytes = 524288
+decoded_limit_bytes = 524288

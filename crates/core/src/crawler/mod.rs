@@ -28,7 +28,6 @@ use std::{collections::VecDeque, future::Future, net::SocketAddr, sync::Arc};
 type HashMap<K, V> = std::collections::HashMap<K, V, ahash::RandomState>;
 
 use anyhow::anyhow;
-use futures::StreamExt;
 use robot_client::RobotClient;
 use url::Url;
 
@@ -38,6 +37,7 @@ use self::{warc_writer::WarcWriter, worker::WorkerThread};
 pub use outcome::{CrawlCounters, FetchOutcome, JobOutcome, JobStatus, UrlOutcome};
 pub use worker::JobExecutor;
 
+pub mod body;
 pub mod coordinator;
 pub mod robots_txt;
 pub mod router;
@@ -45,7 +45,7 @@ pub use router::Router;
 #[cfg(feature = "crawler-bench")]
 pub mod benchmark;
 #[cfg(feature = "crawler-bench")]
-pub mod transport_benchmark;
+pub mod body_benchmark;
 mod file_queue;
 pub mod local;
 mod observer;
@@ -54,6 +54,8 @@ pub mod planner;
 pub mod robot_client;
 pub mod runtime;
 pub mod transport;
+#[cfg(feature = "crawler-bench")]
+pub mod transport_benchmark;
 mod wander_prioritiser;
 mod warc_writer;
 mod worker;
@@ -67,6 +69,9 @@ pub const MAX_CONTENT_LENGTH: usize = 32 * 1024 * 1024; // 32 MB
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error(transparent)]
+    Body(#[from] body::BodyError),
+
     #[error("invalid content type: {0}")]
     InvalidContentType(String),
 
@@ -347,36 +352,13 @@ pub trait DatumSink: Send + Sync {
     fn finish(&self) -> impl Future<Output = Result<()>> + Send;
 }
 
+/// Legacy text decoder with default wire, decoded and time limits per call.
+/// Status and MIME admission remain the caller's responsibility. The returned
+/// String has no shared reservation; production uses a shared BodyReader and
+/// retains its BodyLease through parsing and sink submission instead.
+#[deprecated(note = "use a shared BodyReader with explicit BodyKind and retain its BodyLease")]
 pub async fn encoded_body(res: reqwest::Response) -> Result<String> {
-    let content_type = res
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<mime::Mime>().ok());
-    let encoding_name = content_type
-        .as_ref()
-        .and_then(|mime| mime.get_param("charset").map(|charset| charset.as_str()))
-        .unwrap_or("utf-8");
-    let encoding =
-        encoding_rs::Encoding::for_label(encoding_name.as_bytes()).unwrap_or(encoding_rs::UTF_8);
-
-    let mut bytes = Vec::new();
-
-    let mut stream = res.bytes_stream();
-    while let Some(b) = stream.next().await {
-        if b.is_err() {
-            return Err(Error::ResponseBodyReadFailed);
-        }
-
-        let b = b.unwrap();
-
-        bytes.extend_from_slice(&b);
-
-        if bytes.len() > MAX_CONTENT_LENGTH {
-            return Err(Error::ContentTooLarge);
-        }
-    }
-
-    let (text, _, _) = encoding.decode(&bytes);
-    Ok(text.to_string())
+    let reader = body::BodyReader::new(body::BodyConfig::default())?;
+    let admitted = reader.read_legacy(res).await?;
+    Ok(admitted.into_parts().0)
 }

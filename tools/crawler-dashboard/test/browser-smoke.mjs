@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDashboardServer } from "../server.mjs";
 import { transportReport } from "./transport-report.mjs";
+import { bodyReport, bodyStats } from "./body-fixture.mjs";
 // Reuse the repository's existing browser-test dependency; no network install.
 const { chromium } = await import(
   process.env.CRAWLER_PLAYWRIGHT_MODULE ||
@@ -173,6 +174,7 @@ try {
       );
       assert.equal(await page.locator(".telemetry-panel").count(), 0);
       assert.equal(await page.locator(".transport-panel").count(), 0);
+      assert.equal(await page.locator(".body-panel").count(), 0);
     } else {
       await page.getByRole("link", { name: "Banco C01 · local" }).click();
       await page.getByText("Aceptación verificada", { exact: true }).waitFor();
@@ -385,6 +387,7 @@ try {
     ["Clientes activos", "2"], ["Clientes disponibles", "6"],
     ["Límite global de clientes", "128"], ["Límite de clientes por origen", "4"],
     ["Timeouts de petición", "2"], ["Timeouts de cuerpo", "1"],
+    ["Timeouts de conexión", "—"], ["Timeouts de cabeceras", "—"], ["Timeouts totales antes del cuerpo", "—"],
     ["Consultas DNS", "5"], ["Aciertos de caché DNS", "110"],
     ["Aciertos de caché negativa", "2"], ["Consultas simultáneas agrupadas", "3"],
     ["Destinos rechazados", "2"], ["Consultas DNS lógicas en curso", "0"],
@@ -411,6 +414,44 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
   if (screenshotDirectory) await page.locator(".transport-panel").screenshot({ path: join(screenshotDirectory, "c04-transport-mobile.png") });
+  const c05Snapshot = structuredClone(c04Snapshot);
+  c05Snapshot.run_id = "c05-admission-bodies";
+  c05Snapshot.telemetry.last_published_at = new Date().toISOString();
+  c05Snapshot.body = bodyStats();
+  Object.assign(c05Snapshot.transport, { connect_timeouts: 1, header_timeouts: 1, total_timeouts: 0 });
+  await writeFile(statePath, JSON.stringify(c05Snapshot));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".page-footer").filter({ hasText: "c05-admission-bodies" }).waitFor();
+  await page.locator(".body-panel > summary").click();
+  const bodyValue = (label) => page.locator(".body-groups dl > div")
+    .filter({ has: page.getByText(label, { exact: true }) }).locator("dd");
+  for (const [label, expected] of [
+    ["Rechazos por status", "2"], ["Rechazos por MIME", "3"],
+    ["Rechazos por Content-Length", "1"], ["Codificación no admitida", "4"],
+    ["Bytes de cuerpo recibidos", "9.437.184 B"], ["Bytes de texto UTF-8 admitidos", "8.388.608 B"],
+    ["Límite de recepción excedido", "2"], ["Límite de texto excedido", "1"],
+    ["Timeouts por inactividad", "2"], ["Timeouts de duración total", "2"],
+    ["Timeouts esperando presupuesto", "1"], ["Cuerpos con reserva activa", "1"],
+    ["Bytes reservados actuales", "20.971.520 B"], ["Límite de bytes reservados", "25.165.824 B"],
+    ["Espera acumulada de presupuesto", "340 ms"], ["Fallos al reservar memoria", "1"],
+  ]) assert.equal(await bodyValue(label).textContent(), expected);
+  assert.equal(await transportValue("Timeouts de conexión").textContent(), "1");
+  assert.match(await page.locator(".body-details > p").first().textContent(), /no representa toda la memoria/);
+  assert.equal((await page.locator(".pages-panel .metric-value strong").textContent()).trim(), "91");
+  await writeFile(statePath, "{broken");
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".body-notice").waitFor();
+  assert.equal(await bodyValue("Rechazos por MIME").textContent(), "3");
+  assert.equal((await page.locator(".pages-panel .metric-value strong").textContent()).trim(), "91");
+  c05Snapshot.telemetry.last_published_at = new Date().toISOString();
+  await writeFile(statePath, JSON.stringify(c05Snapshot));
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".body-notice").waitFor({ state: "hidden" });
+  if (screenshotDirectory) await page.locator(".body-panel").screenshot({ path: join(screenshotDirectory, "c05-body-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+  if (screenshotDirectory) await page.locator(".body-panel").screenshot({ path: join(screenshotDirectory, "c05-body-mobile.png") });
   const c03Report = structuredClone(report);
   c03Report.configuration.acceptance_profile = "c03";
   c03Report.configuration.observer_modes = ["legacy_sync", "async"];
@@ -459,6 +500,27 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
   if (screenshotDirectory) await page.locator("#banco-c01").screenshot({ path: join(screenshotDirectory, "c04-benchmark-mobile.png") });
+  await writeFile(benchmarkPath, JSON.stringify(bodyReport()));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "Actualizar banco", exact: true }).click();
+  await page.getByRole("link", { name: "Banco C05 · local", exact: true }).waitFor();
+  const bodyTable = page.getByRole("table", { name: "Resultados de admisión y cuerpos C05", exact: true });
+  assert.equal(await bodyTable.locator("tbody tr").count(), 3);
+  await page.getByRole("combobox", { name: "Escenario de cuerpos para inspeccionar", exact: true }).selectOption("1");
+  const bodyRuns = page.getByRole("table", { name: "Resultados de cuerpos por repetición", exact: true });
+  assert.equal(await bodyRuns.locator("tbody tr").count(), 3);
+  const firstBodyRun = bodyRuns.locator("tbody tr").first().locator("td");
+  assert.match(await firstBodyRun.nth(0).textContent(), /rejected_mime/);
+  assert.equal(await firstBodyRun.nth(1).textContent(), "0 B");
+  assert.equal(await firstBodyRun.nth(3).textContent(), "32.768 B");
+  assert.equal(await firstBodyRun.nth(4).textContent(), "Reglas cumplidas");
+  const c05Download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Descargar C05", exact: true }).click();
+  assert.match((await c05Download).suggestedFilename(), /^crawler-c05-/);
+  if (screenshotDirectory) await page.locator("#banco-c01").screenshot({ path: join(screenshotDirectory, "c05-benchmark-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+  if (screenshotDirectory) await page.locator("#banco-c01").screenshot({ path: join(screenshotDirectory, "c05-benchmark-mobile.png") });
   assert.deepEqual(errors, []);
   console.log(
     JSON.stringify({
@@ -480,6 +542,11 @@ try {
       benchmarkBehaviorDifferencesVisible: true,
       benchmarkTransportModesAndProtocols: true,
       benchmarkActualServerConnections: true,
+      bodyAdmissionCompatible: true,
+      bodyReadFailureKeepsCounters: true,
+      residentBudgetIsNotRss: true,
+      benchmarkBodyBytesSeparated: true,
+      expectedRejectionCanPassVerification: true,
       mobileOverflow: false,
       pageErrors: errors,
     }),

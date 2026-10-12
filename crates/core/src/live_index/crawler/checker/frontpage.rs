@@ -17,6 +17,7 @@
 use url::Url;
 
 use crate::config::CheckIntervals;
+use crate::crawler::body::BodyKind;
 use crate::crawler::robot_client::RobotClient;
 use crate::webpage::Html;
 use crate::Result;
@@ -45,7 +46,7 @@ impl Frontpage {
 impl Checker for Frontpage {
     async fn get_urls(&self) -> Result<Vec<CrawlableUrl>> {
         let res = self.client.get(self.url.clone()).await?.send().await?;
-        let body = res.text().await?;
+        let body = self.client.body(res, BodyKind::Html).await?;
 
         let page = Html::parse(&body, self.url.as_str())?;
 

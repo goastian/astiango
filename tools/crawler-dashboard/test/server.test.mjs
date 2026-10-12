@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
 import { createDashboardServer } from "../server.mjs";
+import { bodyStats } from "./body-fixture.mjs";
 
 async function setup(t) {
   const directory = await mkdtemp(join(tmpdir(), "crawler-dashboard-test-"));
@@ -47,6 +48,8 @@ test("status preserves actual snapshot and reports a live process", async (t) =>
   assert.equal(response.status, 200);
   assert.deepEqual(result.snapshot, snapshot);
   assert.equal(result.snapshot.telemetry, undefined);
+  assert.equal(result.snapshot.transport, undefined);
+  assert.equal(result.snapshot.body, undefined);
   assert.equal(result.meta.process_alive, true);
   assert.equal(response.headers.get("cache-control"), "no-store");
   await writeFile(statePath, "{broken");
@@ -118,4 +121,52 @@ test("stale or degraded telemetry remains separate from process and WARC health"
   assert.deepEqual(result.snapshot, snapshot);
   assert.equal(result.snapshot.counters.storage_failed, 0);
   assert.equal(result.snapshot.telemetry.events_dropped, 150);
+});
+
+test("HTTP and DNS measurements remain additive and separate from page outcomes", async (t) => {
+  const { base, statePath } = await setup(t);
+  const snapshot = {
+    schema_version: 1, pid: process.pid, phase: "running", sites: [],
+    counters: { downloaded: 91, failed: 0, storage_failed: 0 },
+    transport: {
+      requests_started: 120, headers_received: 116, request_failures: 4,
+      request_timeouts: 2, body_timeouts: 1, max_client_slots: 128, max_slots_per_origin: 4,
+      bodies_completed: 100, body_failures: 3, bodies_dropped: 11, bytes_received: 98304,
+      client_slots_total: 8, client_slots_active: 2, client_slots_idle: 6,
+      client_slots_peak: 10, clients_created: 12, clients_reused: 108,
+      clients_evicted: 4, pool_waits: 7, pool_wait_ms: 230,
+      dns_cache_entries: 5, dns_cache_hits: 110, dns_negative_hits: 2,
+      dns_cache_misses: 8, dns_coalesced: 3, dns_lookups: 5, dns_failures: 1,
+      dns_rejected: 2, dns_inflight: 1, dns_inflight_peak: 3, dns_lookup_ms: 50,
+      dns_blocking_inflight: 2, dns_blocking_inflight_peak: 3,
+    },
+  };
+  await writeFile(statePath, JSON.stringify(snapshot));
+  const response = await fetch(`${base}/api/status`);
+  const result = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(result.snapshot, snapshot);
+  assert.equal(result.meta.process_alive, true);
+  assert.equal(result.snapshot.counters.downloaded, 91);
+  assert.equal(result.snapshot.counters.storage_failed, 0);
+  assert.equal("connections_created" in result.snapshot.transport, false);
+  assert.equal(result.snapshot.transport.dns_inflight, 1);
+  assert.equal(result.snapshot.transport.dns_blocking_inflight, 2);
+});
+
+test("body admission and memory observations do not become WARC failures", async (t) => {
+  const { base, statePath } = await setup(t);
+  const snapshot = {
+    schema_version: 1, pid: process.pid, phase: "running", sites: [],
+    counters: { downloaded: 91, failed: 0, storage_failed: 0 }, body: bodyStats(),
+  };
+  await writeFile(statePath, JSON.stringify(snapshot));
+  const response = await fetch(`${base}/api/status`);
+  const result = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(result.snapshot, snapshot);
+  assert.equal(result.meta.process_alive, true);
+  assert.equal(result.snapshot.body.allocation_failures, 1);
+  assert.equal(result.snapshot.counters.storage_failed, 0);
+  assert.equal(result.snapshot.counters.downloaded, 91);
 });

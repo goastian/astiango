@@ -110,6 +110,7 @@ impl Http for FixtureHttp {
 
 #[derive(Default)]
 struct MemorySink {
+    body_reader: Mutex<Option<crate::crawler::body::BodyReader>>,
     data: Mutex<Vec<CrawlDatum>>,
     write_error: bool,
     checkpoint_error: bool,
@@ -118,6 +119,12 @@ struct MemorySink {
 }
 impl DatumSink for MemorySink {
     async fn write(&self, datum: CrawlDatum) -> Result<()> {
+        if let Some(reader) = self.body_reader.lock().unwrap().as_ref() {
+            assert!(
+                reader.stats().active_bodies > 0,
+                "sink must retain the body reservation"
+            );
+        }
         if self.write_error {
             return Err(anyhow!("injected disk failure").into());
         }
@@ -182,6 +189,8 @@ async fn run_config(
         metrics: Arc::new(Metrics::default()),
     });
     let client = RobotClient::with_runtime(&config, runtime).unwrap();
+    let body_reader = client.body_reader().clone();
+    *sink.body_reader.lock().unwrap() = Some(body_reader.clone());
     let base = Url::parse("https://one.example.com/").unwrap();
     let domain = Domain::from(&base);
     let urls = paths
@@ -233,6 +242,7 @@ async fn run_config(
             )
             .unwrap(),
         );
+        observer.observe_body(body_reader.clone());
         observer.register_site(domain.as_str().to_owned(), paths.len() as u64);
         executor = executor.with_observer(observer.clone());
         telemetry = Some(observer);
@@ -241,6 +251,8 @@ async fn run_config(
         executor = executor.with_cancellation(flag);
     }
     let outcome = executor.run().await;
+    assert_eq!(body_reader.stats().reserved_bytes, 0);
+    assert_eq!(body_reader.stats().active_bodies, 0);
     if let Some(observer) = telemetry {
         observer.flush().unwrap();
     }
@@ -639,4 +651,41 @@ async fn cancellation_interrupts_robots_and_response_body_waits() {
             .iter()
             .all(|entry| entry.outcome == FetchOutcome::Cancelled));
     }
+}
+
+#[tokio::test]
+async fn body_rejection_and_timeout_have_explicit_outcomes_with_or_without_observer() {
+    let paths = ["/invalid-mime", "/hang-body", "/ok"];
+    let mut config = config();
+    config.body.idle_timeout_ms = 10;
+    let off = run_config(
+        &paths,
+        false,
+        Arc::new(MemorySink::default()),
+        None,
+        config.clone(),
+    )
+    .await;
+    let on = run_config(&paths, true, Arc::new(MemorySink::default()), None, config).await;
+    assert_eq!(off.outcome, on.outcome);
+    assert_eq!(off.requests, on.requests);
+    assert_eq!(off.sleeps, on.sleeps);
+    assert_eq!(
+        on.outcome.urls[0].outcome,
+        FetchOutcome::Skipped {
+            reason: "unsupported_mime".into()
+        }
+    );
+    assert_eq!(
+        on.outcome.urls[1].outcome,
+        FetchOutcome::Deferred {
+            reason: "idle_timeout".into(),
+            retry_after_ms: None
+        }
+    );
+    assert_eq!(on.outcome.counters.useful_pages, 1);
+    let observed = on.observation.unwrap();
+    assert_eq!(observed["body"]["rejected_mime"], 1);
+    assert_eq!(observed["body"]["idle_timeouts"], 1);
+    assert_eq!(observed["body"]["reserved_bytes"], 0);
 }

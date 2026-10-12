@@ -242,6 +242,8 @@ struct Projection {
     telemetry: ObserverStats,
     #[serde(skip_serializing_if = "Option::is_none")]
     transport: Option<super::transport::TransportStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<super::body::BodyStats>,
 }
 
 type Publisher = dyn Fn(&Path, &Projection, &IoCounters, bool) -> anyhow::Result<()> + Send + Sync;
@@ -256,6 +258,7 @@ struct Shared {
     publication: Mutex<()>,
     metrics: Mutex<Option<Arc<super::runtime::Metrics>>>,
     transport: Mutex<Option<super::transport::SharedTransport>>,
+    body: Mutex<Option<super::body::BodyReader>>,
 }
 
 pub struct Observer {
@@ -342,6 +345,7 @@ impl Observer {
             publication: Mutex::new(()),
             metrics: Mutex::new(None),
             transport: Mutex::new(None),
+            body: Mutex::new(None),
         });
         let projector = if legacy {
             publish(&shared, true);
@@ -369,6 +373,11 @@ impl Observer {
 
     pub(super) fn observe_transport(&self, transport: super::transport::SharedTransport) {
         *self.shared.transport.lock().unwrap() = Some(transport);
+        self.heartbeat();
+    }
+
+    pub(super) fn observe_body(&self, body: super::body::BodyReader) {
+        *self.shared.body.lock().unwrap() = Some(body);
         self.heartbeat();
     }
 
@@ -790,6 +799,7 @@ fn publish(shared: &Shared, legacy: bool) {
                 snapshot,
                 telemetry,
                 transport: None,
+                body: None,
             },
             version,
             dirty_since,
@@ -797,6 +807,8 @@ fn publish(shared: &Shared, legacy: bool) {
     };
     let transport = shared.transport.lock().unwrap().clone();
     projection.transport = transport.as_ref().map(|transport| transport.stats());
+    let body = shared.body.lock().unwrap().clone();
+    projection.body = body.as_ref().map(|body| body.stats());
     let metrics = shared.metrics.lock().unwrap().clone();
     let _timer = super::runtime::StageTimer::optional(metrics.as_ref(), "observer_projection");
     let result = (shared.publisher)(&shared.path, &projection, &shared.io, legacy);

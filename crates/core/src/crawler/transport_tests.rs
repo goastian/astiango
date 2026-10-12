@@ -302,6 +302,116 @@ fn loopback_transport(options: TransportConfig) -> SharedTransport {
     .unwrap()
 }
 
+fn loopback_body_transport(body: super::super::body::BodyConfig) -> SharedTransport {
+    let mut config = CrawlerConfig::for_tests();
+    config.body = body;
+    config.timeout_seconds = 2;
+    SharedTransport::with_fixture_resolver(
+        &config,
+        TransportConfig::default(),
+        Arc::new(LoopbackResolver),
+        Arc::new(SystemClock),
+        FixturePolicy {
+            allowed_hosts: BTreeSet::from(["one.test".into()]),
+            certificate_pem: None,
+        },
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn c05_header_deadline_and_total_deadline_are_distinct_and_release_slots() {
+    let server = LoopbackServer::start().await;
+    let transport = loopback_body_transport(super::super::body::BodyConfig {
+        header_timeout_ms: 20,
+        total_timeout_ms: 1000,
+        ..Default::default()
+    });
+    assert!(matches!(
+        transport
+            .send(server.url("one.test", "/slow-headers"), None)
+            .await,
+        Err(Error::Body(BodyError::HeadersTimeout))
+    ));
+    assert_eq!(transport.stats().header_timeouts, 1);
+    assert_eq!(transport.stats().client_slots_active, 0);
+    let transport = loopback_body_transport(super::super::body::BodyConfig {
+        header_timeout_ms: 500,
+        total_timeout_ms: 20,
+        ..Default::default()
+    });
+    assert!(matches!(
+        transport
+            .send(
+                server.url("one.test", "/slow-headers"),
+                Some(Duration::from_secs(1))
+            )
+            .await,
+        Err(Error::Body(BodyError::TotalTimeout))
+    ));
+    assert_eq!(transport.stats().total_timeouts, 1);
+    assert_eq!(transport.stats().client_slots_active, 0);
+}
+
+#[tokio::test]
+async fn c05_request_deadline_survives_headers_and_body_reader_does_not_restart_it() {
+    let server = LoopbackServer::start().await;
+    let body_config = super::super::body::BodyConfig {
+        total_timeout_ms: 1000,
+        ..Default::default()
+    };
+    let transport = loopback_body_transport(body_config.clone());
+    let response = transport
+        .send(server.url("one.test", "/ok"), Some(Duration::from_secs(10)))
+        .await
+        .unwrap();
+    let deadline = *response.extensions().get::<RequestDeadline>().unwrap();
+    assert_eq!(
+        deadline.expires.duration_since(deadline.started),
+        Duration::from_millis(1000)
+    );
+    tokio::time::sleep_until((deadline.expires + Duration::from_millis(20)).into()).await;
+    let reader = super::super::body::BodyReader::new(body_config).unwrap();
+    assert!(matches!(
+        reader
+            .read(response, super::super::body::BodyKind::Html)
+            .await,
+        Err(BodyError::TotalTimeout)
+    ));
+    assert_eq!(transport.stats().client_slots_active, 0);
+    assert_eq!(reader.stats().active_bodies, 0);
+}
+
+#[tokio::test]
+async fn c05_connect_timeout_covers_a_stalled_tls_handshake_on_loopback() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        futures::future::pending::<()>().await;
+        drop(socket);
+    });
+    let transport = loopback_body_transport(super::super::body::BodyConfig {
+        connect_timeout_ms: 20,
+        header_timeout_ms: 500,
+        total_timeout_ms: 1000,
+        ..Default::default()
+    });
+    let result = transport
+        .send(
+            Url::parse(&format!("https://one.test:{port}/")).unwrap(),
+            None,
+        )
+        .await;
+    server.abort();
+    assert!(
+        matches!(result, Err(Error::Body(BodyError::ConnectTimeout))),
+        "{result:?}"
+    );
+    assert_eq!(transport.stats().connect_timeouts, 1);
+    assert_eq!(transport.stats().client_slots_active, 0);
+}
+
 #[tokio::test]
 async fn response_metadata_host_body_and_keepalive_survive_the_lease_stream() {
     let server = LoopbackServer::start().await;

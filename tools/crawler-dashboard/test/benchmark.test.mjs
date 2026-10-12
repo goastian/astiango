@@ -4,6 +4,8 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDashboardServer } from "../server.mjs";
+import { transportReport } from "./transport-report.mjs";
+import { bodyReport } from "./body-fixture.mjs";
 
 const metric = { median: 12, min: 10, max: 14, mad: 2 };
 function report() {
@@ -216,4 +218,72 @@ test("C03 reports preserve both observer modes and signed measured reductions", 
   assert.equal(response.status, 200);
   assert.deepEqual((await response.json()).report, value);
   assert.equal((await fetch(`${base}/api/status`)).status, 503);
+});
+
+test("C04 preserves protocol and transport identities with actual server connections", async (t) => {
+  const { base, benchmarkPath } = await setup(t);
+  const report = transportReport();
+  await writeFile(benchmarkPath, JSON.stringify(report));
+  const response = await fetch(`${base}/api/benchmarks`);
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(result.report, report);
+  assert.equal(result.report.summaries.length, 4);
+  assert.equal(result.report.runs[3].server.connections, 2);
+  assert.equal(result.report.runs[3].transport_stats.clients_created, 999);
+});
+
+test("C04 rejects malformed measurements and duplicated transport identities", async (t) => {
+  const { base, benchmarkPath } = await setup(t);
+  for (const mutate of [
+    (value) => { value.configuration.acceptance_profile = "c03"; },
+    (value) => { value.summaries[0].mode = "unknown"; },
+    (value) => { value.summaries[0].scheme = "file"; },
+    (value) => { value.summaries[0].metrics.connections_per_page.median = -1; },
+    (value) => { value.summaries.push(structuredClone(value.summaries[0])); },
+    (value) => { value.runs[0].server.connections = "24"; },
+    (value) => { value.comparisons[0].connections_per_page_reduction_pct.mad = -1; },
+  ]) {
+    const report = transportReport();
+    mutate(report);
+    await writeFile(benchmarkPath, JSON.stringify(report));
+    const response = await fetch(`${base}/api/benchmarks`);
+    assert.equal(response.status, 503, mutate.toString());
+    assert.equal((await response.json()).code, "BENCHMARK_INVALID");
+  }
+});
+
+test("C05 preserves expected rejections and separates server, received and decoded bytes", async (t) => {
+  const { base, benchmarkPath } = await setup(t);
+  const report = bodyReport();
+  await writeFile(benchmarkPath, JSON.stringify(report));
+  const response = await fetch(`${base}/api/benchmarks`);
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(result.report, report);
+  assert.equal(result.report.summaries[1].expected_outcome, "rejected_mime");
+  assert.equal(result.report.summaries[1].passed, true);
+  assert.equal(result.report.runs[3].server.body_bytes_written, 32768);
+  assert.equal(result.report.runs[3].body_stats.wire_bytes_received, 0);
+});
+
+test("C05 rejects malformed body metrics without changing earlier report contracts", async (t) => {
+  const { base, benchmarkPath } = await setup(t);
+  for (const mutate of [
+    (value) => { value.configuration.acceptance_profile = "c04"; },
+    (value) => { value.configuration.profile = null; },
+    (value) => { value.summaries[0].metrics.body_bytes_received.median = -1; },
+    (value) => { value.summaries[0].passed = "yes"; },
+    (value) => { value.summaries.push(structuredClone(value.summaries[0])); },
+    (value) => { value.runs[0].body_stats.wire_bytes_received = "4096"; },
+    (value) => { value.runs[0].outcomes[0].decoded_bytes = -1; },
+    (value) => { value.runs[0].server.body_bytes_written = -1; },
+  ]) {
+    const report = bodyReport();
+    mutate(report);
+    await writeFile(benchmarkPath, JSON.stringify(report));
+    const response = await fetch(`${base}/api/benchmarks`);
+    assert.equal(response.status, 503, mutate.toString());
+    assert.equal((await response.json()).code, "BENCHMARK_INVALID");
+  }
 });

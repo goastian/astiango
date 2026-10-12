@@ -20,6 +20,7 @@ use crate::feed::{parse, Feed};
 use crate::Result;
 
 use super::{CheckIntervals, Checker, CrawlableUrl};
+use crate::crawler::body::BodyKind;
 use crate::crawler::robot_client::RobotClient;
 
 const CRAWL_DELAY: Duration = Duration::from_secs(5);
@@ -53,7 +54,7 @@ impl Checker for Feeds {
                 continue;
             };
 
-            let Ok(text) = resp.text().await else {
+            let Ok(text) = self.client.body(resp, BodyKind::Feed).await else {
                 continue;
             };
 
@@ -65,7 +66,8 @@ impl Checker for Feeds {
                 urls.push(CrawlableUrl::from(link));
             }
 
-            tokio::time::sleep(CRAWL_DELAY).await;
+            drop(text);
+            self.client.sleep(CRAWL_DELAY).await;
         }
 
         Ok(urls)

@@ -50,6 +50,8 @@ pub struct Config {
     pub network_policy: CrawlNetworkPolicy,
     #[serde(default)]
     pub transport: super::transport::TransportConfig,
+    #[serde(default)]
+    pub body: super::body::BodyConfig,
     #[serde(default = "default_max_redirect_hops")]
     pub max_redirect_hops: u8,
     #[serde(default = "default_frontier_capacity")]
@@ -85,6 +87,7 @@ impl Config {
 
     fn validate(&self) -> Result<()> {
         self.transport.validate()?;
+        self.body.validate()?;
         anyhow::ensure!(
             self.network_policy == CrawlNetworkPolicy::PublicOnly,
             "The local crawler requires network_policy = public_only"
@@ -116,6 +119,7 @@ impl Config {
             user_agent: self.user_agent.clone(),
             network_policy: self.network_policy,
             transport: self.transport.clone(),
+            body: self.body.clone(),
             max_redirect_hops: self.max_redirect_hops,
             robots_txt_cache_sec: 3600,
             min_politeness_factor: 0,
@@ -528,6 +532,7 @@ pub async fn run(config: Config) -> Result<()> {
         },
     )?);
     observer.observe_transport(client.transport().clone());
+    observer.observe_body(client.body_reader().clone());
     let frontier = Arc::new(Frontier::open(
         config.state_directory().join("frontier.json"),
         config.max_frontier,

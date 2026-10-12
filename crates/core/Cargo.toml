@@ -169,3 +169,7 @@ required-features = ["crawler-bench"]
 [[example]]
 name = "crawler_transport_bench"
 required-features = ["crawler-bench"]
+
+[[example]]
+name = "crawler_body_bench"
+required-features = ["crawler-bench"]

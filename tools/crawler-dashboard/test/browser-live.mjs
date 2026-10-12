@@ -9,8 +9,9 @@ const { chromium } = await import(
     new URL("../../../frontend/node_modules/playwright/index.mjs", import.meta.url).href
 );
 const base = process.env.CRAWLER_LIVE_URL || "http://127.0.0.1:3100/";
-const expectTransport = process.env.CRAWLER_EXPECT_TRANSPORT === "1";
-const output = process.env.CRAWLER_LIVE_OUTPUT || join(root, expectTransport ? "data/crawler-c04-dashboard" : "data/crawler-c03-dashboard");
+const expectBody = process.env.CRAWLER_EXPECT_BODY === "1";
+const expectTransport = expectBody || process.env.CRAWLER_EXPECT_TRANSPORT === "1";
+const output = process.env.CRAWLER_LIVE_OUTPUT || join(root, expectBody ? "data/crawler-c05-dashboard" : expectTransport ? "data/crawler-c04-dashboard" : "data/crawler-c03-dashboard");
 const endpoint = (path) => new URL(path, base);
 const health = await fetch(endpoint("/healthz"));
 assert.equal(health.status, 200);
@@ -20,6 +21,7 @@ const initial = await initialResponse.json();
 assert.equal(initial.meta.process_alive, true);
 assert.ok(initial.snapshot.telemetry, "the operational crawler must publish C03 telemetry");
 if (expectTransport) assert.ok(initial.snapshot.transport, "the operational crawler must publish C04 transport measurements");
+if (expectBody) assert.ok(initial.snapshot.body, "the operational crawler must publish C05 body measurements");
 if (process.env.CRAWLER_EXPECTED_PID)
   assert.equal(initial.snapshot.pid, Number(process.env.CRAWLER_EXPECTED_PID));
 const benchmark = await fetch(endpoint("/api/benchmarks"));
@@ -46,6 +48,7 @@ try {
   await page.locator(".page-footer").filter({ hasText: initial.snapshot.run_id }).waitFor();
   await page.locator(".telemetry-panel > summary").click();
   if (expectTransport) await page.locator(".transport-panel > summary").click();
+  if (expectBody) await page.locator(".body-panel > summary").click();
   await page.getByRole("button", { name: "Pausar lectura", exact: true }).click();
   const refreshing = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/status");
   await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
@@ -96,6 +99,9 @@ try {
     for (const [label, key] of [
       ["Consultas DNS al sistema en curso", "dns_blocking_inflight"],
       ["Pico de consultas DNS al sistema", "dns_blocking_inflight_peak"],
+      ["Timeouts de conexión", "connect_timeouts"],
+      ["Timeouts de cabeceras", "header_timeouts"],
+      ["Timeouts totales antes del cuerpo", "total_timeouts"],
     ]) {
       const expected = transport[key] == null ? "—" : formatter.format(transport[key]);
       await transportValue(label).filter({ hasText: expected }).waitFor();
@@ -104,6 +110,44 @@ try {
     assert.equal(transport.client_slots_active + transport.client_slots_idle, transport.client_slots_total);
     assert.ok(transport.client_slots_total <= transport.max_client_slots);
     assert.match(await page.locator(".transport-details > p").first().textContent(), /no miden conexiones TCP/);
+  }
+  if (expectBody) {
+    const body = rendered.snapshot.body;
+    const bodyValue = (label) => page.locator(".body-groups dl > div")
+      .filter({ has: page.getByText(label, { exact: true }) }).locator("dd");
+    for (const [label, key, unit = ""] of [
+      ["Evaluaciones iniciadas", "bodies_started"],
+      ["Cuerpos admitidos", "bodies_admitted"],
+      ["Cuerpos leídos por completo", "bodies_completed"],
+      ["Rechazos por status", "rejected_status"],
+      ["Rechazos por MIME", "rejected_mime"],
+      ["Rechazos por Content-Length", "rejected_content_length"],
+      ["Codificación no admitida", "rejected_encoding"],
+      ["Bytes de cuerpo recibidos", "wire_bytes_received", " B"],
+      ["Bytes de texto UTF-8 admitidos", "decoded_bytes_produced", " B"],
+      ["Límite de recepción excedido", "wire_limit_exceeded"],
+      ["Límite de texto excedido", "decoded_limit_exceeded"],
+      ["Timeouts por inactividad", "idle_timeouts"],
+      ["Timeouts de duración total", "total_timeouts"],
+      ["Timeouts esperando presupuesto", "budget_timeouts"],
+      ["Cuerpos con reserva activa", "active_bodies"],
+      ["Pico de cuerpos con reserva", "peak_active_bodies"],
+      ["Límite de cuerpos simultáneos", "max_inflight_bodies"],
+      ["Bytes reservados actuales", "reserved_bytes", " B"],
+      ["Pico de bytes reservados", "peak_reserved_bytes", " B"],
+      ["Límite de bytes reservados", "max_reserved_bytes", " B"],
+      ["Esperas por presupuesto", "budget_waits"],
+      ["Espera acumulada de presupuesto", "budget_wait_ms", " ms"],
+    ]) {
+      assert.equal(typeof body[key], "number");
+      const expected = formatter.format(body[key]) + unit;
+      await bodyValue(label).filter({ hasText: expected }).waitFor();
+      assert.equal(await bodyValue(label).textContent(), expected);
+    }
+    assert.ok(body.active_bodies <= body.max_inflight_bodies);
+    assert.ok(body.reserved_bytes <= body.max_reserved_bytes);
+    assert.ok(body.peak_reserved_bytes <= body.max_reserved_bytes);
+    assert.match(await page.locator(".body-details > p").first().textContent(), /no representa toda la memoria/);
   }
   const visibleAgeMs = Math.max(0, Date.now() - Date.parse(stats.last_published_at));
   assert.ok(visibleAgeMs <= 5000, `visible telemetry is ${visibleAgeMs} ms old`);
@@ -129,6 +173,7 @@ try {
     process_alive: final.meta.process_alive, phase: final.snapshot.phase,
     telemetry_verified: stats, visible_age_ms: visibleAgeMs,
     ...(expectTransport ? { transport_verified: rendered.snapshot.transport } : {}),
+    ...(expectBody ? { body_verified: rendered.snapshot.body } : {}),
     counters_verified: rendered.snapshot.counters,
     retained_events: rendered.snapshot.recent_events.length,
     benchmark_disabled: true, fixtures_visible: false,

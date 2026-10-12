@@ -26,7 +26,11 @@ use url::Url;
 
 use crate::config::{CrawlNetworkPolicy, CrawlerConfig};
 
-use super::{encoded_body, transport::SharedTransport, Site};
+use super::{
+    body::{AdmittedBody, BodyKind, BodyReader},
+    transport::SharedTransport,
+    Site,
+};
 
 const RETRY_ROBOTSTXT_UNREACHABLE: bool = false;
 
@@ -78,6 +82,7 @@ struct InnerRobotsTxtManager {
     cache: DashMap<Site, CheckedRobotsTxt>,
     last_prune: Arc<Mutex<std::time::Instant>>,
     transport: SharedTransport,
+    body_reader: BodyReader,
     cache_expiration: Duration,
     user_agent: String,
     min_crawl_delay: Duration,
@@ -87,7 +92,7 @@ struct InnerRobotsTxtManager {
 }
 
 impl InnerRobotsTxtManager {
-    fn new(config: &CrawlerConfig, transport: SharedTransport) -> Self {
+    fn new(config: &CrawlerConfig, transport: SharedTransport, body_reader: BodyReader) -> Self {
         let cache_expiration = Duration::from_secs(config.robots_txt_cache_sec);
         let user_agent = config.user_agent.token.clone();
         let min_crawl_delay = Duration::from_millis(config.min_crawl_delay_ms);
@@ -95,6 +100,7 @@ impl InnerRobotsTxtManager {
 
         Self {
             transport,
+            body_reader,
             cache_expiration,
             last_prune: Arc::new(Mutex::new(std::time::Instant::now())),
             cache: DashMap::new(),
@@ -149,11 +155,13 @@ impl InnerRobotsTxtManager {
         }
     }
 
-    async fn body(&self, response: reqwest::Response) -> super::Result<String> {
-        match &self.runtime {
-            Some(runtime) => runtime.body(response).await,
-            None => encoded_body(response).await,
-        }
+    async fn body(&self, response: reqwest::Response) -> super::Result<AdmittedBody> {
+        let metrics = self.runtime.as_ref().map(|runtime| &runtime.metrics);
+        let _timer = super::runtime::StageTimer::optional(metrics, "http_body");
+        self.body_reader
+            .read(response, BodyKind::Robots)
+            .await
+            .map_err(super::Error::from)
     }
 
     async fn request(&self, url: Url) -> super::Result<super::robot_client::RequestBuilder> {
@@ -162,6 +170,7 @@ impl InnerRobotsTxtManager {
             return Ok(super::robot_client::RequestBuilder::injected(
                 runtime.clone(),
                 url,
+                &self.config,
             ));
         }
         Ok(super::robot_client::RequestBuilder::managed(
@@ -179,38 +188,38 @@ impl InnerRobotsTxtManager {
                 Ok(request) => request,
                 Err(_) => return Lookup::Unreachable,
             };
-            let response = request.send().await;
-            // Robots requests and their redirects also obey the configured delay.
-            self.sleep(self.min_crawl_delay).await;
-            let Ok(response) = response else {
-                return Lookup::Unreachable;
-            };
-            if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-                let next = response
-                    .headers()
-                    .get(reqwest::header::LOCATION)
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|location| url.join(location).ok());
-                let Some(next) = next else {
-                    return Lookup::Unreachable;
+            let result = async {
+                let Ok(response) = request.send().await else {
+                    return Ok(Lookup::Unreachable);
                 };
-                url = next;
-                continue;
+                if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
+                    return response
+                        .headers()
+                        .get(reqwest::header::LOCATION)
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|location| url.join(location).ok())
+                        .map_or(Ok(Lookup::Unreachable), Err);
+                }
+                if response.status() == reqwest::StatusCode::NOT_FOUND {
+                    return Ok(Lookup::Unavailable);
+                }
+                let Ok(body) = self.body(response).await else {
+                    return Ok(Lookup::Unreachable);
+                };
+                let user_agent = self.user_agent.clone();
+                Ok(
+                    match panic::catch_unwind(|| robotstxt::Robots::parse(&user_agent, &body)) {
+                        Ok(Ok(robots)) => Lookup::Found(robots),
+                        _ => Lookup::Unreachable,
+                    },
+                )
             }
-            if response.status() == reqwest::StatusCode::NOT_FOUND {
-                return Lookup::Unavailable;
+            .await;
+            self.sleep(self.min_crawl_delay).await;
+            match result {
+                Ok(lookup) => return lookup,
+                Err(next) => url = next,
             }
-            if response.status() != reqwest::StatusCode::OK {
-                return Lookup::Unreachable;
-            }
-            let Ok(body) = self.body(response).await else {
-                return Lookup::Unreachable;
-            };
-            let user_agent = self.user_agent.clone();
-            return match panic::catch_unwind(|| robotstxt::Robots::parse(&user_agent, &body)) {
-                Ok(Ok(robots)) => Lookup::Found(robots),
-                _ => Lookup::Unreachable,
-            };
         }
         Lookup::Unreachable
     }
@@ -319,8 +328,17 @@ impl RobotsTxtManager {
     }
 
     pub(crate) fn with_transport(config: &CrawlerConfig, transport: SharedTransport) -> Self {
+        let body_reader = BodyReader::new(config.body.clone()).expect("invalid body configuration");
+        Self::with_readers(config, transport, body_reader)
+    }
+
+    pub(crate) fn with_readers(
+        config: &CrawlerConfig,
+        transport: SharedTransport,
+        body_reader: BodyReader,
+    ) -> Self {
         Self {
-            inner: Arc::new(InnerRobotsTxtManager::new(config, transport)),
+            inner: Arc::new(InnerRobotsTxtManager::new(config, transport, body_reader)),
         }
     }
 
@@ -333,9 +351,19 @@ impl RobotsTxtManager {
 
     #[cfg(any(test, feature = "crawler-bench"))]
     pub fn with_runtime(config: &CrawlerConfig, runtime: Arc<super::runtime::Runtime>) -> Self {
+        let body_reader = BodyReader::new(config.body.clone()).expect("invalid body configuration");
+        Self::with_runtime_reader(config, runtime, body_reader)
+    }
+
+    #[cfg(any(test, feature = "crawler-bench"))]
+    pub(crate) fn with_runtime_reader(
+        config: &CrawlerConfig,
+        runtime: Arc<super::runtime::Runtime>,
+        body_reader: BodyReader,
+    ) -> Self {
         let transport = SharedTransport::new(config, config.transport.clone())
             .expect("invalid crawler transport configuration");
-        let mut inner = InnerRobotsTxtManager::new(config, transport);
+        let mut inner = InnerRobotsTxtManager::new(config, transport, body_reader);
         inner.last_prune = Arc::new(Mutex::new(runtime.clock.now()));
         inner.runtime = Some(runtime);
         Self {

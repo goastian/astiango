@@ -25,6 +25,7 @@ use tokio::sync::{Notify, Semaphore};
 use url::Url;
 
 use super::{
+    body::{BodyError, RequestDeadline},
     runtime::{Clock, IoFuture, SystemClock},
     Error, Result,
 };
@@ -113,6 +114,9 @@ measured_counters!(
     headers_received,
     request_failures,
     request_timeouts,
+    connect_timeouts,
+    header_timeouts,
+    total_timeouts,
     bodies_completed,
     body_failures,
     body_timeouts,
@@ -318,6 +322,7 @@ impl SharedTransport {
         clock: Arc<dyn Clock>,
     ) -> Result<Self> {
         options.validate().map_err(Error::from)?;
+        config.body.validate().map_err(Error::from)?;
         if config.timeout_seconds == 0 {
             return Err(Error::from(anyhow!("transport timeout must be positive")));
         }
@@ -389,8 +394,12 @@ impl SharedTransport {
             .counters
             .requests_started
             .fetch_add(1, Ordering::Relaxed);
-        let timeout =
-            timeout.unwrap_or_else(|| Duration::from_secs(self.inner.config.timeout_seconds));
+        let timeout = timeout
+            .unwrap_or(Duration::MAX)
+            .min(Duration::from_secs(self.inner.config.timeout_seconds))
+            .min(Duration::from_millis(
+                self.inner.config.body.total_timeout_ms,
+            ));
         let started = Instant::now();
         let result = tokio::time::timeout(timeout, self.send_inner(url, timeout, started))
             .await
@@ -399,7 +408,11 @@ impl SharedTransport {
                     .counters
                     .request_timeouts
                     .fetch_add(1, Ordering::Relaxed);
-                Error::from(anyhow!("transport request deadline exceeded"))
+                self.inner
+                    .counters
+                    .total_timeouts
+                    .fetch_add(1, Ordering::Relaxed);
+                Error::Body(BodyError::TotalTimeout)
             })
             .and_then(|result| result);
         if result.is_err() {
@@ -504,24 +517,76 @@ impl SharedTransport {
                     .counters
                     .request_timeouts
                     .fetch_add(1, Ordering::Relaxed);
-                Error::from(anyhow!("transport request deadline exceeded"))
+                self.inner
+                    .counters
+                    .total_timeouts
+                    .fetch_add(1, Ordering::Relaxed);
+                Error::Body(BodyError::TotalTimeout)
             })?;
-        match client.get(url).timeout(remaining).send().await {
-            Ok(response) => {
+        let header_timeout = Duration::from_millis(self.inner.config.body.header_timeout_ms);
+        let result = tokio::time::timeout(
+            header_timeout.min(remaining),
+            client.get(url).timeout(remaining).send(),
+        )
+        .await;
+        match result {
+            Ok(Ok(mut response)) => {
                 self.inner
                     .counters
                     .headers_received
                     .fetch_add(1, Ordering::Relaxed);
+                response.extensions_mut().insert(RequestDeadline {
+                    started,
+                    expires: started + timeout,
+                });
                 self.guard_response(response, lease)
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 if error.is_timeout() {
                     self.inner
                         .counters
                         .request_timeouts
                         .fetch_add(1, Ordering::Relaxed);
+                    if started.elapsed() >= timeout {
+                        self.inner
+                            .counters
+                            .total_timeouts
+                            .fetch_add(1, Ordering::Relaxed);
+                        return Err(Error::Body(BodyError::TotalTimeout));
+                    }
+                    if error.is_connect() {
+                        self.inner
+                            .counters
+                            .connect_timeouts
+                            .fetch_add(1, Ordering::Relaxed);
+                        return Err(Error::Body(BodyError::ConnectTimeout));
+                    }
+                    self.inner
+                        .counters
+                        .total_timeouts
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Err(Error::Body(BodyError::TotalTimeout));
                 }
                 Err(Error::from(anyhow!(error)))
+            }
+            Err(_) => {
+                self.inner
+                    .counters
+                    .request_timeouts
+                    .fetch_add(1, Ordering::Relaxed);
+                if started.elapsed() >= timeout {
+                    self.inner
+                        .counters
+                        .total_timeouts
+                        .fetch_add(1, Ordering::Relaxed);
+                    Err(Error::Body(BodyError::TotalTimeout))
+                } else {
+                    self.inner
+                        .counters
+                        .header_timeouts
+                        .fetch_add(1, Ordering::Relaxed);
+                    Err(Error::Body(BodyError::HeadersTimeout))
+                }
             }
         }
     }
@@ -537,6 +602,10 @@ impl SharedTransport {
             .collect();
         let mut builder = super::robot_client::client_builder(&self.inner.config)
             .no_proxy()
+            .connect_timeout(
+                Duration::from_millis(self.inner.config.body.connect_timeout_ms)
+                    .min(Duration::from_secs(self.inner.config.timeout_seconds)),
+            )
             .pool_max_idle_per_host(1)
             .pool_idle_timeout(Duration::from_secs(self.inner.options.idle_timeout_seconds))
             .resolve_to_addrs(host, &addresses);
