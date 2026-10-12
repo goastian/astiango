@@ -9,6 +9,35 @@ import { bodyReport } from "./body-fixture.mjs";
 import { extractionReport } from "./extraction-fixture.mjs";
 import { isBenchmarkReport } from "../benchmark-report.mjs";
 import { pipelineReport } from "./pipeline-fixture.mjs";
+import { spoolReport } from "./spool-fixture.mjs";
+
+test("C08 validates repetitions, durable counts and signed performance differences", () => {
+  assert.equal(isBenchmarkReport(spoolReport()), true);
+  for (const mutate of [
+    (r) => { r.runs.pop(); },
+    (r) => { r.runs.push(r.runs[0]); },
+    (r) => { r.runs[0].archive_verified = false; },
+    (r) => { r.runs[0].rss_peak_bytes = Infinity; },
+    (r) => { r.summaries[0].segment_bytes = 536870912; },
+    (r) => { r.checks.pop(); },
+    (r) => { r.checks[0].passed = false; },
+    (r) => { r.configuration.smoke = false; },
+    (r) => { r.comparisons[0].throughput_gain_pct.median = NaN; },
+  ]) {
+    const report = spoolReport(); mutate(report);
+    assert.equal(isBenchmarkReport(report), false);
+  }
+});
+
+test("C08 report remains independent of the operational durable counters", async (t) => {
+  const { base, statePath, benchmarkPath } = await setup(t);
+  const snapshot = { schema_version: 1, sites: [], counters: { downloaded: 17 }, spool: { records_durable: 93 } };
+  await writeFile(statePath, JSON.stringify(snapshot));
+  const report = spoolReport();
+  await writeFile(benchmarkPath, JSON.stringify(report));
+  assert.deepEqual((await (await fetch(`${base}/api/benchmarks`)).json()).report, report);
+  assert.deepEqual((await (await fetch(`${base}/api/status`)).json()).snapshot, snapshot);
+});
 
 test("C07 rejects missing repetitions, invalid byte quotas and nonfinite measurements", () => {
   assert.equal(isBenchmarkReport(pipelineReport()), true);

@@ -52,6 +52,8 @@ function signedDistribution(value) {
 }
 
 export function isBenchmarkReport(report) {
+  if (record(report) && report.kind === "crawler_spool_benchmark")
+    return isSpoolBenchmarkReport(report);
   if (record(report) && report.kind === "crawler_pipeline_benchmark")
     return isPipelineBenchmarkReport(report);
   if (record(report) && report.kind === "crawler_extraction_benchmark")
@@ -137,6 +139,40 @@ export function isBenchmarkReport(report) {
   )
     return false;
   return true;
+}
+
+function isSpoolBenchmarkReport(report) {
+  if (report.schema_version !== 1 || typeof report.generated_at !== "string" ||
+      !Number.isFinite(Date.parse(report.generated_at)) || !record(report.configuration) ||
+      report.configuration.acceptance_profile !== "c08" || !record(report.acceptance) ||
+      typeof report.acceptance.passed !== "boolean" || typeof report.acceptance.full_profile !== "boolean" ||
+      typeof report.configuration.smoke !== "boolean" || report.acceptance.full_profile === report.configuration.smoke) return false;
+  const identity = (row) => row.scenario + ":" + row.mode + ":" + row.gzip_level + ":" + row.segment_bytes;
+  const validIdentity = (row) => record(row) && typeof row.scenario === "string" && row.scenario &&
+    ["legacy_page", "segments"].includes(row.mode) && count(row.gzip_level) && row.gzip_level <= 9 &&
+    count(row.segment_bytes) && row.segment_bytes >= 65536 && row.segment_bytes <= 256 * 1024 * 1024;
+  const metrics = ["pages_per_second", "cpu_ms_per_page", "compressed_bytes_per_page", "sync_calls_per_page", "files_per_page", "rss_peak_bytes"];
+  if (!Array.isArray(report.summaries) || !report.summaries.length ||
+      !report.summaries.every((row) => validIdentity(row) && row.repetitions === 3 &&
+        record(row.metrics) && metrics.every((key) => distribution(row.metrics[key])))) return false;
+  if (new Set(report.summaries.map(identity)).size !== report.summaries.length) return false;
+  if (!Array.isArray(report.runs) || !report.runs.every((row) => validIdentity(row) &&
+      [1, 2, 3].includes(row.repetition) && count(row.pages) && row.pages > 0 && row.archive_verified === true &&
+      metrics.every((key) => finite(row[key]) && row[key] >= 0))) return false;
+  const identities = report.runs.map((row) => identity(row) + ":" + row.repetition);
+  if (new Set(identities).size !== identities.length || identities.length !== report.summaries.length * 3 ||
+      !report.summaries.every((row) => [1,2,3].every((n) => identities.includes(identity(row) + ":" + n)))) return false;
+  if (!Array.isArray(report.comparisons) || !report.comparisons.every((row) => record(row) &&
+      typeof row.scenario === "string" && count(row.gzip_level) && row.gzip_level <= 9 &&
+      typeof row.equivalent === "boolean" &&
+      ["throughput_gain_pct", "sync_reduction_pct", "files_reduction_pct"].every((key) => signedDistribution(row[key])))) return false;
+  if (!Array.isArray(report.checks) || !report.checks.length || !report.checks.every((row) =>
+      record(row) && typeof row.name === "string" && row.name && [1,2,3].includes(row.repetition) &&
+      typeof row.passed === "boolean")) return false;
+  const checks = report.checks.map((row) => row.name + ":" + row.repetition);
+  return new Set(checks).size === checks.length && report.checks.every((row) =>
+    [1,2,3].every((n) => checks.includes(row.name + ":" + n))) &&
+    (!report.acceptance.passed || report.checks.every((row) => row.passed));
 }
 
 function isPipelineBenchmarkReport(report) {

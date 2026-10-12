@@ -248,6 +248,8 @@ struct Projection {
     extraction: Option<super::extraction::ExtractionStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pipeline: Option<super::pipeline::PipelineStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spool: Option<super::spool::SpoolStats>,
 }
 
 type Publisher = dyn Fn(&Path, &Projection, &IoCounters, bool) -> anyhow::Result<()> + Send + Sync;
@@ -265,6 +267,7 @@ struct Shared {
     body: Mutex<Option<super::body::BodyReader>>,
     extraction: Mutex<Option<super::extraction::Extractor>>,
     pipeline: Mutex<Option<super::pipeline::Pipeline>>,
+    spool: Mutex<Option<super::spool::SpoolMetrics>>,
 }
 
 pub struct Observer {
@@ -354,6 +357,7 @@ impl Observer {
             body: Mutex::new(None),
             extraction: Mutex::new(None),
             pipeline: Mutex::new(None),
+            spool: Mutex::new(None),
         });
         let projector = if legacy {
             publish(&shared, true);
@@ -395,6 +399,10 @@ impl Observer {
     }
     pub(super) fn observe_pipeline(&self, pipeline: super::pipeline::Pipeline) {
         *self.shared.pipeline.lock().unwrap() = Some(pipeline);
+        self.heartbeat();
+    }
+    pub(super) fn observe_spool(&self, spool: super::spool::SpoolMetrics) {
+        *self.shared.spool.lock().unwrap() = Some(spool);
         self.heartbeat();
     }
 
@@ -713,7 +721,9 @@ impl Observer {
             s.counters.downloaded += 1;
             s.counters.useful_pages += 1;
             s.counters.bytes += bytes;
-            s.warc.files += 1;
+            if s.warc.current_file.as_deref() != Some(&file) {
+                s.warc.files += 1;
+            }
             s.warc.bytes += compressed_bytes;
             s.warc.current_file = Some(bounded(&file));
             rings.event(Event {
@@ -819,6 +829,7 @@ fn publish(shared: &Shared, legacy: bool) {
                 body: None,
                 extraction: None,
                 pipeline: None,
+                spool: None,
             },
             version,
             dirty_since,
@@ -832,6 +843,8 @@ fn publish(shared: &Shared, legacy: bool) {
     projection.extraction = extraction.as_ref().map(|extractor| extractor.stats());
     let pipeline = shared.pipeline.lock().unwrap().clone();
     projection.pipeline = pipeline.as_ref().map(|pipeline| pipeline.stats());
+    let spool = shared.spool.lock().unwrap().clone();
+    projection.spool = spool.as_ref().map(|spool| spool.stats());
     let metrics = shared.metrics.lock().unwrap().clone();
     let _timer = super::runtime::StageTimer::optional(metrics.as_ref(), "observer_projection");
     let result = (shared.publisher)(&shared.path, &projection, &shared.io, legacy);

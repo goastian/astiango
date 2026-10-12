@@ -8,6 +8,7 @@
   import BodyStatus from "./BodyStatus.svelte";
   import ExtractionStatus from "./ExtractionStatus.svelte";
   import PipelineStatus from "./PipelineStatus.svelte";
+  import SpoolStatus from "./SpoolStatus.svelte";
   import {
     buildHistoryBars,
     summarizeOutcomes,
@@ -685,6 +686,7 @@
     <BodyStatus stats={snapshot?.body} readError={!!error} stale={stale && activeProcess} />
     <ExtractionStatus stats={snapshot?.extraction} readError={!!error} stale={stale && activeProcess} />
     <PipelineStatus stats={snapshot?.pipeline} readError={!!error} stale={stale && activeProcess} />
+    <SpoolStatus stats={snapshot?.spool} readError={!!error} stale={stale && activeProcess} />
     <div class="analysis-grid">
       <section class="panel issues-panel" aria-labelledby="issues-heading">
         <div class="card-heading">
@@ -1122,7 +1124,7 @@
           <div>
             <strong
               >{snapshot ? number.format(snapshot.warc.files) : "—"}</strong
-            ><span>archivos</span>
+            ><span>{snapshot?.spool ? "segmentos usados en esta ejecución" : "archivos"}</span>
           </div>
           <div>
             <strong>{bytes(snapshot?.warc.bytes)}</strong><span

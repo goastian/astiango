@@ -128,6 +128,7 @@ export interface BodyStats {
   max_reserved_bytes: number;
 }
 export interface Snapshot {
+  spool?: SpoolStats;
   pipeline?: PipelineStats;
   extraction?: ExtractionStats;
   schema_version: number;
@@ -168,6 +169,16 @@ export interface Snapshot {
     current_file: string | null;
   };
   history: { at: string; downloaded: number; failed: number; bytes: number }[];
+}
+
+export interface SpoolStats {
+  records_durable: number; records_recovered: number;
+  segments_total: number; segments_open: number; segments_pending: number; segments_published: number;
+  spool_bytes: number; max_spool_bytes: number; max_segments: number; segment_bytes: number; gzip_level: number;
+  group_commits: number; sync_calls: number; append_calls: number; rotations: number;
+  upload_attempts: number; upload_errors: number; upload_buffer_bytes: number; upload_buffer_peak_bytes: number;
+  quota_rejections: number; errors: number; reference_pins: number; gc_blocked: number; gc_deleted: number;
+  last_error: string | null;
 }
 
 export interface StageStats {

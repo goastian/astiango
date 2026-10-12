@@ -158,3 +158,16 @@ export type ExtractionBenchmarkReport = {
   binary?: Record<string, unknown>;
   hardware?: Record<string, unknown>;
 };
+export interface SpoolBenchmarkReport {
+  schema_version: 1; kind: "crawler_spool_benchmark"; generated_at: string;
+  configuration: { acceptance_profile: "c08"; smoke: boolean };
+  acceptance: { passed: boolean; full_profile: boolean };
+  summaries: Array<{ scenario: string; mode: "legacy_page" | "segments"; gzip_level: number;
+    segment_bytes: number; repetitions: number; metrics: Record<string, Distribution> }>;
+  comparisons: Array<{ scenario: string; gzip_level: number; equivalent: boolean;
+    throughput_gain_pct: Distribution; sync_reduction_pct: Distribution; files_reduction_pct: Distribution }>;
+  runs: Array<{ scenario: string; mode: "legacy_page" | "segments"; gzip_level: number; segment_bytes: number;
+    repetition: number; pages: number; pages_per_second: number; cpu_ms_per_page: number;
+    compressed_bytes_per_page: number; sync_calls: number; files: number; rss_peak_bytes: number }>;
+  checks: Array<{ name: string; repetition: number; passed: boolean }>;
+}

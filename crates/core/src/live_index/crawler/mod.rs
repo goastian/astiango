@@ -154,6 +154,7 @@ impl From<LiveCrawlerConfig> for CrawlerConfig {
             transport: config.transport,
             body: config.body,
             pipeline: config.pipeline,
+            spool: crate::crawler::spool::SpoolConfig::default(),
             max_redirect_hops: config.max_redirect_hops,
             robots_txt_cache_sec: crate::config::defaults::Crawler::robots_txt_cache_sec(),
             min_politeness_factor: 0,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and manage only the local crawler and its production dashboard."""
+"""Build and manage the local crawler and its single operational dashboard."""
 
 import argparse
 import csv
@@ -29,6 +29,7 @@ MANIFEST = DATA / "processes.json"
 BINARY = ROOT / "target/release/astiango"
 CONFIG = ROOT / "configs/crawler/local.toml"
 DASHBOARD = ROOT / "tools/crawler-dashboard"
+DEFAULT_PORT = 3101
 UNIT_SUFFIX = hashlib.sha256(str(ROOT).encode()).hexdigest()[:10]
 SEEDS = DATA / "seeds.txt"
 SEED_SOURCE = "https://tranco-list.eu/top-1m.csv.zip"
@@ -225,6 +226,21 @@ def stop_one(name, record):
     print(f"{name}: detenido.")
 
 
+def dashboard_settings(state, args):
+    port = args.port if args.port is not None else state.get("port", DEFAULT_PORT)
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        raise RuntimeError("El puerto del dashboard debe estar entre 1 y 65535.")
+    report = state.get("benchmark_report")
+    if args.no_benchmark:
+        report = None
+    elif args.benchmark_report is not None:
+        report = args.benchmark_report
+    if report:
+        path = Path(report).expanduser()
+        report = str((ROOT / path).resolve())
+    return port, report or None
+
+
 def start(state, args):
     if not BINARY.is_file() or not os.access(BINARY, os.X_OK):
         raise RuntimeError("Falta el binario release. Ejecute scripts/crawler-local.py build")
@@ -240,14 +256,20 @@ def start(state, args):
         backend = "systemd" if systemd_available() else "detached"
     elif backend == "systemd" and not systemd_available():
         raise RuntimeError("El servicio systemd del usuario no está accesible.")
+    port, report = dashboard_settings(state, args)
     running_dashboard = state["processes"].get("dashboard", {})
-    if owned_process(running_dashboard) and state.get("port") != args.port:
-        raise RuntimeError("El dashboard ya usa otro puerto. Detenga el despliegue antes de cambiarlo.")
-    state["port"] = args.port
+    settings_changed = state.get("port") != port or state.get("benchmark_report") != report
+    if owned_process(running_dashboard) and settings_changed:
+        stop_one("dashboard", running_dashboard)
+        del state["processes"]["dashboard"]
+        save_manifest(state)
+    state.update(port=port, benchmark_report=report)
+    save_manifest(state)
     specs = [
         ("dashboard", [node, str(DASHBOARD / "server.mjs")], {
-            "HOST": "127.0.0.1", "PORT": str(args.port), "NODE_ENV": "production",
+            "HOST": "127.0.0.1", "PORT": str(port), "NODE_ENV": "production",
             "CRAWLER_STATE_PATH": str(DATA / "status.json"),
+            "CRAWLER_BENCHMARK_PATH": report or "",
         }),
         ("crawler", [str(BINARY), "crawler", "local", str(CONFIG)], {
             "RUST_LOG": os.environ.get("RUST_LOG", "astiango=info"),
@@ -265,18 +287,19 @@ def start(state, args):
         if name == "dashboard":
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
-                if not owned_process(record):
-                    raise RuntimeError(f"El dashboard terminó. Consulte {record['log']}")
-                if health(args.port):
+                if owned_process(record) and health(port):
                     break
                 time.sleep(0.2)
             else:
+                if not owned_process(record):
+                    raise RuntimeError(f"El dashboard terminó o no confirmó su identidad. Consulte {record['log']}")
                 raise RuntimeError(f"El dashboard no respondió a /healthz. Consulte {record['log']}")
         else:
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
                 if not owned_process(record):
-                    raise RuntimeError(f"El crawler terminó al iniciar. Consulte {record['log']}")
+                    time.sleep(0.2)
+                    continue
                 try:
                     snapshot = json.loads((DATA / "status.json").read_text())
                     if snapshot.get("pid") == record["pid"]:
@@ -285,8 +308,12 @@ def start(state, args):
                     pass
                 time.sleep(0.2)
             else:
+                if not owned_process(record):
+                    raise RuntimeError(f"El crawler terminó o no confirmó su identidad. Consulte {record['log']}")
                 raise RuntimeError("El crawler está vivo, pero no publicó un snapshot de esta ejecución en 15 s.")
-    print(f"Dashboard: http://127.0.0.1:{args.port}")
+    print(f"Dashboard: http://127.0.0.1:{port}")
+    if report:
+        print(f"Banco local (contadores separados): {report}")
     print(f"Datos y registros: {DATA}")
 
 
@@ -297,9 +324,11 @@ def status(state):
         alive = owned_process(record)
         complete = complete and alive
         print(f"{name}: {'activo' if alive else 'detenido'}" + (f" (PID {record['pid']}, {record['backend']})" if alive else ""))
-    port = state.get("port", 3100)
+    port = state.get("port", DEFAULT_PORT)
     dashboard_health = health(port)
     print(f"Dashboard: http://127.0.0.1:{port} (/healthz: {'OK' if dashboard_health else 'sin respuesta'})")
+    if state.get("benchmark_report"):
+        print(f"Banco local (contadores separados): {state['benchmark_report']}")
     snapshot_path = DATA / "status.json"
     if snapshot_path.exists():
         snapshot = json.loads(snapshot_path.read_text())
@@ -321,9 +350,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("build", "bootstrap", "start", "status", "stop", "restart"))
     parser.add_argument("--backend", choices=("auto", "systemd", "detached"), default="auto")
-    parser.add_argument("--port", type=int, default=3100)
+    parser.add_argument("--port", type=int, help="Puerto del dashboard; conserva el registrado o usa 3101.")
+    benchmark = parser.add_mutually_exclusive_group()
+    benchmark.add_argument("--benchmark-report", help="Informe local que se muestra en el mismo dashboard; se conserva entre arranques.")
+    benchmark.add_argument("--no-benchmark", action="store_true", help="Deshabilitar la sección del banco local.")
     args = parser.parse_args()
-    if not 1 <= args.port <= 65535:
+    if args.port is not None and not 1 <= args.port <= 65535:
         parser.error("--port debe estar entre 1 y 65535")
     if args.action == "build":
         build()

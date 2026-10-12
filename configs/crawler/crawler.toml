@@ -82,3 +82,19 @@ max_bytes = 16777216
 workers = 1
 max_items = 2
 max_bytes = 1048576
+
+durable local ACK, recoverable members and bounded remote publication.
+[spool]
+directory = "data/crawler-batch/spool"
+segment_bytes = 134217728
+segment_records = 65536
+rotate_seconds = 300
+gzip_level = 3
+max_spool_bytes = 8589934592
+max_segments = 256
+commit_records = 16
+commit_wait_ms = 10
+upload_retry_seconds = 10
+upload_timeout_seconds = 60
+gc_enabled = false
+retention_seconds = 86400

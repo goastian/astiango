@@ -1,5 +1,5 @@
 //! Standalone production crawler: the batch executor, a durable web frontier,
-//! per-page WARC files, and observations consumed by the Svelte control panel.
+//! durable WARC segments, and observations consumed by the Svelte control panel.
 
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
@@ -54,6 +54,8 @@ pub struct Config {
     pub body: super::body::BodyConfig,
     #[serde(default)]
     pub pipeline: super::pipeline::PipelineConfig,
+    #[serde(default)]
+    pub spool: Option<super::spool::SpoolConfig>,
     #[serde(default = "default_max_redirect_hops")]
     pub max_redirect_hops: u8,
     #[serde(default = "default_frontier_capacity")]
@@ -70,6 +72,14 @@ fn default_revisit_interval() -> u64 {
 }
 
 impl Config {
+    fn spool_config(&self) -> super::spool::SpoolConfig {
+        self.spool
+            .clone()
+            .unwrap_or_else(|| super::spool::SpoolConfig {
+                directory: self.output_path.join("spool"),
+                ..Default::default()
+            })
+    }
     fn state_directory(&self) -> &Path {
         self.state_directory.as_deref().unwrap_or_else(|| {
             self.status_path
@@ -91,6 +101,7 @@ impl Config {
         self.transport.validate()?;
         self.body.validate()?;
         self.pipeline.validate_body(&self.body)?;
+        self.spool_config().validate()?;
         anyhow::ensure!(
             self.network_policy == CrawlNetworkPolicy::PublicOnly,
             "The local crawler requires network_policy = public_only"
@@ -124,6 +135,7 @@ impl Config {
             transport: self.transport.clone(),
             body: self.body.clone(),
             pipeline: self.pipeline.clone(),
+            spool: self.spool_config(),
             max_redirect_hops: self.max_redirect_hops,
             robots_txt_cache_sec: 3600,
             min_politeness_factor: 0,
@@ -413,6 +425,7 @@ pub(super) struct LocalWarcSink {
     extractor: Extractor,
     pipeline: super::pipeline::Pipeline,
     store_warc: fn(&Path, &[u8]) -> Result<()>,
+    segmented: Option<Arc<super::WarcWriter>>,
 }
 
 impl LocalWarcSink {
@@ -448,6 +461,14 @@ impl LocalWarcSink {
     }
 
     fn check(&self) -> Result<()> {
+        if let Some(writer) = &self.segmented {
+            let stats = writer.metrics.stats();
+            anyhow::ensure!(
+                stats.errors == 0,
+                "Crawler storage failed: {:?}",
+                stats.last_error
+            );
+        }
         if let Some(error) = self.fatal_error.lock().unwrap().as_ref() {
             anyhow::bail!("Crawler storage failed: {error}");
         }
@@ -496,6 +517,9 @@ impl DatumSink for LocalWarcSink {
         self.write_prepared(page).await
     }
     async fn write_prepared(&self, page: super::pipeline::PreparedPage) -> super::Result<()> {
+        if let Some(writer) = &self.segmented {
+            return writer.write_prepared(page).await;
+        }
         self.check().map_err(super::Error::Anyhow)?;
         let sink = self.clone();
         self.pipeline
@@ -514,9 +538,15 @@ impl DatumSink for LocalWarcSink {
             .map_err(super::Error::Anyhow)
     }
     async fn finish(&self) -> super::Result<()> {
+        if let Some(writer) = &self.segmented {
+            return writer.finish().await;
+        }
         self.check().map_err(super::Error::Anyhow)
     }
     async fn checkpoint(&self) -> super::Result<()> {
+        if let Some(writer) = &self.segmented {
+            return writer.checkpoint().await;
+        }
         self.check().map_err(super::Error::Anyhow)
     }
 }
@@ -543,6 +573,7 @@ pub(super) fn benchmark_sink(
         extractor,
         pipeline,
         store_warc: atomic_write,
+        segmented: None,
     }))
 }
 
@@ -577,7 +608,8 @@ pub async fn run(config: Config) -> Result<()> {
     validate_seed_urls(&crawler_config, &seeds)?;
     let client = RobotClient::new(&crawler_config)?;
     let run_id = uuid::Uuid::new_v4().to_string();
-    let directory = config.output_path.join(&run_id);
+    let spool_config = config.spool_config();
+    let directory = spool_config.directory.join("segments");
     fs::create_dir_all(&directory)?;
     let now = Utc::now().to_rfc3339();
     let observer = Arc::new(Observer::new(
@@ -618,6 +650,29 @@ pub async fn run(config: Config) -> Result<()> {
         observer.clone(),
     )?);
     frontier.discover(seeds.clone())?;
+    let commit_frontier = frontier.clone();
+    let commit_observer = observer.clone();
+    let segmented = Arc::new(
+        super::WarcWriter::open(
+            spool_config,
+            None,
+            client.pipeline().clone(),
+            Some(Arc::new(move |page, receipt| {
+                if let Some(extraction) = &page.extraction {
+                    commit_frontier.discover(extraction.discovery_urls.iter().cloned())?;
+                }
+                commit_observer.saved(
+                    &Domain::from(&page.datum.url),
+                    &page.datum,
+                    receipt.segment.clone(),
+                    receipt.end - receipt.start,
+                );
+                Ok(())
+            })),
+        )
+        .await?,
+    );
+    observer.observe_spool(segmented.metrics.clone());
     let sink = Arc::new(LocalWarcSink {
         directory,
         observer: observer.clone(),
@@ -626,6 +681,7 @@ pub async fn run(config: Config) -> Result<()> {
         extractor: client.extractor().clone(),
         pipeline: client.pipeline().clone(),
         store_warc: atomic_write,
+        segmented: Some(segmented),
     });
     let job_directory = config.state_directory().join("jobs").join(&run_id);
     fs::create_dir_all(&job_directory)?;
@@ -715,9 +771,15 @@ pub async fn run(config: Config) -> Result<()> {
         while jobs.join_next().await.is_some() {}
         while claims.join_next().await.is_some() {}
     }
+    let finished = sink.finish().await;
     pipeline.shutdown().await;
-    observer.finish(if outcome.is_ok() { "stopped" } else { "failed" });
+    observer.finish(if outcome.is_ok() && finished.is_ok() {
+        "stopped"
+    } else {
+        "failed"
+    });
     outcome?;
+    finished?;
     sink.check()?;
     Ok(())
 }
@@ -1055,6 +1117,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn segmented_local_sink_keeps_frontier_observer_and_reader_contracts() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = dir.path().join("status.json");
+        let telemetry = observer(status.clone());
+        let frontier = Arc::new(
+            Frontier::open(dir.path().join("frontier.json"), 8, 5, telemetry.clone()).unwrap(),
+        );
+        let pipeline = super::super::pipeline::Pipeline::new(Default::default()).unwrap();
+        let extractor = Extractor::default();
+        let archive = dir.path().join("spool");
+        let commit_frontier = frontier.clone();
+        let commit_observer = telemetry.clone();
+        let writer = Arc::new(
+            super::super::WarcWriter::open(
+                super::super::spool::SpoolConfig {
+                    directory: archive.clone(),
+                    ..Default::default()
+                },
+                None,
+                pipeline.clone(),
+                Some(Arc::new(move |page, receipt| {
+                    if let Some(extraction) = &page.extraction {
+                        commit_frontier.discover(extraction.discovery_urls.iter().cloned())?;
+                    }
+                    commit_observer.saved(
+                        &Domain::from(&page.datum.url),
+                        &page.datum,
+                        receipt.segment.clone(),
+                        receipt.end - receipt.start,
+                    );
+                    Ok(())
+                })),
+            )
+            .await
+            .unwrap(),
+        );
+        telemetry.observe_spool(writer.metrics.clone());
+        let sink = LocalWarcSink {
+            directory: archive.join("segments"),
+            observer: telemetry.clone(),
+            frontier: frontier.clone(),
+            fatal_error: Arc::new(Mutex::new(None)),
+            extractor: extractor.clone(),
+            pipeline: pipeline.clone(),
+            store_warc: atomic_write,
+            segmented: Some(writer),
+        };
+        for index in 0..2 {
+            let mut datum = test_datum();
+            datum.url = Url::parse(&format!("https://example.org/article/{index}")).unwrap();
+            datum.body = "<base href='/base/'><meta name='robots' content='noindex'><a href='https://external.org/page'>other</a><a href='next'>internal</a>".into();
+            let extraction = extractor
+                .parse(
+                    &datum.body,
+                    &datum.url,
+                    ExtractionContext {
+                        domain: &Domain::from(&datum.url),
+                        crawled_urls: &VisitedUrls::default(),
+                        requested_url: &datum.url,
+                    },
+                )
+                .unwrap();
+            sink.write_prepared(super::super::pipeline::PreparedPage::unleased(
+                datum,
+                Some(extraction),
+            ))
+            .await
+            .unwrap();
+        }
+        sink.checkpoint().await.unwrap();
+        sink.finish().await.unwrap();
+        telemetry.flush().unwrap();
+        let snapshot: serde_json::Value =
+            serde_json::from_slice(&fs::read(status).unwrap()).unwrap();
+        assert_eq!(snapshot["counters"]["downloaded"], 2);
+        assert_eq!(snapshot["warc"]["files"], 1);
+        assert_eq!(snapshot["spool"]["records_durable"], 2);
+        assert_eq!(extractor.stats().documents, 2);
+        let discovered: Vec<_> = [
+            frontier.claim().unwrap().unwrap(),
+            frontier.claim().unwrap().unwrap(),
+        ]
+        .into_iter()
+        .flat_map(|job| job.urls.into_iter().map(|url| url.url.to_string()))
+        .collect();
+        assert!(discovered.contains(&"https://external.org/page".into()));
+        assert!(discovered.contains(&"https://example.org/base/next".into()));
+        let segment = fs::read_dir(archive.join("segments"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "gz"))
+            .unwrap();
+        assert_eq!(
+            warc::WarcFile::open(segment)
+                .unwrap()
+                .records()
+                .filter(|r| r.is_ok())
+                .count(),
+            2
+        );
+        pipeline.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn shared_extraction_discovers_domains_without_a_sink_parse_or_changed_warc() {
         let dir = tempfile::tempdir().unwrap();
         let telemetry = observer(dir.path().join("status.json"));
@@ -1084,6 +1250,7 @@ mod tests {
             extractor: extractor.clone(),
             pipeline: super::super::pipeline::Pipeline::new(Default::default()).unwrap(),
             store_warc: atomic_write,
+            segmented: None,
         };
         sink.write_extracted(datum.clone(), Some(&extraction))
             .await
@@ -1127,6 +1294,7 @@ mod tests {
             extractor: Extractor::default(),
             pipeline: pipeline.clone(),
             store_warc: atomic_write,
+            segmented: None,
         });
         let (release, blocked) = std::sync::mpsc::channel();
         let holding = {
@@ -1182,6 +1350,7 @@ mod tests {
             extractor: Extractor::default(),
             pipeline: super::super::pipeline::Pipeline::new(Default::default()).unwrap(),
             store_warc: atomic_write,
+            segmented: None,
         };
         sink.write(datum.clone()).await.unwrap();
         sink.checkpoint().await.unwrap();
@@ -1246,6 +1415,7 @@ mod tests {
             extractor: Extractor::default(),
             pipeline: super::super::pipeline::Pipeline::new(Default::default()).unwrap(),
             store_warc: full_device,
+            segmented: None,
         };
         let error = sink.write(datum.clone()).await.unwrap_err();
         match &error {

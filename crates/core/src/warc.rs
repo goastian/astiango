@@ -651,6 +651,68 @@ pub struct WarcWriter {
     writer: GzEncoder<Vec<u8>>,
 }
 
+pub struct RecordRef<'a> {
+    pub url: &'a str,
+    pub date: Option<&'a chrono::DateTime<chrono::Utc>>,
+    pub body: &'a str,
+    pub payload_type: Option<PayloadType>,
+    pub fetch_time_ms: u64,
+}
+
+pub fn write_gzip_members<W: Write>(
+    output: &mut W,
+    record: &RecordRef<'_>,
+    level: u32,
+    include_info: bool,
+) -> Result<()> {
+    anyhow::ensure!(level <= 9, "gzip level must be 0..9");
+    if include_info {
+        let mut member = GzEncoder::new(&mut *output, Compression::new(level));
+        let content = format!("ISPARTOF: crawl[{}]", chrono::Utc::now().to_rfc3339());
+        write!(
+            member,
+            "WARC/1.0\r\nWARC-Type: warcinfo\r\nContent-Length: {}\r\n\r\n{}\r\n\r\n",
+            content.len(),
+            content
+        )?;
+        member.finish()?;
+    }
+    let mut member = GzEncoder::new(&mut *output, Compression::new(level));
+    write!(member, "WARC/1.0\r\nWARC-Type: request\r\n")?;
+    if let Some(date) = record.date {
+        write!(member, "WARC-Date: {}\r\n", date.to_rfc3339())?;
+    }
+    write!(
+        member,
+        "WARC-Target-URI: {}\r\nContent-Length: 0\r\n\r\n\r\n\r\n",
+        record.url
+    )?;
+    member.finish()?;
+    let mut member = GzEncoder::new(&mut *output, Compression::new(level));
+    write!(member, "WARC/1.0\r\nWARC-Type: response\r\n")?;
+    if let Some(payload_type) = record.payload_type {
+        write!(member, "WARC-Identified-Payload-Type: {payload_type}\r\n")?;
+    }
+    write!(
+        member,
+        "Content-Length: {}\r\n\r\n\r\n\r\n",
+        record.body.len() + 4
+    )?;
+    member.write_all(record.body.as_bytes())?;
+    member.write_all(b"\r\n\r\n")?;
+    member.finish()?;
+    let mut member = GzEncoder::new(&mut *output, Compression::new(level));
+    let metadata = format!("fetchTimeMs: {}", record.fetch_time_ms);
+    write!(
+        member,
+        "WARC/1.0\r\nWARC-Type: metadata\r\nContent-Length: {}\r\n\r\n{}\r\n\r\n",
+        metadata.len(),
+        metadata
+    )?;
+    member.finish()?;
+    Ok(())
+}
+
 impl WarcWriter {
     pub fn new() -> Self {
         let mut writer = GzEncoder::new(Default::default(), Compression::best());
@@ -730,7 +792,7 @@ impl WarcWriter {
         self.writer.write_all(body.as_bytes())?;
         self.writer.write_all("\r\n\r\n".as_bytes())?;
 
-        self.writer.flush().unwrap();
+        self.writer.flush()?;
 
         self.num_writes += 1;
 

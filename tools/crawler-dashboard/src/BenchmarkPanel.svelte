@@ -3,6 +3,7 @@
   import TransportBenchmarkPanel from "./TransportBenchmarkPanel.svelte";
   import BodyBenchmarkPanel from "./BodyBenchmarkPanel.svelte";
   import PipelineBenchmarkPanel from "./PipelineBenchmarkPanel.svelte";
+  import SpoolBenchmarkPanel from "./SpoolBenchmarkPanel.svelte";
   import ExtractionBenchmarkPanel from "./ExtractionBenchmarkPanel.svelte";
   import type {
     BenchmarkReport,
@@ -13,6 +14,7 @@
     BodyBenchmarkReport,
     ExtractionBenchmarkReport,
     PipelineBenchmarkReport,
+    SpoolBenchmarkReport,
   } from "./benchmark-types";
 
   let { onavailability }: { onavailability: (available: boolean, profile?: string) => void } =
@@ -22,13 +24,14 @@
   let bodyReport = $state<BodyBenchmarkReport | null>(null);
   let extractionReport = $state<ExtractionBenchmarkReport | null>(null);
   let pipelineReport = $state<PipelineBenchmarkReport | null>(null);
+  let spoolReport = $state<SpoolBenchmarkReport | null>(null);
   let enabled = $state(false);
   let error = $state("");
   let loading = $state(false);
   let selectedIndex = $state(0);
   let controller: AbortController | null = null;
   const selected = $derived(report?.scenarios[selectedIndex]);
-  const profile = $derived(pipelineReport ? "C07" : extractionReport ? "C06" : bodyReport ? "C05" : transportReport ? "C04" : report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
+  const profile = $derived(spoolReport ? "C08" : pipelineReport ? "C07" : extractionReport ? "C06" : bodyReport ? "C05" : transportReport ? "C04" : report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
   const formatter = new Intl.NumberFormat("es-CO", {
     maximumFractionDigits: 2,
   });
@@ -145,6 +148,7 @@
         bodyReport = null;
         extractionReport = null;
         pipelineReport = null;
+        spoolReport = null;
         error = "";
         return;
       }
@@ -152,7 +156,13 @@
         throw new Error(data.error || "No se pudo consultar el informe del banco.");
       extractionReport = null;
       pipelineReport = null;
-      if (data.report.kind === "crawler_pipeline_benchmark") {
+      spoolReport = null;
+      if (data.report.kind === "crawler_spool_benchmark") {
+        spoolReport = data.report;
+        bodyReport = null;
+        transportReport = null;
+        report = null;
+      } else if (data.report.kind === "crawler_pipeline_benchmark") {
         pipelineReport = data.report;
         bodyReport = null;
         transportReport = null;
@@ -191,7 +201,7 @@
     }
   }
   function download() {
-    const currentReport = pipelineReport ?? extractionReport ?? bodyReport ?? transportReport ?? report;
+    const currentReport = spoolReport ?? pipelineReport ?? extractionReport ?? bodyReport ?? transportReport ?? report;
     if (!currentReport) return;
     const url = URL.createObjectURL(
       new Blob([JSON.stringify(currentReport, null, 2)], { type: "application/json" }),
@@ -225,7 +235,8 @@
         <span class="benchmark-eyebrow">BANCO LOCAL · {profile}</span>
         <h2 id="benchmark-heading">Capacidad y recursos</h2>
         <p>
-          {#if extractionReport}Pruebas de extracción con archivos locales, sin solicitudes de red.
+          {#if spoolReport}Archivo de corpus local y publicación S3 controlada en loopback. Los documentos de prueba pertenecen exclusivamente a este informe.
+          {:else if extractionReport}Pruebas de extracción con archivos locales, sin solicitudes de red.
           {:else}Pruebas controladas en loopback. Sus peticiones y páginas pertenecen exclusivamente a este informe.{/if}
         </p>
       </div>
@@ -233,16 +244,18 @@
         <button class="button" onclick={refresh} disabled={loading}
           >Actualizar banco</button
         >
-        <button class="button" onclick={download} disabled={!report && !transportReport && !bodyReport && !extractionReport && !pipelineReport}
+        <button class="button" onclick={download} disabled={!report && !transportReport && !bodyReport && !extractionReport && !pipelineReport && !spoolReport}
           >Descargar {profile}</button
         >
       </div>
     </div>
     {#if error}<p class="benchmark-error" role="status">
         {error}
-        {report || transportReport || bodyReport || extractionReport || pipelineReport ? "Se conserva el último informe leído." : ""}
+        {report || transportReport || bodyReport || extractionReport || pipelineReport || spoolReport ? "Se conserva el último informe leído." : ""}
       </p>{/if}
-    {#if pipelineReport}
+    {#if spoolReport}
+      <SpoolBenchmarkPanel report={spoolReport} />
+    {:else if pipelineReport}
       <PipelineBenchmarkPanel report={pipelineReport} />
     {:else if extractionReport}
       <ExtractionBenchmarkPanel report={extractionReport} />

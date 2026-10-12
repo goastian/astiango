@@ -43,8 +43,11 @@ pub mod extraction;
 pub mod pipeline;
 #[cfg(feature = "crawler-bench")]
 pub mod pipeline_benchmark;
+#[cfg(feature = "crawler-bench")]
+pub mod spool_benchmark;
 pub mod robots_txt;
 pub mod router;
+pub mod spool;
 pub use router::Router;
 #[cfg(feature = "crawler-bench")]
 pub mod benchmark;
@@ -310,10 +313,15 @@ impl Crawler {
         let mut handles = tokio::task::JoinSet::new();
         let mut router_hosts = Vec::new();
         let client = RobotClient::new(&config)?;
-        let writer = Arc::new(WarcWriter::with_pipeline(
-            config.s3.clone(),
-            client.pipeline().clone(),
-        ));
+        let writer = Arc::new(
+            WarcWriter::open(
+                config.spool.clone(),
+                Some(config.s3.clone()),
+                client.pipeline().clone(),
+                None,
+            )
+            .await?,
+        );
 
         for host in &config.router_hosts {
             router_hosts.push(
