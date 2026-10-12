@@ -252,6 +252,10 @@ struct Projection {
     spool: Option<super::spool::SpoolStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     frontier_db: Option<super::frontier::Stats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scheduler: Option<super::scheduler::Stats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    robots: Option<super::robots_txt::Stats>,
 }
 
 type Publisher = dyn Fn(&Path, &Projection, &IoCounters, bool) -> anyhow::Result<()> + Send + Sync;
@@ -271,6 +275,7 @@ struct Shared {
     pipeline: Mutex<Option<super::pipeline::Pipeline>>,
     spool: Mutex<Option<super::spool::SpoolMetrics>>,
     frontier_db: Mutex<Option<super::frontier::Metrics>>,
+    robots: Mutex<Option<super::robots_txt::RobotsTxtManager>>,
 }
 
 pub struct Observer {
@@ -362,6 +367,7 @@ impl Observer {
             pipeline: Mutex::new(None),
             spool: Mutex::new(None),
             frontier_db: Mutex::new(None),
+            robots: Mutex::new(None),
         });
         let projector = if legacy {
             publish(&shared, true);
@@ -405,6 +411,10 @@ impl Observer {
         *self.shared.pipeline.lock().unwrap() = Some(pipeline);
         self.heartbeat();
     }
+    pub(super) fn observe_robots(&self, manager: super::robots_txt::RobotsTxtManager) {
+        *self.shared.robots.lock().unwrap() = Some(manager);
+    }
+
     pub(super) fn observe_frontier(&self, frontier: super::frontier::Metrics) {
         *self.shared.frontier_db.lock().unwrap() = Some(frontier);
         self.heartbeat();
@@ -839,6 +849,8 @@ fn publish(shared: &Shared, legacy: bool) {
                 pipeline: None,
                 spool: None,
                 frontier_db: None,
+                robots: None,
+                scheduler: None,
             },
             version,
             dirty_since,
@@ -856,6 +868,9 @@ fn publish(shared: &Shared, legacy: bool) {
     projection.spool = spool.as_ref().map(|spool| spool.stats());
     let frontier = shared.frontier_db.lock().unwrap().clone();
     projection.frontier_db = frontier.as_ref().map(|frontier| frontier.snapshot());
+    let robots = shared.robots.lock().unwrap().clone();
+    projection.robots = robots.as_ref().map(|robots| robots.stats());
+    projection.scheduler = robots.as_ref().map(|robots| robots.scheduler().stats());
     let metrics = shared.metrics.lock().unwrap().clone();
     let _timer = super::runtime::StageTimer::optional(metrics.as_ref(), "observer_projection");
     let result = (shared.publisher)(&shared.path, &projection, &shared.io, legacy);

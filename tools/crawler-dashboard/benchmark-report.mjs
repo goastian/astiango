@@ -52,6 +52,8 @@ function signedDistribution(value) {
 }
 
 export function isBenchmarkReport(report) {
+  if (record(report) && report.kind === "crawler_scheduler_benchmark") return isSchedulerBenchmarkReport(report);
+  if (record(report) && report.kind === "crawler_capture_frontier_benchmark") return isCaptureFrontierBenchmarkReport(report);
   if (record(report) && report.kind === "crawler_spool_benchmark")
     return isSpoolBenchmarkReport(report);
   if (record(report) && report.kind === "crawler_pipeline_benchmark")
@@ -139,6 +141,36 @@ export function isBenchmarkReport(report) {
   )
     return false;
   return true;
+}
+
+export function isCaptureFrontierBenchmarkReport(report) {
+  return record(report) && report.kind === "crawler_capture_frontier_benchmark" && report.schema_version === 1 && typeof report.generated_at === "string" &&
+    record(report.configuration) && count(report.configuration.repetitions) &&
+    Array.isArray(report.summaries) && report.summaries.length > 0 && report.summaries.every(row =>
+      record(row) && count(row.urls) && ["redb", "json"].includes(row.mode) && record(row.metrics) &&
+      ["peak_rss_bytes", "update_cpu_ms", "update_ms", "database_bytes"].every(key => distribution(row.metrics[key]))) &&
+    Array.isArray(report.comparisons) && report.comparisons.every(row => record(row) && count(row.urls) &&
+      ["peak_rss_bytes_reduction_pct", "update_cpu_ms_reduction_pct", "update_ms_reduction_pct"].every(key => finite(row[key]))) &&
+    record(report.acceptance) && typeof report.acceptance.passed === "boolean" &&
+    ["crash_checks", "capture_checks", "rss_growth_bytes"].every(key => count(report.acceptance[key]));
+}
+
+export function isSchedulerBenchmarkReport(report) {
+  return record(report) && report.kind === "crawler_scheduler_benchmark" && report.schema_version === 1 && typeof report.generated_at === "string" &&
+    record(report.configuration) && report.configuration.repetitions === 3 && report.configuration.workers === 2 &&
+    Array.isArray(report.runs) && report.runs.length === 18 && report.runs.every(row => record(row) &&
+      [2, 32, 128].includes(row.origins) && ["long_jobs", "fair_turns"].includes(row.mode) && [1, 2, 3].includes(row.repetition) &&
+      ["duration_ms", "pages_per_second", "cpu_ms", "rss_peak_bytes", "ready_lag_p99_ms"].every(key => finite(row[key]) && row[key] >= 0) &&
+      record(row.server_verification) && row.server_verification.requests_match === true && row.server_verification.courtesy_violations === 0) &&
+    new Set(report.runs.map(row => `${row.origins}:${row.mode}:${row.repetition}`)).size === 18 &&
+    Array.isArray(report.summaries) && report.summaries.length === 6 && report.summaries.every(row =>
+      record(row) && [2, 32, 128].includes(row.origins) && ["long_jobs", "fair_turns"].includes(row.mode) && row.repetitions === 3 &&
+      record(row.metrics) && ["duration_ms", "pages_per_second", "cpu_ms", "rss_peak_bytes", "ready_lag_p99_ms"].every(key => distribution(row.metrics[key]))) &&
+    new Set(report.summaries.map(row => `${row.origins}:${row.mode}`)).size === 6 &&
+    Array.isArray(report.comparisons) && report.comparisons.length === 3 && new Set(report.comparisons.map(row => row?.origins)).size === 3 && report.comparisons.every(row =>
+      record(row) && [2, 32, 128].includes(row.origins) && finite(row.speedup) && row.speedup > 0 && finite(row.throughput_gain_pct)) &&
+    record(report.acceptance) && typeof report.acceptance.passed === "boolean" && count(report.acceptance.courtesy_violations) &&
+    typeof report.acceptance.request_sets_match === "boolean";
 }
 
 function isSpoolBenchmarkReport(report) {

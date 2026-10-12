@@ -20,6 +20,7 @@ use std::cmp::Ordering;
 pub struct Pattern {
     pattern: String,
     len: usize,
+    rfc: bool,
 }
 
 impl Ord for Pattern {
@@ -50,12 +51,39 @@ impl Pattern {
             return Self {
                 pattern: pattern.split('$').next().unwrap().to_string() + "$",
                 len,
+                rfc: false,
             };
         }
 
         Self {
             pattern: pattern.to_string(),
             len,
+            rfc: false,
+        }
+    }
+
+    pub fn rfc(pattern: &str) -> Self {
+        let pattern = normalize_octets(pattern, true);
+        let pattern = pattern.split('$').next().unwrap_or_default().to_owned()
+            + if pattern.contains('$') { "$" } else { "" };
+        let mut len = 0;
+        let bytes = pattern.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                i += 3;
+                len += 1;
+            } else {
+                if !matches!(bytes[i], b'*' | b'$') {
+                    len += 1;
+                }
+                i += 1;
+            }
+        }
+        Self {
+            pattern,
+            len,
+            rfc: true,
         }
     }
 
@@ -64,7 +92,11 @@ impl Pattern {
     }
 
     pub fn matches(&self, path: &str) -> bool {
-        let path = percent_encode(path);
+        let path = if self.rfc {
+            normalize_octets(path, false)
+        } else {
+            percent_encode(path)
+        };
         let parts = self.pattern.split('*');
 
         let mut start = 0;
@@ -109,6 +141,41 @@ impl Pattern {
 
         true
     }
+}
+
+pub(crate) fn normalize_octets(input: &str, pattern: bool) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if byte == b'%' && i + 2 < bytes.len() {
+            if let (Some(a), Some(b)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            ) {
+                let value = (a * 16 + b) as u8;
+                if value.is_ascii_alphanumeric() || matches!(value, b'-' | b'.' | b'_' | b'~') {
+                    out.push(value as char);
+                } else {
+                    out.push_str(&format!("%{value:02X}"));
+                }
+                i += 3;
+                continue;
+            }
+        }
+        if byte > 126
+            || byte <= 32
+            || matches!(byte, b'%' | b'"' | b'<' | b'>' | b'`' | b'#')
+            || (!pattern && matches!(byte, b'*' | b'$'))
+        {
+            out.push_str(&format!("%{byte:02X}"));
+        } else {
+            out.push(byte as char);
+        }
+        i += 1;
+    }
+    out
 }
 
 pub(crate) fn percent_encode(input: &str) -> String {

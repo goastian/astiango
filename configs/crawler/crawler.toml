@@ -98,3 +98,14 @@ upload_retry_seconds = 10
 upload_timeout_seconds = 60
 gc_enabled = false
 retention_seconds = 86400
+
+# C11–C13: explicit migration mode; courtesy is independent of telemetry.
+[scheduler]
+mode = "long_jobs"
+max_tracked_origins = 4096
+max_active_per_site = 2
+max_active_per_ip = 8
+
+[robots]
+cache_entries = 1024
+failure_ttl_seconds = 60

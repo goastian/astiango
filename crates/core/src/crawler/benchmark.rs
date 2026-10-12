@@ -319,6 +319,8 @@ pub async fn run(config: Config) -> Result<serde_json::Value> {
     let crawler_config = Arc::new(CrawlerConfig {
         spool: Default::default(),
         num_worker_threads: config.workers,
+        scheduler: super::scheduler::Config::default(),
+        robots: crate::crawler::robots_txt::Config::default(),
         user_agent: UserAgent {
             full: "CrawlerBench/1.0 (isolated local benchmark)".into(),
             token: "CrawlerBench".into(),

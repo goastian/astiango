@@ -159,6 +159,8 @@ impl RobotClient {
         &self.config.user_agent.token
     }
     pub fn new(config: &CrawlerConfig) -> Result<Self> {
+        config.scheduler.validate()?;
+        config.robots.validate(&config.body)?;
         let transport = SharedTransport::new(config, config.transport.clone())?;
         let body_reader = BodyReader::new(config.body.clone())?;
         config.pipeline.validate_body(&config.body)?;
@@ -327,16 +329,27 @@ impl RobotClient {
             RobotAccess::Allowed => {}
             RobotAccess::Disallowed => return Err(Error::DisallowedPath),
             RobotAccess::Unreachable => return Err(Error::RobotsUnavailable),
+            RobotAccess::Deferred(retry_after_ms) => {
+                return Err(Error::CrawlDeferred { retry_after_ms })
+            }
         }
 
         if let Some(runtime) = &self.runtime {
-            return Ok(RequestBuilder::injected(runtime.clone(), url, &self.config));
+            return RequestBuilder::injected(runtime.clone(), url.clone(), &self.config)
+                .with_scheduler(self.robots_txt_manager.scheduler().clone(), url)
+                .prepare()
+                .await;
         }
-        Ok(RequestBuilder::managed(self.transport.clone(), url))
+        RequestBuilder::managed(self.transport.clone(), url.clone())
+            .with_scheduler(self.robots_txt_manager.scheduler().clone(), url)
+            .prepare()
+            .await
     }
 }
 
 pub struct RequestBuilder {
+    gated: Option<(super::scheduler::Scheduler, Url)>,
+    permit: Option<Arc<super::scheduler::Permit>>,
     request: Option<reqwest::RequestBuilder>,
     injected: Option<(
         Arc<super::runtime::Runtime>,
@@ -358,6 +371,8 @@ impl RequestBuilder {
     pub fn new(builder: reqwest::RequestBuilder) -> Self {
         Self {
             request: Some(builder),
+            gated: None,
+            permit: None,
             injected: None,
             managed: None,
         }
@@ -370,6 +385,8 @@ impl RequestBuilder {
     ) -> Self {
         Self {
             request: None,
+            gated: None,
+            permit: None,
             injected: Some((
                 runtime,
                 url,
@@ -385,12 +402,40 @@ impl RequestBuilder {
     pub(crate) fn managed(transport: SharedTransport, url: Url) -> Self {
         Self {
             request: None,
+            gated: None,
+            permit: None,
             injected: None,
             managed: Some((transport, url, None)),
         }
     }
 
-    pub async fn send(self) -> Result<reqwest::Response> {
+    pub(crate) fn with_scheduler(
+        mut self,
+        scheduler: super::scheduler::Scheduler,
+        url: Url,
+    ) -> Self {
+        self.gated = Some((scheduler, url));
+        self
+    }
+
+    pub(crate) async fn prepare(mut self) -> Result<Self> {
+        if let Some((scheduler, url)) = self.gated.take() {
+            self.permit = Some(Arc::new(scheduler.acquire(&url).await?));
+        }
+        Ok(self)
+    }
+
+    pub async fn send(mut self) -> Result<reqwest::Response> {
+        self = self.prepare().await?;
+        let permit = self.permit.take();
+        let response = self.send_inner().await?;
+        match permit {
+            Some(permit) => super::scheduler::guard_response(response, permit),
+            None => Ok(response),
+        }
+    }
+
+    async fn send_inner(self) -> Result<reqwest::Response> {
         if let Some((runtime, url, timeout, headers, total)) = self.injected {
             let total = timeout.map_or(total, |timeout| timeout.min(total));
             let started = std::time::Instant::now();

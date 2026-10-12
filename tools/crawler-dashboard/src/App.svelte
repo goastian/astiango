@@ -10,6 +10,7 @@
   import PipelineStatus from "./PipelineStatus.svelte";
   import SpoolStatus from "./SpoolStatus.svelte";
   import CaptureFrontierStatus from "./CaptureFrontierStatus.svelte";
+  import SchedulingStatus from "./SchedulingStatus.svelte";
   import {
     buildHistoryBars,
     summarizeOutcomes,
@@ -688,6 +689,7 @@
     <ExtractionStatus stats={snapshot?.extraction} readError={!!error} stale={stale && activeProcess} />
     <PipelineStatus stats={snapshot?.pipeline} readError={!!error} stale={stale && activeProcess} />
     <CaptureFrontierStatus frontier={snapshot?.frontier_db} spool={snapshot?.spool} />
+    <SchedulingStatus {snapshot} />
     <SpoolStatus stats={snapshot?.spool} readError={!!error} stale={stale && activeProcess} />
     <div class="analysis-grid">
       <section class="panel issues-panel" aria-labelledby="issues-heading">

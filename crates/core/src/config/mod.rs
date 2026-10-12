@@ -409,6 +409,12 @@ pub struct CrawlerConfig {
     pub user_agent: UserAgent,
 
     #[serde(default)]
+    pub scheduler: crate::crawler::scheduler::Config,
+
+    #[serde(default)]
+    pub robots: crate::crawler::robots_txt::Config,
+
+    #[serde(default)]
     pub network_policy: CrawlNetworkPolicy,
 
     #[serde(default)]
@@ -462,6 +468,8 @@ impl CrawlerConfig {
                 token: "test".to_string(),
             },
             network_policy: CrawlNetworkPolicy::default(),
+            scheduler: crate::crawler::scheduler::Config::default(),
+            robots: crate::crawler::robots_txt::Config::default(),
             transport: crate::crawler::transport::TransportConfig::default(),
             body: crate::crawler::body::BodyConfig::default(),
             pipeline: crate::crawler::pipeline::PipelineConfig::default(),

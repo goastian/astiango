@@ -34,6 +34,9 @@ export interface Site extends ExplicitCounters {
 }
 
 export interface FrontierDbStats {
+  site_identity_version?: number;
+  identity_mapped_urls?: number;
+  identity_migration_complete?: boolean;
   schema_version: number; identity_version: number; cache_bytes: number; batch_size: number;
   urls: number; pending_urls: number; leased_urls: number; committed_urls: number; terminal_urls: number;
   known_sites: number; pending_sites: number; active_sites: number; outbox_entries: number; commits: number;
@@ -70,6 +73,10 @@ export interface ObserverStats {
   legacy_write_estimate: number;
 }
 export interface TransportStats {
+  max_active_per_ip?: number;
+  active_ip_reservations?: number;
+  ip_active_peak?: number;
+  ip_waits?: number;
   requests_started: number;
   headers_received: number;
   request_failures: number;
@@ -135,6 +142,8 @@ export interface BodyStats {
   max_reserved_bytes: number;
 }
 export interface Snapshot {
+  scheduler?: SchedulerStats;
+  robots?: RobotsStats;
   frontier_db?: FrontierDbStats;
   spool?: SpoolStats;
   pipeline?: PipelineStats;
@@ -177,6 +186,18 @@ export interface Snapshot {
     current_file: string | null;
   };
   history: { at: string; downloaded: number; failed: number; bytes: number }[];
+}
+
+export interface SchedulerStats {
+  mode: "fair_turns" | "long_jobs";
+  requests_admitted: number; requests_deferred: number; wait_ms: number;
+  active_requests: number; active_peak: number; tracked_origins: number;
+  origin_limit: number; site_limit: number; origin_overflows: number;
+}
+export interface RobotsStats {
+  hits: number; misses: number; single_flight_waits: number; downloads: number;
+  evictions: number; unreachable: number; unavailable: number; disallowed: number;
+  entries: number; capacity: number; ttl_seconds: number; failure_ttl_seconds: number;
 }
 
 export interface SpoolStats {

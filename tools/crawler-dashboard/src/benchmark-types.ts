@@ -180,3 +180,11 @@ export interface CaptureFrontierBenchmarkReport {
   comparisons: Array<{ urls: number; peak_rss_bytes_reduction_pct: number; update_cpu_ms_reduction_pct: number; update_ms_reduction_pct: number }>;
   acceptance: { passed: boolean; crash_checks: number; capture_checks: number; rss_growth_bytes: number };
 }
+
+export interface SchedulerBenchmarkReport {
+  kind: "crawler_scheduler_benchmark"; schema_version: number; generated_at: string;
+  configuration: { repetitions: number; workers: number; delay_ms: number; pages_per_origin: number };
+  summaries: Array<{ origins: number; mode: "long_jobs" | "fair_turns"; repetitions: number; metrics: Record<string, Distribution> }>;
+  comparisons: Array<{ origins: number; speedup: number; throughput_gain_pct: number }>;
+  acceptance: { passed: boolean; courtesy_violations: number; request_sets_match: boolean };
+}

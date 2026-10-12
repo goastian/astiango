@@ -90,6 +90,8 @@ macro_rules! measured_counters {
         #[derive(Clone, Debug, Default, Serialize)]
         pub struct TransportStats {
             $(pub $name: u64,)*
+            pub max_active_per_ip: u64,
+            pub active_ip_reservations: u64,
             pub max_client_slots: u64,
             pub max_slots_per_origin: u64,
             pub client_slots_total: u64,
@@ -137,7 +139,9 @@ measured_counters!(
     dns_rejected,
     dns_inflight,
     dns_inflight_peak,
-    dns_lookup_ms
+    dns_lookup_ms,
+    ip_waits,
+    ip_active_peak
 );
 
 pub struct DnsAnswer {
@@ -292,6 +296,8 @@ struct Inner {
     dns_permits: Semaphore,
     pool: Mutex<Pool>,
     pool_changed: Notify,
+    ip_active: Mutex<std::collections::HashMap<IpAddr, usize>>,
+    ip_changed: Notify,
     counters: Counters,
     setup_stage: Mutex<super::pipeline::BlockingStage>,
     #[cfg(any(test, feature = "crawler-bench"))]
@@ -340,6 +346,8 @@ impl SharedTransport {
                 dns_changed: Notify::new(),
                 pool: Mutex::new(Pool::default()),
                 pool_changed: Notify::new(),
+                ip_active: Mutex::new(std::collections::HashMap::new()),
+                ip_changed: Notify::new(),
                 counters: Counters::default(),
                 setup_stage: Mutex::new(super::pipeline::BlockingStage::new(
                     config.pipeline.network_setup.clone(),
@@ -384,6 +392,9 @@ impl SharedTransport {
 
     pub fn stats(&self) -> TransportStats {
         let mut stats = self.inner.counters.snapshot();
+        stats.max_active_per_ip = self.inner.config.scheduler.max_active_per_ip as u64;
+        stats.active_ip_reservations =
+            self.inner.ip_active.lock().unwrap().values().sum::<usize>() as u64;
         stats.max_client_slots = self.inner.options.max_client_slots as u64;
         stats.max_slots_per_origin = self.inner.options.max_slots_per_origin as u64;
         let pool = self.inner.pool.lock().unwrap();
@@ -464,7 +475,7 @@ impl SharedTransport {
             .host_str()
             .ok_or_else(|| Error::from(anyhow!("missing host")))?;
         let origin = url.origin().ascii_serialization();
-        let lease = self.acquire_slot(origin).await;
+
         let answer = match url.host() {
             Some(url::Host::Ipv4(ip)) => Resolved {
                 addresses: Arc::new(vec![IpAddr::V4(ip)]),
@@ -476,6 +487,9 @@ impl SharedTransport {
             },
             _ => self.resolve(host).await?,
         };
+        let ip_permit = self.acquire_ips(&answer.addresses).await;
+        let mut lease = self.acquire_slot(origin).await;
+        lease.ip_permit = Some(ip_permit);
         let reusable = {
             let mut pool = self.inner.pool.lock().unwrap();
             let slot = pool
@@ -699,6 +713,39 @@ impl SharedTransport {
             .into())
     }
 
+    async fn acquire_ips(&self, addresses: &[IpAddr]) -> IpPermit {
+        let mut addresses = addresses.to_vec();
+        addresses.sort();
+        addresses.dedup();
+        loop {
+            let notified = self.inner.ip_changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let mut active = self.inner.ip_active.lock().unwrap();
+                if addresses.iter().all(|ip| {
+                    active.get(ip).copied().unwrap_or(0)
+                        < self.inner.config.scheduler.max_active_per_ip
+                }) {
+                    for ip in &addresses {
+                        let count = active.entry(*ip).or_default();
+                        *count += 1;
+                        self.inner
+                            .counters
+                            .ip_active_peak
+                            .fetch_max(*count as u64, Ordering::Relaxed);
+                    }
+                    return IpPermit {
+                        inner: self.inner.clone(),
+                        addresses,
+                    };
+                }
+            }
+            self.inner.counters.ip_waits.fetch_add(1, Ordering::Relaxed);
+            notified.await;
+        }
+    }
+
     async fn acquire_slot(&self, origin: String) -> RequestLease {
         let mut wait = PoolWait {
             inner: &self.inner,
@@ -777,6 +824,7 @@ impl SharedTransport {
             };
             if let Some(id) = id {
                 return RequestLease {
+                    ip_permit: None,
                     inner: self.inner.clone(),
                     id,
                     reusable: false,
@@ -1014,7 +1062,28 @@ impl Drop for ResolutionGuard {
     }
 }
 
+struct IpPermit {
+    inner: Arc<Inner>,
+    addresses: Vec<IpAddr>,
+}
+impl Drop for IpPermit {
+    fn drop(&mut self) {
+        let mut active = self.inner.ip_active.lock().unwrap();
+        for ip in &self.addresses {
+            if let Some(count) = active.get_mut(ip) {
+                *count -= 1;
+                if *count == 0 {
+                    active.remove(ip);
+                }
+            }
+        }
+        drop(active);
+        self.inner.ip_changed.notify_waiters();
+    }
+}
+
 struct RequestLease {
+    ip_permit: Option<IpPermit>,
     inner: Arc<Inner>,
     id: u64,
     reusable: bool,

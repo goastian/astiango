@@ -302,6 +302,62 @@ fn loopback_transport(options: TransportConfig) -> SharedTransport {
     .unwrap()
 }
 
+#[tokio::test]
+async fn shared_ip_budget_waits_without_taking_http_slots_and_cancellation_releases_it() {
+    let server = LoopbackServer::start().await;
+    let mut config = CrawlerConfig::for_tests();
+    config.scheduler.max_active_per_ip = 1;
+    let transport = SharedTransport::with_fixture_resolver(
+        &config,
+        TransportConfig {
+            max_client_slots: 4,
+            ..Default::default()
+        },
+        Arc::new(LoopbackResolver),
+        Arc::new(SystemClock),
+        FixturePolicy {
+            allowed_hosts: BTreeSet::from(["one.test".into(), "two.test".into()]),
+            certificate_pem: None,
+        },
+    )
+    .unwrap();
+    let first = transport
+        .send(server.url("one.test", "/slow-body"), None)
+        .await
+        .unwrap();
+    assert!(transport
+        .send(
+            server.url("two.test", "/ok"),
+            Some(Duration::from_millis(40))
+        )
+        .await
+        .is_err());
+    assert_eq!(transport.stats().client_slots_active, 1);
+    assert_eq!(transport.stats().ip_active_peak, 1);
+    let waiting = {
+        let transport = transport.clone();
+        let url = server.url("two.test", "/ok");
+        tokio::spawn(async move { transport.send(url, None).await })
+    };
+    tokio::task::yield_now().await;
+    waiting.abort();
+    let _ = waiting.await;
+    assert_eq!(transport.stats().active_ip_reservations, 1);
+    assert_eq!(first.text().await.unwrap(), "hello");
+    assert_eq!(transport.stats().active_ip_reservations, 0);
+    assert_eq!(
+        transport
+            .send(server.url("two.test", "/ok"), None)
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "hello"
+    );
+    assert!(transport.stats().ip_waits > 0);
+}
+
 fn loopback_body_transport(body: super::super::body::BodyConfig) -> SharedTransport {
     let mut config = CrawlerConfig::for_tests();
     config.body = body;

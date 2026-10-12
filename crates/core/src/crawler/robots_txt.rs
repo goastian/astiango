@@ -14,84 +14,138 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{
-    ops::Deref,
-    panic,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
-
-use dashmap::DashMap;
-use url::Url;
-
-use crate::config::{CrawlNetworkPolicy, CrawlerConfig};
-
 use super::{
     body::{AdmittedBody, BodyKind, BodyReader},
+    scheduler::Scheduler,
     transport::SharedTransport,
-    Site,
 };
+use crate::config::{CrawlNetworkPolicy, CrawlerConfig};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
+use url::Url;
 
-const RETRY_ROBOTSTXT_UNREACHABLE: bool = false;
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Config {
+    pub cache_entries: usize,
+    pub failure_ttl_seconds: u64,
+}
+impl Config {
+    pub fn validate(&self, body: &super::body::BodyConfig) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            (1..=65536).contains(&self.cache_entries)
+                && (1..=86400).contains(&self.failure_ttl_seconds),
+            "invalid robots cache limits"
+        );
+        anyhow::ensure!(
+            body.robots.wire_limit_bytes >= 500 * 1024
+                && body.robots.decoded_limit_bytes >= 500 * 1024,
+            "robots body limits must admit at least 500 KiB"
+        );
+        Ok(())
+    }
+}
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            cache_entries: 1024,
+            failure_ttl_seconds: 60,
+        }
+    }
+}
+
+#[derive(Default, Clone, Debug, serde::Serialize)]
+pub struct Stats {
+    pub hits: u64,
+    pub misses: u64,
+    pub single_flight_waits: u64,
+    pub downloads: u64,
+    pub evictions: u64,
+    pub unreachable: u64,
+    pub unavailable: u64,
+    pub disallowed: u64,
+    pub entries: usize,
+    pub capacity: usize,
+    pub ttl_seconds: u64,
+    pub failure_ttl_seconds: u64,
+}
+#[derive(Default)]
+struct Counters {
+    hits: AtomicU64,
+    misses: AtomicU64,
+    waits: AtomicU64,
+    downloads: AtomicU64,
+    evictions: AtomicU64,
+    unreachable: AtomicU64,
+    unavailable: AtomicU64,
+    disallowed: AtomicU64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RobotAccess {
     Allowed,
     Disallowed,
     Unreachable,
+    Deferred(u64),
 }
-
 #[derive(Debug)]
 enum Lookup<T> {
     Found(T),
-    /// 404
     Unavailable,
-    /// 5xx (and other network errors)
     Unreachable,
+    Deferred(u64),
 }
-
 struct CheckedRobotsTxt {
     robots: Lookup<robotstxt::Robots>,
-    last_check: std::time::Instant,
+    last_check: Instant,
+    ttl: Duration,
 }
-
-impl CheckedRobotsTxt {
-    #[cfg(test)]
-    fn new(robots: Lookup<robotstxt::Robots>) -> Self {
-        Self {
-            robots,
-            last_check: std::time::Instant::now(),
-        }
-    }
-}
-
 impl CheckedRobotsTxt {
     #[cfg(test)]
     fn is_expired(&self, expiration: &Duration) -> bool {
-        self.is_expired_at(expiration, std::time::Instant::now())
+        self.is_expired_at(expiration, Instant::now())
     }
-
-    fn is_expired_at(&self, expiration: &Duration, now: std::time::Instant) -> bool {
-        // A transient DNS or server failure must not block a host forever in
-        // the continuous crawler. Keep denying requests until this TTL expires.
-        now.duration_since(self.last_check) >= *expiration
+    fn is_expired_at(&self, expiration: &Duration, now: Instant) -> bool {
+        now.saturating_duration_since(self.last_check) >= *expiration
     }
 }
-
+struct CacheEntry {
+    value: Option<Arc<CheckedRobotsTxt>>,
+    refreshing: bool,
+    touched: Instant,
+    continuation: Option<(Url, usize)>,
+}
 struct InnerRobotsTxtManager {
-    cache: DashMap<Site, CheckedRobotsTxt>,
-    last_prune: Arc<Mutex<std::time::Instant>>,
+    cache: Mutex<HashMap<String, CacheEntry>>,
+    changed: tokio::sync::Notify,
+    counters: Counters,
     transport: SharedTransport,
     body_reader: BodyReader,
     pipeline: super::pipeline::Pipeline,
     cache_expiration: Duration,
     user_agent: String,
-    min_crawl_delay: Duration,
-    max_crawl_delay: Duration,
     config: Arc<CrawlerConfig>,
+    scheduler: Scheduler,
     runtime: Option<Arc<super::runtime::Runtime>>,
 }
-
+struct Refresh<'a> {
+    manager: &'a InnerRobotsTxtManager,
+    origin: String,
+}
+impl Drop for Refresh<'_> {
+    fn drop(&mut self) {
+        if let Some(entry) = self.manager.cache.lock().unwrap().get_mut(&self.origin) {
+            entry.refreshing = false;
+        }
+        self.manager.changed.notify_waiters();
+    }
+}
 impl InnerRobotsTxtManager {
     fn new(
         config: &CrawlerConfig,
@@ -99,69 +153,61 @@ impl InnerRobotsTxtManager {
         body_reader: BodyReader,
         pipeline: super::pipeline::Pipeline,
     ) -> Self {
-        let cache_expiration = Duration::from_secs(config.robots_txt_cache_sec);
-        let user_agent = config.user_agent.token.clone();
-        let min_crawl_delay = Duration::from_millis(config.min_crawl_delay_ms);
-        let max_crawl_delay = Duration::from_millis(config.max_crawl_delay_ms);
-
         Self {
+            cache: Mutex::new(HashMap::new()),
+            changed: tokio::sync::Notify::new(),
+            counters: Counters::default(),
             transport,
             body_reader,
             pipeline,
-            cache_expiration,
-            last_prune: Arc::new(Mutex::new(std::time::Instant::now())),
-            cache: DashMap::new(),
-            user_agent: user_agent.to_string(),
-            min_crawl_delay,
-            max_crawl_delay,
+            cache_expiration: Duration::from_secs(config.robots_txt_cache_sec.min(86400)),
+            user_agent: config.user_agent.token.clone(),
             config: Arc::new(config.clone()),
+            scheduler: Scheduler::new(config, Arc::new(super::runtime::SystemClock)),
             runtime: None,
         }
     }
-
     async fn access(&self, url: &Url) -> RobotAccess {
         if super::robot_client::validate_network_url(self.config.network_policy, url).is_err() {
             return RobotAccess::Disallowed;
         }
         match &self.get(url).await.robots {
-            Lookup::Found(robots_txt) if robots_txt.is_allowed(url) => RobotAccess::Allowed,
-            Lookup::Found(_) => RobotAccess::Disallowed,
+            Lookup::Found(rules) if rules.is_allowed(url) => RobotAccess::Allowed,
+            Lookup::Found(_) => {
+                self.counters.disallowed.fetch_add(1, Ordering::Relaxed);
+                RobotAccess::Disallowed
+            }
             Lookup::Unavailable => RobotAccess::Allowed,
             Lookup::Unreachable => RobotAccess::Unreachable,
+            Lookup::Deferred(ms) => RobotAccess::Deferred(*ms),
         }
     }
-
     async fn crawl_delay(&self, url: &Url) -> Option<Duration> {
         match &self.get(url).await.robots {
-            Lookup::Found(robots_txt) => robots_txt.crawl_delay(),
-            Lookup::Unavailable | Lookup::Unreachable => None,
+            Lookup::Found(rules) => rules.crawl_delay(),
+            _ => None,
         }
     }
-
     async fn sitemaps(&self, url: &Url) -> Vec<Url> {
         match &self.get(url).await.robots {
-            Lookup::Found(robots_txt) => robots_txt
+            Lookup::Found(rules) => rules
                 .sitemaps()
                 .iter()
                 .filter_map(|s| Url::parse(s).ok())
                 .collect(),
-            Lookup::Unavailable | Lookup::Unreachable => vec![],
+            _ => vec![],
         }
     }
-
-    fn now(&self) -> std::time::Instant {
+    fn now(&self) -> Instant {
         self.runtime
             .as_ref()
-            .map_or_else(std::time::Instant::now, |runtime| runtime.clock.now())
+            .map_or_else(Instant::now, |runtime| runtime.clock.now())
     }
-
-    async fn sleep(&self, duration: Duration) {
-        match &self.runtime {
-            Some(runtime) => runtime.sleep(duration).await,
-            None => tokio::time::sleep(duration).await,
-        }
+    fn utc_now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.runtime
+            .as_ref()
+            .map_or_else(chrono::Utc::now, |runtime| runtime.clock.utc_now())
     }
-
     async fn body(&self, response: reqwest::Response) -> super::Result<AdmittedBody> {
         let metrics = self.runtime.as_ref().map(|runtime| &runtime.metrics);
         let _timer = super::runtime::StageTimer::optional(metrics, "http_body");
@@ -170,155 +216,240 @@ impl InnerRobotsTxtManager {
             .await
             .map_err(super::Error::from)
     }
-
     async fn request(&self, url: Url) -> super::Result<super::robot_client::RequestBuilder> {
         super::robot_client::validate_network_url(self.config.network_policy, &url)?;
-        if let Some(runtime) = &self.runtime {
-            return Ok(super::robot_client::RequestBuilder::injected(
+        let request = match &self.runtime {
+            Some(runtime) => super::robot_client::RequestBuilder::injected(
                 runtime.clone(),
-                url,
+                url.clone(),
                 &self.config,
-            ));
-        }
-        Ok(super::robot_client::RequestBuilder::managed(
-            self.transport.clone(),
-            url,
-        ))
-    }
-
-    async fn fetch_robots_txt_from_url(&self, initial_url: &str) -> Lookup<robotstxt::Robots> {
-        let Ok(mut url) = Url::parse(initial_url) else {
-            return Lookup::Unreachable;
+            ),
+            None => {
+                super::robot_client::RequestBuilder::managed(self.transport.clone(), url.clone())
+            }
         };
-        for _ in 0..=5 {
+        request
+            .with_scheduler(self.scheduler.clone(), url)
+            .prepare()
+            .await
+    }
+    async fn fetch(&self, initial: &Url) -> CheckedRobotsTxt {
+        let mut url = initial.clone();
+        url.set_path("/robots.txt");
+        url.set_query(None);
+        url.set_fragment(None);
+        let origin = initial.origin().ascii_serialization();
+        let continuation = self
+            .cache
+            .lock()
+            .unwrap()
+            .get_mut(&origin)
+            .and_then(|entry| entry.continuation.take());
+        let mut first_hop = 0;
+        if let Some((next, hop)) = continuation {
+            url = next;
+            first_hop = hop;
+        }
+        let mut ttl = self.cache_expiration;
+        let mut lookup = Lookup::Unreachable;
+        for hop in first_hop..=5 {
             let request = match self.request(url.clone()).await {
                 Ok(request) => request,
-                Err(_) => return Lookup::Unreachable,
+                Err(super::Error::CrawlDeferred { retry_after_ms }) => {
+                    if let Some(entry) = self.cache.lock().unwrap().get_mut(&origin) {
+                        entry.continuation = Some((url.clone(), hop));
+                    }
+                    lookup = Lookup::Deferred(retry_after_ms);
+                    break;
+                }
+                Err(_) => break,
             };
-            let result = async {
-                let Ok(response) = request.send().await else {
-                    return Ok(Lookup::Unreachable);
-                };
-                if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-                    return response
-                        .headers()
-                        .get(reqwest::header::LOCATION)
-                        .and_then(|value| value.to_str().ok())
-                        .and_then(|location| url.join(location).ok())
-                        .map_or(Ok(Lookup::Unreachable), Err);
+            self.counters.downloads.fetch_add(1, Ordering::Relaxed);
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(_) => break,
+            };
+            let status = response.status().as_u16();
+            if matches!(status, 301 | 302 | 303 | 307 | 308) {
+                let next = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| url.join(v).ok());
+                drop(response);
+                if let Some(next) = next {
+                    url = next;
+                    continue;
                 }
-                if response.status() == reqwest::StatusCode::NOT_FOUND {
-                    return Ok(Lookup::Unavailable);
-                }
-                let Ok(body) = self.body(response).await else {
-                    return Ok(Lookup::Unreachable);
-                };
-                let user_agent = self.user_agent.clone();
-                self.pipeline.start_monitor();
-                Ok(self
-                    .pipeline
-                    .parse
-                    .run(body.len(), move || {
-                        match panic::catch_unwind(|| robotstxt::Robots::parse(&user_agent, &body)) {
-                            Ok(Ok(robots)) => Lookup::Found(robots),
-                            _ => Lookup::Unreachable,
-                        }
-                    })
-                    .await
-                    .unwrap_or(Lookup::Unreachable))
+                break;
             }
-            .await;
-            self.sleep(self.min_crawl_delay).await;
-            match result {
-                Ok(lookup) => return lookup,
-                Err(next) => url = next,
+            if status == 429 {
+                let retry_after = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| {
+                        v.parse::<u64>().ok().map(Duration::from_secs).or_else(|| {
+                            chrono::DateTime::parse_from_rfc2822(v).ok().map(|date| {
+                                Duration::from_secs(
+                                    (date.with_timezone(&chrono::Utc) - self.utc_now())
+                                        .num_seconds()
+                                        .max(0) as u64,
+                                )
+                            })
+                        })
+                    });
+                ttl = self.failure_ttl().max(
+                    retry_after
+                        .unwrap_or_default()
+                        .min(Duration::from_secs(31_536_000)),
+                );
+                break;
             }
+            if (400..500).contains(&status) {
+                lookup = Lookup::Unavailable;
+                self.counters.unavailable.fetch_add(1, Ordering::Relaxed);
+                break;
+            }
+            if !(200..300).contains(&status) {
+                break;
+            }
+            let body = match self.body(response).await {
+                Ok(body) => body,
+                Err(_) => break,
+            };
+            let agent = self.user_agent.clone();
+            self.pipeline.start_monitor();
+            lookup = self
+                .pipeline
+                .parse
+                .run(body.len(), move || {
+                    robotstxt::Robots::parse_rfc(&agent, &body)
+                        .map(Lookup::Found)
+                        .unwrap_or(Lookup::Unreachable)
+                })
+                .await
+                .unwrap_or(Lookup::Unreachable);
+            if let Lookup::Found(rules) = &lookup {
+                self.scheduler
+                    .set_crawl_delay(initial, rules.crawl_delay().unwrap_or_default());
+            }
+            break;
         }
-        Lookup::Unreachable
-    }
-
-    async fn fetch_robots_txt_without_retry(&self, site: &Site) -> Lookup<robotstxt::Robots> {
-        match self
-            .fetch_robots_txt_from_url(&format!("https://{}/robots.txt", site.0))
-            .await
-        {
-            Lookup::Unreachable => {
-                self.fetch_robots_txt_from_url(&format!("http://{}/robots.txt", site.0))
-                    .await
-            }
-            Lookup::Unavailable => {
-                match self
-                    .fetch_robots_txt_from_url(&format!("http://{}/robots.txt", site.0))
-                    .await
-                {
-                    Lookup::Found(robots_txt) => Lookup::Found(robots_txt),
-                    Lookup::Unreachable => Lookup::Unavailable,
-                    Lookup::Unavailable => Lookup::Unavailable,
-                }
-            }
-            Lookup::Found(robots_txt) => Lookup::Found(robots_txt),
+        if matches!(lookup, Lookup::Unreachable) {
+            self.counters.unreachable.fetch_add(1, Ordering::Relaxed);
+            ttl = if ttl == self.cache_expiration {
+                self.failure_ttl()
+            } else {
+                ttl
+            };
         }
-    }
-
-    async fn fetch_robots_txt_with_retry(&self, site: &Site) -> Lookup<robotstxt::Robots> {
-        for _ in 0..3 {
-            match self.fetch_robots_txt_without_retry(site).await {
-                Lookup::Found(robots_txt) => return Lookup::Found(robots_txt),
-                Lookup::Unavailable => return Lookup::Unavailable,
-                Lookup::Unreachable => {}
-            }
-
-            self.sleep(self.max_crawl_delay).await;
+        if matches!(lookup, Lookup::Unavailable) {
+            self.scheduler.set_crawl_delay(initial, Duration::ZERO);
         }
-
-        Lookup::Unreachable
-    }
-
-    async fn fetch_robots_txt(&self, site: &Site) -> CheckedRobotsTxt {
-        let robots = if RETRY_ROBOTSTXT_UNREACHABLE {
-            self.fetch_robots_txt_with_retry(site).await
-        } else {
-            self.fetch_robots_txt_without_retry(site).await
-        };
         CheckedRobotsTxt {
-            robots,
+            robots: lookup,
             last_check: self.now(),
+            ttl,
         }
     }
-
-    fn maybe_prune(&self) {
-        if self.now().duration_since(*self.last_prune.lock().unwrap()) < Duration::from_secs(60) {
-            return;
-        }
-
-        self.cache
-            .retain(|_, v| !v.is_expired_at(&self.cache_expiration, self.now()));
-
-        *self.last_prune.lock().unwrap() = self.now();
+    fn failure_ttl(&self) -> Duration {
+        Duration::from_secs(self.config.robots.failure_ttl_seconds.max(1).min(86400))
     }
-
-    async fn get(&self, url: &Url) -> impl Deref<Target = CheckedRobotsTxt> + '_ {
-        self.maybe_prune();
-        let site = Site(url.host_str().unwrap_or_default().to_string());
-
-        let cache_should_update = self
-            .cache
-            .get_mut(&site)
-            .map(|v| v.is_expired_at(&self.cache_expiration, self.now()))
-            .unwrap_or(true);
-
-        if cache_should_update {
-            self.cache
-                .insert(site.clone(), self.fetch_robots_txt(&site).await);
+    async fn get(&self, url: &Url) -> Arc<CheckedRobotsTxt> {
+        let origin = url.origin().ascii_serialization();
+        loop {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let fetch = {
+                let mut cache = self.cache.lock().unwrap();
+                let now = self.now();
+                if let Some(entry) = cache.get_mut(&origin) {
+                    entry.touched = now;
+                    if let Some(value) = &entry.value {
+                        if !value.is_expired_at(&value.ttl, now) {
+                            self.counters.hits.fetch_add(1, Ordering::Relaxed);
+                            return value.clone();
+                        }
+                    }
+                    if entry.refreshing {
+                        false
+                    } else {
+                        entry.refreshing = true;
+                        true
+                    }
+                } else {
+                    if cache.len() >= self.config.robots.cache_entries.max(1) {
+                        let oldest = cache
+                            .iter()
+                            .filter(|(_, entry)| !entry.refreshing)
+                            .min_by_key(|(_, entry)| entry.touched)
+                            .map(|(key, _)| key.clone());
+                        if let Some(oldest) = oldest {
+                            cache.remove(&oldest);
+                            self.counters.evictions.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    if cache.len() < self.config.robots.cache_entries.max(1) {
+                        cache.insert(
+                            origin.clone(),
+                            CacheEntry {
+                                value: None,
+                                refreshing: true,
+                                touched: now,
+                                continuation: None,
+                            },
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                }
+            };
+            if !fetch {
+                self.counters.waits.fetch_add(1, Ordering::Relaxed);
+                notified.await;
+                continue;
+            }
+            let refresh = Refresh {
+                manager: self,
+                origin: origin.clone(),
+            };
+            self.counters.misses.fetch_add(1, Ordering::Relaxed);
+            let value = Arc::new(self.fetch(url).await);
+            if !matches!(value.robots, Lookup::Deferred(_)) {
+                if let Some(entry) = self.cache.lock().unwrap().get_mut(&origin) {
+                    entry.value = Some(value.clone());
+                }
+            }
+            drop(refresh);
+            return value;
         }
-
-        self.cache.get(&site).unwrap()
     }
-
     #[cfg(test)]
-    fn insert(&self, site: String, robots_txt: robotstxt::Robots) {
-        self.cache
-            .insert(Site(site), CheckedRobotsTxt::new(Lookup::Found(robots_txt)));
+    fn insert(&self, site: String, rules: robotstxt::Robots) {
+        let origins = if site.contains("://") {
+            vec![Url::parse(&site).unwrap().origin().ascii_serialization()]
+        } else {
+            vec![format!("https://{site}"), format!("http://{site}")]
+        };
+        let value = Arc::new(CheckedRobotsTxt {
+            robots: Lookup::Found(rules),
+            last_check: self.now(),
+            ttl: self.cache_expiration,
+        });
+        for origin in origins {
+            self.cache.lock().unwrap().insert(
+                origin,
+                CacheEntry {
+                    value: Some(value.clone()),
+                    refreshing: false,
+                    touched: self.now(),
+                    continuation: None,
+                },
+            );
+        }
     }
 }
 pub struct RobotsTxtManager {
@@ -413,7 +544,7 @@ impl RobotsTxtManager {
         let transport = SharedTransport::new(config, config.transport.clone())
             .expect("invalid crawler transport configuration");
         let mut inner = InnerRobotsTxtManager::new(config, transport, body_reader, pipeline);
-        inner.last_prune = Arc::new(Mutex::new(runtime.clock.now()));
+        inner.scheduler = Scheduler::new(config, runtime.clock.clone());
         inner.runtime = Some(runtime);
         Self {
             inner: Arc::new(inner),
@@ -422,6 +553,41 @@ impl RobotsTxtManager {
 }
 
 impl RobotsTxtManager {
+    pub fn scheduler(&self) -> &Scheduler {
+        &self.inner.scheduler
+    }
+    pub fn stats(&self) -> Stats {
+        let counters = &self.inner.counters;
+        Stats {
+            hits: counters.hits.load(Ordering::Relaxed),
+            misses: counters.misses.load(Ordering::Relaxed),
+            single_flight_waits: counters.waits.load(Ordering::Relaxed),
+            downloads: counters.downloads.load(Ordering::Relaxed),
+            evictions: counters.evictions.load(Ordering::Relaxed),
+            unreachable: counters.unreachable.load(Ordering::Relaxed),
+            unavailable: counters.unavailable.load(Ordering::Relaxed),
+            disallowed: counters.disallowed.load(Ordering::Relaxed),
+            entries: self.inner.cache.lock().unwrap().len(),
+            capacity: self.inner.config.robots.cache_entries,
+            ttl_seconds: self.inner.cache_expiration.as_secs(),
+            failure_ttl_seconds: self.inner.failure_ttl().as_secs(),
+        }
+    }
+    pub fn retry_after_ms(&self, url: &Url) -> u64 {
+        self.inner
+            .cache
+            .lock()
+            .unwrap()
+            .get(&url.origin().ascii_serialization())
+            .and_then(|entry| entry.value.as_ref())
+            .map_or(1000, |value| {
+                value
+                    .ttl
+                    .saturating_sub(self.inner.now().saturating_duration_since(value.last_check))
+                    .as_millis()
+                    .max(1) as u64
+            })
+    }
     pub async fn access(&self, url: &Url) -> RobotAccess {
         self.inner.access(url).await
     }
@@ -448,6 +614,10 @@ impl RobotsTxtManager {
 mod transport_integration {
     include!("robot_client_transport_tests.rs");
 }
+
+#[cfg(test)]
+#[path = "robots_origin_tests.rs"]
+mod origin_tests;
 
 #[cfg(test)]
 mod tests {
@@ -479,15 +649,15 @@ mod tests {
         );
     }
 
-    struct Reply {
-        status: u16,
-        location: Option<&'static str>,
-        body: &'static str,
+    pub(super) struct Reply {
+        pub(super) status: u16,
+        pub(super) location: Option<&'static str>,
+        pub(super) body: &'static str,
     }
 
-    struct ScriptedHttp {
-        replies: Mutex<VecDeque<Reply>>,
-        requests: Mutex<Vec<String>>,
+    pub(super) struct ScriptedHttp {
+        pub(super) replies: Mutex<VecDeque<Reply>>,
+        pub(super) requests: Mutex<Vec<String>>,
     }
 
     impl Http for ScriptedHttp {
@@ -498,6 +668,7 @@ mod tests {
         ) -> IoFuture<'_, super::super::Result<reqwest::Response>> {
             Box::pin(async move {
                 self.requests.lock().unwrap().push(url.to_string());
+                tokio::task::yield_now().await;
                 let reply = self.replies.lock().unwrap().pop_front().unwrap();
                 let mut response = http_02::Response::builder().status(reply.status);
                 if let Some(location) = reply.location {
@@ -508,18 +679,29 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct RecordingClock(Mutex<Vec<Duration>>);
+    struct RecordingClock(Mutex<Vec<Duration>>, Instant, Mutex<Duration>);
+    impl Default for RecordingClock {
+        fn default() -> Self {
+            Self(
+                Mutex::new(Vec::new()),
+                Instant::now(),
+                Mutex::new(Duration::ZERO),
+            )
+        }
+    }
 
     impl Clock for RecordingClock {
         fn now(&self) -> Instant {
-            Instant::now()
+            self.1 + *self.2.lock().unwrap()
         }
         fn utc_now(&self) -> chrono::DateTime<chrono::Utc> {
             chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()
         }
         fn sleep(&self, duration: Duration) -> IoFuture<'_, ()> {
-            Box::pin(async move { self.0.lock().unwrap().push(duration) })
+            Box::pin(async move {
+                self.0.lock().unwrap().push(duration);
+                *self.2.lock().unwrap() += duration;
+            })
         }
     }
 
@@ -528,6 +710,7 @@ mod tests {
     ) -> (RobotClient, Arc<ScriptedHttp>, Arc<RecordingClock>) {
         let mut config = CrawlerConfig::for_tests();
         config.min_crawl_delay_ms = 17;
+        config.start_politeness_factor = 0;
         let http = Arc::new(ScriptedHttp {
             replies: Mutex::new(replies.into()),
             requests: Mutex::new(Vec::new()),
@@ -577,7 +760,7 @@ mod tests {
                 "https://redirect.test/rules",
             ]
         );
-        assert_eq!(*clock.0.lock().unwrap(), vec![Duration::from_millis(17); 3]);
+        assert_eq!(*clock.0.lock().unwrap(), vec![Duration::from_millis(17)]);
         assert!(matches!(client.get(url).await, Err(Error::DisallowedPath)));
     }
 
@@ -602,10 +785,7 @@ mod tests {
         ));
         assert_eq!(
             *http.requests.lock().unwrap(),
-            [
-                "https://fixture.test/robots.txt",
-                "http://fixture.test/robots.txt",
-            ]
+            ["https://fixture.test/robots.txt",]
         );
     }
 
@@ -632,7 +812,7 @@ mod tests {
             client.get(url).await,
             Err(Error::RobotsUnavailable)
         ));
-        assert_eq!(http.requests.lock().unwrap().len(), 2);
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
     }
 
     #[test]
@@ -640,6 +820,7 @@ mod tests {
         let cached = CheckedRobotsTxt {
             robots: Lookup::Unreachable,
             last_check: std::time::Instant::now() - Duration::from_secs(61),
+            ttl: Duration::from_secs(60),
         };
         assert!(cached.is_expired(&Duration::from_secs(60)));
         assert!(!cached.is_expired(&Duration::from_secs(120)));

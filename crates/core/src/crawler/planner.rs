@@ -506,9 +506,9 @@ impl CrawlPlanner {
             let mut grouped_pages = BTreeMap::new();
 
             for page in group.iter().map(|(url, _)| url).map(Url::from) {
-                if let Some(domain) = page.icann_domain() {
+                if page.host_str().is_some() {
                     grouped_pages
-                        .entry(Domain::from(domain.to_string()))
+                        .entry(Domain::from(&page))
                         .or_insert_with(Vec::new)
                         .push(page);
                 }

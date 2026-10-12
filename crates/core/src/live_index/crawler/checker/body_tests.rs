@@ -17,17 +17,19 @@ use std::{
 };
 
 struct ImmediateClock {
+    start: Instant,
+    elapsed: Mutex<Duration>,
     reader: Arc<Mutex<Option<BodyReader>>>,
     sleeps: Arc<AtomicUsize>,
 }
 impl Clock for ImmediateClock {
     fn now(&self) -> Instant {
-        Instant::now()
+        self.start + *self.elapsed.lock().unwrap()
     }
     fn utc_now(&self) -> chrono::DateTime<Utc> {
         Utc::now()
     }
-    fn sleep(&self, _: Duration) -> IoFuture<'_, ()> {
+    fn sleep(&self, duration: Duration) -> IoFuture<'_, ()> {
         Box::pin(async move {
             assert_eq!(
                 self.reader
@@ -41,6 +43,7 @@ impl Clock for ImmediateClock {
                 "courtesy must not retain a body lease"
             );
             self.sleeps.fetch_add(1, Ordering::Relaxed);
+            *self.elapsed.lock().unwrap() += duration;
         })
     }
 }
@@ -92,6 +95,8 @@ fn client(reject: bool) -> (RobotClient, Arc<AtomicUsize>, Arc<AtomicUsize>) {
             polls: polls.clone(),
         }),
         clock: Arc::new(ImmediateClock {
+            start: Instant::now(),
+            elapsed: Mutex::new(Duration::ZERO),
             reader: reader.clone(),
             sleeps: sleeps.clone(),
         }),
@@ -150,7 +155,7 @@ async fn live_frontpage_feeds_and_sitemaps_use_admission_before_body() {
             assert_eq!(sitemaps.len(), 1);
             assert_eq!(polls.load(Ordering::Relaxed), 3);
             assert_eq!(stats.bodies_completed, 3);
-            assert_eq!(sleeps.load(Ordering::Relaxed), 2);
+            assert_eq!(sleeps.load(Ordering::Relaxed), 4);
         }
         assert_eq!(stats.reserved_bytes, 0);
         assert_eq!(stats.active_bodies, 0);

@@ -16,14 +16,25 @@ use super::{
 };
 
 const URLS: TableDefinition<&str, &[u8]> = TableDefinition::new("urls.v1");
-const ORIGINS: TableDefinition<&str, &[u8]> = TableDefinition::new("origins.v1");
-const ELIGIBLE: TableDefinition<(&str, &str), u64> = TableDefinition::new("url_eligibility.v1");
-const READY: TableDefinition<(u64, u64), &str> = TableDefinition::new("origin_eligibility.v1");
+const ORIGINS: TableDefinition<&str, &[u8]> = TableDefinition::new("sites.v2");
+const ELIGIBLE: TableDefinition<(&str, &str), u64> = TableDefinition::new("url_eligibility.v2");
+const READY: TableDefinition<(u64, u64), &str> = TableDefinition::new("site_eligibility.v2");
 const LEASES: TableDefinition<&str, &str> = TableDefinition::new("leases.v1");
-const ACTIVE: TableDefinition<&str, ()> = TableDefinition::new("active_origins.v1");
+const ACTIVE: TableDefinition<&str, ()> = TableDefinition::new("active_sites.v2");
 const COMMITS: TableDefinition<&str, &[u8]> = TableDefinition::new("commits.v1");
 const OUTBOX: TableDefinition<&str, &[u8]> = TableDefinition::new("outbox.v1");
 const META: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata.v1");
+const IDENTITY_MAP: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("identity_correspondence.v2");
+const LEGACY_ORIGINS: TableDefinition<&str, &[u8]> = TableDefinition::new("origins.v1");
+const HTTP_ORIGINS: TableDefinition<&str, &[u8]> = TableDefinition::new("http_origins.v1");
+const HTTP_READY: TableDefinition<(&str, u64, u64), &str> =
+    TableDefinition::new("http_origin_eligibility.v1");
+const HTTP_URLS: TableDefinition<(&str, &str), u64> = TableDefinition::new("http_origin_urls.v1");
+const HTTP_ACTIVE: TableDefinition<&str, &str> = TableDefinition::new("active_http_origins.v1");
+fn legacy_site_version() -> u32 {
+    1
+}
 pub const CACHE_BYTES: usize = 16 * 1024 * 1024;
 pub const BATCH_SIZE: usize = 128;
 
@@ -31,6 +42,12 @@ pub const BATCH_SIZE: usize = 128;
 pub struct Stats {
     pub schema_version: u32,
     pub identity_version: u32,
+    #[serde(default = "legacy_site_version")]
+    pub site_identity_version: u32,
+    #[serde(default)]
+    pub identity_mapped_urls: u64,
+    #[serde(default)]
+    pub identity_migration_complete: bool,
     pub cache_bytes: usize,
     pub batch_size: usize,
     pub round: u64,
@@ -82,6 +99,10 @@ struct UrlRow {
     fetch_id: Option<String>,
     reason: Option<String>,
     not_before: u64,
+    #[serde(default)]
+    sitemap: bool,
+    #[serde(default)]
+    continuation: Option<super::RedirectContinuation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +113,14 @@ struct OriginRow {
     seed: String,
     admitted: u64,
     done: u64,
+    not_before: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct HttpOriginRow {
+    site: String,
+    round: u64,
+    sequence: u64,
     not_before: u64,
 }
 
@@ -169,6 +198,16 @@ impl Frontier {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
+        if path.exists() && !path.with_extension("identity-v1.redb").exists() {
+            let backup = path.with_extension("identity-v1.redb");
+            let temporary = path.with_extension("identity-v1.redb.tmp");
+            fs::copy(&path, &temporary)?;
+            fs::File::open(&temporary)?.sync_all()?;
+            fs::rename(temporary, backup)?;
+            if let Some(parent) = path.parent() {
+                fs::File::open(parent)?.sync_all()?;
+            }
+        }
         let db = Database::builder()
             .set_cache_size(CACHE_BYTES)
             .create(&path)?;
@@ -182,9 +221,16 @@ impl Frontier {
         tx.open_table(OUTBOX)?;
         tx.open_table(META)?;
         tx.open_table(ACTIVE)?;
+        tx.open_table(IDENTITY_MAP)?;
+        tx.open_table(HTTP_ORIGINS)?;
+        tx.open_table(HTTP_READY)?;
+        tx.open_table(HTTP_URLS)?;
+        tx.open_table(HTTP_ACTIVE)?;
         let stats: Stats = read(&tx, META, "stats")?.unwrap_or_else(|| Stats {
             schema_version: 1,
             identity_version: crate::capture::IDENTITY_VERSION,
+            site_identity_version: super::identity::SITE_VERSION,
+            identity_migration_complete: true,
             cache_bytes: CACHE_BYTES,
             batch_size: BATCH_SIZE,
             round: 1,
@@ -195,6 +241,11 @@ impl Frontier {
             "unsupported frontier or URL identity version: {}/{}",
             stats.schema_version,
             stats.identity_version
+        );
+        anyhow::ensure!(
+            (1..=super::identity::SITE_VERSION).contains(&stats.site_identity_version),
+            "unsupported site identity version: {}",
+            stats.site_identity_version
         );
         put(&tx, META, "stats", &stats)?;
         tx.commit()?;
@@ -210,6 +261,8 @@ impl Frontier {
             metrics: Metrics(Arc::new(Mutex::new(stats))),
             writes: Mutex::new(()),
         };
+        frontier.migrate_site_identity()?;
+        frontier.migrate_http_origins()?;
         if !frontier.metrics.snapshot().migration_complete {
             frontier.migrate(&legacy_path)?;
         }
@@ -218,6 +271,196 @@ impl Frontier {
         frontier.drain_outbox()?;
         frontier.publish();
         Ok(frontier)
+    }
+
+    fn migrate_site_identity(&self) -> Result<()> {
+        if self.metrics.snapshot().site_identity_version == super::identity::SITE_VERSION {
+            return Ok(());
+        }
+        self.transaction(|tx, stats| {
+            if read::<String>(tx, META, "site-migration-cursor")?.is_none() {
+                stats.known_sites = 0;
+                stats.pending_sites = 0;
+                stats.active_sites = 0;
+                put(tx, META, "site-migration-cursor", &String::new())?;
+            }
+            Ok(())
+        })?;
+        loop {
+            let complete = self.transaction(|tx, stats| {
+                let cursor: String = read(tx, META, "site-migration-cursor")?.unwrap_or_default();
+                let keys = {
+                    let table = tx.open_table(URLS)?;
+                    table.range::<&str>((std::ops::Bound::Excluded(cursor.as_str()), std::ops::Bound::Unbounded))?
+                        .take(BATCH_SIZE).map(|entry| Ok(entry?.0.value().to_owned())).collect::<Result<Vec<_>>>()?
+                };
+                if keys.is_empty() {
+                    stats.site_identity_version = super::identity::SITE_VERSION;
+                    stats.identity_migration_complete = true;
+                    return Ok(true);
+                }
+                for key in &keys {
+                    let mut row: UrlRow = read(tx, URLS, key)?.context("identity migration URL vanished")?;
+                    let identity = super::identity::UrlIdentity::from_url(&Url::parse(key)?)?;
+                    anyhow::ensure!(identity.url == *key, "identity migration would change a URL key");
+                    if row.site != identity.tenant {
+                        put(tx, IDENTITY_MAP, key, &serde_json::json!({"url": key, "old_site": row.site, "new_site": identity.tenant,
+                            "fetch_id": row.fetch_id, "url_version": 1, "old_site_version": 1, "new_site_version": 2}))?;
+                        stats.identity_mapped_urls += 1;
+                    }
+                    if let Some(old_site) = read::<OriginRow>(tx, LEGACY_ORIGINS, &row.site)? {
+                        if old_site.round == row.round { row.not_before = row.not_before.max(old_site.not_before); }
+                    }
+                    row.site = identity.tenant;
+                    let mut site: OriginRow = match read(tx, ORIGINS, &row.site)? {
+                        Some(site) => site,
+                        None => {
+                            stats.sequence += 1; stats.known_sites += 1;
+                            OriginRow { sequence: stats.sequence, round: stats.round, state: "done".into(), seed: key.clone(), admitted: 0, done: 0, not_before: 0 }
+                        }
+                    };
+                    if row.round == stats.round {
+                        site.admitted += 1;
+                        if matches!(row.state, State::Pending | State::Leased) {
+                            if site.state == "done" { site.state = "pending".into(); site.not_before = row.not_before; stats.pending_sites += 1; }
+                            else { tx.open_table(READY)?.remove((site.not_before, site.sequence))?; site.not_before = site.not_before.min(row.not_before); }
+                            tx.open_table(READY)?.insert((site.not_before, site.sequence), row.site.as_str())?;
+                            if row.state == State::Pending { tx.open_table(ELIGIBLE)?.insert((row.site.as_str(), key.as_str()), row.not_before)?; }
+                        } else { site.done += 1; }
+                    }
+                    put(tx, ORIGINS, &row.site, &site)?; put(tx, URLS, key, &row)?;
+                }
+                put(tx, META, "site-migration-cursor", keys.last().unwrap())?;
+                Ok(false)
+            })?;
+            if complete {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn queue_http_origin(tx: &WriteTransaction, stats: &mut Stats, row: &UrlRow) -> Result<()> {
+        if row.state != State::Pending {
+            return Ok(());
+        }
+        tx.open_table(HTTP_URLS)?
+            .insert((row.origin.as_str(), row.url.as_str()), row.not_before)?;
+        let mut origin = match read::<HttpOriginRow>(tx, HTTP_ORIGINS, &row.origin)? {
+            Some(origin) if origin.round == row.round => origin,
+            _ => {
+                stats.sequence += 1;
+                HttpOriginRow {
+                    site: row.site.clone(),
+                    round: row.round,
+                    sequence: stats.sequence,
+                    not_before: row.not_before,
+                }
+            }
+        };
+        tx.open_table(HTTP_READY)?.remove((
+            origin.site.as_str(),
+            origin.not_before,
+            origin.sequence,
+        ))?;
+        origin.not_before = origin.not_before.max(row.not_before);
+        put(tx, HTTP_ORIGINS, &row.origin, &origin)?;
+        let active = tx
+            .open_table(HTTP_ACTIVE)?
+            .get(row.site.as_str())?
+            .map(|v| v.value().to_owned());
+        if active.as_deref() != Some(&row.origin) {
+            tx.open_table(HTTP_READY)?.insert(
+                (row.site.as_str(), origin.not_before, origin.sequence),
+                row.origin.as_str(),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn reschedule_http_origin(
+        tx: &WriteTransaction,
+        stats: &mut Stats,
+        key: &str,
+        due: u64,
+    ) -> Result<()> {
+        let Some(mut origin): Option<HttpOriginRow> = read(tx, HTTP_ORIGINS, key)? else {
+            return Ok(());
+        };
+        tx.open_table(HTTP_READY)?.remove((
+            origin.site.as_str(),
+            origin.not_before,
+            origin.sequence,
+        ))?;
+        origin.not_before = due;
+        stats.sequence += 1;
+        origin.sequence = stats.sequence;
+        let remaining = tx
+            .open_table(HTTP_URLS)?
+            .range((key, "")..=(key, "\u{10ffff}"))?
+            .next()
+            .transpose()?
+            .is_some();
+        if remaining {
+            tx.open_table(HTTP_READY)?
+                .insert((origin.site.as_str(), due, origin.sequence), key)?;
+        }
+        put(tx, HTTP_ORIGINS, key, &origin)
+    }
+
+    fn next_http_origin(tx: &WriteTransaction, site: &str) -> Result<Option<(u64, String)>> {
+        Ok(tx
+            .open_table(HTTP_READY)?
+            .range((site, 0, 0)..=(site, u64::MAX, u64::MAX))?
+            .next()
+            .transpose()?
+            .map(|(key, origin)| (key.value().1, origin.value().to_owned())))
+    }
+
+    fn migrate_http_origins(&self) -> Result<()> {
+        let complete = {
+            let tx = self.db.begin_read()?;
+            let meta = tx.open_table(META)?;
+            let value = meta.get("http-origin-index-complete")?;
+            value
+                .map(|v| serde_json::from_slice::<bool>(v.value()))
+                .transpose()?
+                .unwrap_or(false)
+        };
+        if complete {
+            return Ok(());
+        }
+        loop {
+            let complete = self.transaction(|tx, stats| {
+                let cursor: String =
+                    read(tx, META, "http-origin-index-cursor")?.unwrap_or_default();
+                let keys = tx
+                    .open_table(URLS)?
+                    .range::<&str>((
+                        std::ops::Bound::Excluded(cursor.as_str()),
+                        std::ops::Bound::Unbounded,
+                    ))?
+                    .take(BATCH_SIZE)
+                    .map(|entry| Ok(entry?.0.value().to_owned()))
+                    .collect::<Result<Vec<_>>>()?;
+                for key in &keys {
+                    let row: UrlRow =
+                        read(tx, URLS, key)?.context("missing URL during HTTP origin migration")?;
+                    if row.round == stats.round {
+                        Self::queue_http_origin(tx, stats, &row)?;
+                    }
+                }
+                if keys.is_empty() {
+                    put(tx, META, "http-origin-index-complete", &true)?;
+                    return Ok(true);
+                }
+                put(tx, META, "http-origin-index-cursor", keys.last().unwrap())?;
+                Ok(false)
+            })?;
+            if complete {
+                return Ok(());
+            }
+        }
     }
 
     fn transaction<T>(
@@ -323,10 +566,14 @@ impl Frontier {
                 fetch_id: None,
                 reason: None,
                 not_before: 0,
+                sitemap: false,
+                continuation: None,
             },
         )?;
         tx.open_table(ELIGIBLE)?
             .insert((site.as_str(), key.as_str()), 0)?;
+        let row: UrlRow = read(tx, URLS, &key)?.context("missing admitted URL")?;
+        Self::queue_http_origin(tx, stats, &row)?;
         put(tx, ORIGINS, &site, &origin)?;
         Ok(true)
     }
@@ -337,6 +584,37 @@ impl Frontier {
 
     pub fn admit_urls(&self, urls: impl IntoIterator<Item = Url>) -> Result<()> {
         self.admit_batches(urls, true)
+    }
+
+    pub fn is_sitemap(&self, url: &Url) -> Result<bool> {
+        let tx = self.db.begin_read()?;
+        let table = tx.open_table(URLS)?;
+        let value = table.get(crate::capture::url_key(url)?.as_str())?;
+        Ok(value
+            .map(|value| serde_json::from_slice::<UrlRow>(value.value()).map(|row| row.sitemap))
+            .transpose()?
+            .unwrap_or(false))
+    }
+
+    pub fn admit_sitemaps(&self, urls: Vec<Url>) -> Result<()> {
+        for batch in urls.chunks(BATCH_SIZE) {
+            self.transaction(|tx, stats| {
+                for url in batch {
+                    let key = crate::capture::url_key(url)?;
+                    if read::<UrlRow>(tx, URLS, &key)?.is_some() {
+                        continue;
+                    }
+                    if self.admit(tx, stats, url, true)? {
+                        let mut row: UrlRow =
+                            read(tx, URLS, &key)?.context("missing admitted sitemap")?;
+                        row.sitemap = true;
+                        put(tx, URLS, &key, &row)?;
+                    }
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
     }
 
     fn admit_batches(&self, urls: impl IntoIterator<Item = Url>, internal: bool) -> Result<()> {
@@ -375,10 +653,49 @@ impl Frontier {
             tx.open_table(LEASES)?.insert(id.as_str(), key.as_str())?;
             tx.open_table(ELIGIBLE)?
                 .remove((row.site.as_str(), key.as_str()))?;
+            tx.open_table(HTTP_URLS)?
+                .remove((row.origin.as_str(), key.as_str()))?;
             put(tx, URLS, &key, &row)?;
             stats.pending_urls -= 1;
             stats.leased_urls += 1;
             Ok(Some(id))
+        })
+    }
+
+    pub fn redirect_continuation(&self, url: &Url) -> Result<Option<super::RedirectContinuation>> {
+        let key = crate::capture::url_key(url)?;
+        let tx = self.db.begin_read()?;
+        let table = tx.open_table(URLS)?;
+        let value = table.get(key.as_str())?;
+        Ok(value
+            .map(|value| {
+                serde_json::from_slice::<UrlRow>(value.value()).map(|row| row.continuation)
+            })
+            .transpose()?
+            .flatten())
+    }
+
+    pub fn save_redirect_continuation(
+        &self,
+        url: &Url,
+        continuation: super::RedirectContinuation,
+    ) -> Result<()> {
+        super::identity::UrlIdentity::from_url(&continuation.url)?;
+        anyhow::ensure!(
+            continuation.redirects.len() <= u8::MAX as usize
+                && serde_json::to_vec(&continuation)?.len() <= 2 * 1024 * 1024,
+            "redirect continuation exceeds its bound"
+        );
+        let key = crate::capture::url_key(url)?;
+        self.transaction(|tx, _| {
+            let mut row: UrlRow =
+                read(tx, URLS, &key)?.context("redirect has no durably admitted URL")?;
+            anyhow::ensure!(
+                matches!(row.state, State::Pending | State::Leased),
+                "redirect URL already resolved"
+            );
+            row.continuation = Some(continuation);
+            put(tx, URLS, &key, &row)
         })
     }
 
@@ -416,10 +733,14 @@ impl Frontier {
                 _ => anyhow::bail!("URL already resolved by another capture"),
             }
             row.state = State::Committed;
+            row.continuation = None;
             put(tx, URLS, &key, &row)?;
             tx.open_table(LEASES)?.remove(metadata.fetch_id.as_str())?;
             tx.open_table(ELIGIBLE)?
                 .remove((row.site.as_str(), key.as_str()))?;
+            tx.open_table(HTTP_URLS)?
+                .remove((row.origin.as_str(), key.as_str()))?;
+            Self::reschedule_http_origin(tx, stats, &row.origin, row.not_before)?;
             put(
                 tx,
                 COMMITS,
@@ -487,6 +808,33 @@ impl Frontier {
     }
 
     pub fn claim_at(&self, now: chrono::DateTime<chrono::Utc>) -> Result<Option<Job>> {
+        self.claim_limited_at(now, BATCH_SIZE, false)
+    }
+
+    pub fn next_eligible_at(&self) -> Result<Option<u64>> {
+        let tx = self.db.begin_read()?;
+        let ready = tx.open_table(READY)?;
+        let next = ready
+            .iter()?
+            .next()
+            .transpose()?
+            .map(|(key, _)| key.value().0);
+        Ok(next)
+    }
+
+    pub fn claim_turn_at(&self, now: chrono::DateTime<chrono::Utc>) -> Result<Option<Job>> {
+        self.claim_limited_at(now, 1, true)
+    }
+
+    fn claim_limited_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+        turn: bool,
+    ) -> Result<Option<Job>> {
+        if self.next_eligible_at()?.is_none_or(|due| due > millis(now)) {
+            return Ok(None);
+        }
         self.transaction(|tx, stats| {
             let next = {
                 let ready = tx.open_table(READY)?;
@@ -501,11 +849,30 @@ impl Frontier {
             }
             let mut origin: OriginRow =
                 read(tx, ORIGINS, &site)?.context("missing scheduled origin")?;
-            let pending: Vec<String> = {
+            let pending: Vec<String> = if turn {
+                let (due, http_origin) = Self::next_http_origin(tx, &site)?
+                    .context("ready site has no queued HTTP origin")?;
+                if due > millis(now) {
+                    anyhow::bail!("site eligibility precedes its HTTP origins");
+                }
+                let pending = tx
+                    .open_table(HTTP_URLS)?
+                    .range((http_origin.as_str(), "")..=(http_origin.as_str(), "\u{10ffff}"))?
+                    .take(1)
+                    .map(|entry| Ok(entry?.0.value().1.to_owned()))
+                    .collect::<Result<Vec<_>>>()?;
+                let row: HttpOriginRow =
+                    read(tx, HTTP_ORIGINS, &http_origin)?.context("missing queued HTTP origin")?;
+                tx.open_table(HTTP_READY)?
+                    .remove((site.as_str(), row.not_before, row.sequence))?;
+                tx.open_table(HTTP_ACTIVE)?
+                    .insert(site.as_str(), http_origin.as_str())?;
+                pending
+            } else {
                 let table = tx.open_table(ELIGIBLE)?;
                 table
                     .range((site.as_str(), "")..=(site.as_str(), "\u{10ffff}"))?
-                    .take(BATCH_SIZE)
+                    .take(limit)
                     .map(|entry| {
                         let (key, _) = entry?;
                         Ok(key.value().1.to_owned())
@@ -537,10 +904,13 @@ impl Frontier {
             stats.active_sites += 1;
             Ok(Some(Job {
                 domain: Domain::from(Url::parse(&origin.seed)?),
-                wandering_urls: self
-                    .budget
-                    .saturating_sub(origin.done)
-                    .saturating_sub(urls.len() as u64),
+                wandering_urls: if turn {
+                    0
+                } else {
+                    self.budget
+                        .saturating_sub(origin.done)
+                        .saturating_sub(urls.len() as u64)
+                },
                 urls,
             }))
         })
@@ -553,13 +923,33 @@ impl Frontier {
         min_delay_ms: u64,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<()> {
+        self.resolve_mode(domain, outcome, min_delay_ms, now, false)
+    }
+
+    pub fn resolve_turn(
+        &self,
+        domain: &Domain,
+        outcome: &JobOutcome,
+        min_delay_ms: u64,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        self.resolve_mode(domain, outcome, min_delay_ms, now, true)
+    }
+
+    fn resolve_mode(
+        &self,
+        domain: &Domain,
+        outcome: &JobOutcome,
+        min_delay_ms: u64,
+        now: chrono::DateTime<chrono::Utc>,
+        turn: bool,
+    ) -> Result<()> {
         if outcome.status == JobStatus::StorageFailed {
             anyhow::bail!("Crawler storage failed; URL leases remain recoverable");
         }
-        self.transaction(|tx, stats| {
+        let status = self.transaction(|tx, stats| {
             let site = domain.as_str();
-            let mut origin: OriginRow =
-                read(tx, ORIGINS, site)?.context("missing active crawler origin")?;
+            let _: OriginRow = read(tx, ORIGINS, site)?.context("missing active crawler origin")?;
             let mut delay = min_delay_ms;
             let mut completed = 0;
             for entry in &outcome.urls {
@@ -597,6 +987,7 @@ impl Frontier {
                     }
                     other => {
                         row.state = State::Terminal;
+                        row.continuation = None;
                         row.reason = Some(format!("{other:?}"));
                         stats.terminal_urls += 1;
                         completed += 1;
@@ -606,12 +997,17 @@ impl Frontier {
                     row.not_before = millis(now).saturating_add(delay);
                     tx.open_table(ELIGIBLE)?
                         .insert((site, key.as_str()), row.not_before)?;
+                    Self::queue_http_origin(tx, stats, &row)?;
                 } else {
                     tx.open_table(ELIGIBLE)?.remove((site, key.as_str()))?;
+                    tx.open_table(HTTP_URLS)?
+                        .remove((row.origin.as_str(), key.as_str()))?;
+                    Self::reschedule_http_origin(tx, stats, &row.origin, row.not_before)?;
                 }
                 put(tx, URLS, &key, &row)?;
             }
-            origin = read(tx, ORIGINS, site)?.context("missing resolved origin")?;
+            let mut origin: OriginRow =
+                read(tx, ORIGINS, site)?.context("missing resolved origin")?;
             origin.done += completed;
             let remaining = {
                 let table = tx.open_table(ELIGIBLE)?;
@@ -620,18 +1016,48 @@ impl Frontier {
             };
             stats.active_sites = stats.active_sites.saturating_sub(1);
             tx.open_table(ACTIVE)?.remove(site)?;
+            let http_origin = tx
+                .open_table(HTTP_ACTIVE)?
+                .remove(site)?
+                .map(|v| v.value().to_owned());
+            if let Some(key) = http_origin {
+                Self::reschedule_http_origin(tx, stats, &key, millis(now).saturating_add(delay))?;
+            }
             if outcome.status == JobStatus::Completed && !remaining {
                 origin.state = "done".into();
             } else {
                 origin.state = "pending".into();
                 origin.not_before = millis(now).saturating_add(delay);
+                if turn {
+                    origin.not_before =
+                        Self::next_http_origin(tx, site)?.map_or(origin.not_before, |(due, _)| due);
+                }
+                stats.sequence += 1;
+                origin.sequence = stats.sequence;
                 tx.open_table(READY)?
                     .insert((origin.not_before, origin.sequence), site)?;
                 stats.pending_sites += 1;
             }
             put(tx, ORIGINS, site, &origin)?;
-            Ok(())
-        })
+            Ok((origin.state, origin.not_before))
+        })?;
+        if let Some(observer) = &self.observer {
+            if status.0 == "done" {
+                observer.event(domain, None, "site_completed", "Cola del sitio resuelta");
+            } else {
+                observer.event(
+                    domain,
+                    None,
+                    "site_deferred",
+                    "Turno cerrado; trabajador disponible para otro origen",
+                );
+                observer.waiting(
+                    domain,
+                    std::time::Duration::from_millis(status.1.saturating_sub(millis(now))),
+                );
+            }
+        }
+        Ok(())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -676,6 +1102,7 @@ impl Frontier {
                         stats.recovered_leases += 1;
                         tx.open_table(ELIGIBLE)?
                             .insert((row.site.as_str(), key.as_str()), row.not_before)?;
+                        Self::queue_http_origin(tx, stats, &row)?;
                         put(tx, URLS, key, &row)?;
                     }
                     tx.open_table(LEASES)?.remove(id.as_str())?;
@@ -705,6 +1132,13 @@ impl Frontier {
                     let mut row: OriginRow =
                         read(tx, ORIGINS, site)?.context("orphan origin lease")?;
                     if row.state == "active" {
+                        let http_origin = tx
+                            .open_table(HTTP_ACTIVE)?
+                            .remove(site.as_str())?
+                            .map(|v| v.value().to_owned());
+                        if let Some(key) = http_origin {
+                            Self::reschedule_http_origin(tx, stats, &key, row.not_before)?;
+                        }
                         row.state = "pending".into();
                         put(tx, ORIGINS, site, &row)?;
                         tx.open_table(READY)?
@@ -846,37 +1280,45 @@ impl Frontier {
     }
 
     fn migrate_job(&self, job: Job, not_before: u64) -> Result<()> {
+        let sites: std::collections::BTreeSet<String> = job
+            .urls
+            .iter()
+            .map(|url| Domain::from(&url.url).as_str().to_owned())
+            .collect();
         self.transaction(|tx, stats| {
-            let site = job.domain.as_str();
-            if let Some(mut row) = read::<OriginRow>(tx, ORIGINS, site)? {
-                if row.state == "done" && row.admitted == 0 {
-                    row.state = "pending".into();
-                    row.seed = job
-                        .urls
-                        .front()
-                        .context("legacy job has no seed")?
-                        .url
-                        .to_string();
-                    tx.open_table(READY)?
-                        .insert((not_before, row.sequence), site)?;
-                    put(tx, ORIGINS, site, &row)?;
-                    stats.pending_sites += 1;
+            for site in &sites {
+                if let Some(mut row) = read::<OriginRow>(tx, ORIGINS, site)? {
+                    if row.state == "done" && row.admitted == 0 {
+                        row.state = "pending".into();
+                        row.seed = job
+                            .urls
+                            .iter()
+                            .find(|url| Domain::from(&url.url).as_str() == site)
+                            .context("legacy job has no seed")?
+                            .url
+                            .to_string();
+                        tx.open_table(READY)?
+                            .insert((not_before, row.sequence), site.as_str())?;
+                        put(tx, ORIGINS, site, &row)?;
+                        stats.pending_sites += 1;
+                    }
                 }
             }
             Ok(())
         })?;
-        self.admit_urls(job.urls.iter().map(|u| u.url.clone()))?;
+        self.admit_urls(job.urls.iter().map(|url| url.url.clone()))?;
         self.transaction(|tx, stats| {
-            let site = job.domain.as_str();
-            if let Some(mut row) = read::<OriginRow>(tx, ORIGINS, site)? {
-                tx.open_table(READY)?
-                    .remove((row.not_before, row.sequence))?;
-                row.not_before = not_before;
-                tx.open_table(READY)?
-                    .insert((not_before, row.sequence), site)?;
-                put(tx, ORIGINS, site, &row)?;
-                stats.migrated_jobs += 1;
+            for site in &sites {
+                if let Some(mut row) = read::<OriginRow>(tx, ORIGINS, site)? {
+                    tx.open_table(READY)?
+                        .remove((row.not_before, row.sequence))?;
+                    row.not_before = not_before;
+                    tx.open_table(READY)?
+                        .insert((not_before, row.sequence), site.as_str())?;
+                    put(tx, ORIGINS, site, &row)?;
+                }
             }
+            stats.migrated_jobs += 1;
             Ok(())
         })
     }

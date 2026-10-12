@@ -38,11 +38,12 @@ pub use outcome::{CrawlCounters, FetchOutcome, JobOutcome, JobStatus, UrlOutcome
 pub use worker::JobExecutor;
 
 pub mod body;
+#[cfg(feature = "crawler-bench")]
+pub mod capture_frontier_benchmark;
 pub mod coordinator;
 pub mod extraction;
 pub mod frontier;
-#[cfg(feature = "crawler-bench")]
-pub mod capture_frontier_benchmark;
+pub mod identity;
 pub mod pipeline;
 #[cfg(feature = "crawler-bench")]
 pub mod pipeline_benchmark;
@@ -65,6 +66,9 @@ pub mod outcome;
 pub mod planner;
 pub mod robot_client;
 pub mod runtime;
+pub mod scheduler;
+#[cfg(feature = "crawler-bench")]
+pub mod scheduler_benchmark;
 pub mod transport;
 #[cfg(feature = "crawler-bench")]
 pub mod transport_benchmark;
@@ -116,6 +120,9 @@ pub enum Error {
     #[error("robots.txt is temporarily unavailable")]
     RobotsUnavailable,
 
+    #[error("origin not eligible for {retry_after_ms} ms")]
+    CrawlDeferred { retry_after_ms: u64 },
+
     #[error("destination rejected by network policy: {0}")]
     NonPublicDestination(String),
 
@@ -157,7 +164,11 @@ pub struct Domain(String);
 
 impl From<&Url> for Domain {
     fn from(url: &Url) -> Self {
-        Self(url.icann_domain().unwrap_or_default().to_string())
+        Self(
+            identity::UrlIdentity::from_url(url)
+                .map(|identity| identity.tenant)
+                .unwrap_or_default(),
+        )
     }
 }
 
@@ -176,6 +187,13 @@ impl From<String> for Domain {
 impl Domain {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn covers(&self, url: &Url) -> bool {
+        Self::from(url) == *self
+            || url
+                .icann_domain()
+                .is_some_and(|domain| domain == self.as_str())
     }
 }
 
@@ -386,7 +404,36 @@ impl Crawler {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RedirectContinuation {
+    pub url: Url,
+    pub redirects: Vec<crate::capture::HttpResponse>,
+}
+
 pub trait DatumSink: Send + Sync {
+    fn redirect_continuation(
+        &self,
+        _url: &Url,
+    ) -> impl Future<Output = Result<Option<RedirectContinuation>>> + Send {
+        async { Ok(None) }
+    }
+    fn save_redirect_continuation(
+        &self,
+        _url: &Url,
+        _continuation: RedirectContinuation,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
+    fn is_sitemap(&self, _url: &Url) -> impl Future<Output = Result<bool>> + Send {
+        async { Ok(false) }
+    }
+    fn discovered_urls(
+        &self,
+        _urls: Vec<Url>,
+        _sitemaps: Vec<Url>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
     fn reserve_url(&self, _url: &Url) -> impl Future<Output = Result<Option<String>>> + Send {
         async { Ok(Some(uuid::Uuid::new_v4().to_string())) }
     }

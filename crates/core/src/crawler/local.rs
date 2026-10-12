@@ -46,6 +46,10 @@ pub struct Config {
     pub min_crawl_delay_ms: u64,
     pub timeout_seconds: u64,
     pub user_agent: UserAgent,
+    #[serde(default = "super::scheduler::Config::local")]
+    pub scheduler: super::scheduler::Config,
+    #[serde(default)]
+    pub robots: super::robots_txt::Config,
     #[serde(default)]
     pub network_policy: CrawlNetworkPolicy,
     #[serde(default)]
@@ -98,6 +102,7 @@ impl Config {
     }
 
     fn validate(&self) -> Result<()> {
+        self.scheduler.validate()?;
         self.transport.validate()?;
         self.body.validate()?;
         self.pipeline.validate_body(&self.body)?;
@@ -130,6 +135,8 @@ impl Config {
     fn crawler_config(&self) -> CrawlerConfig {
         CrawlerConfig {
             num_worker_threads: self.num_worker_threads,
+            scheduler: self.scheduler.clone(),
+            robots: self.robots.clone(),
             user_agent: self.user_agent.clone(),
             network_policy: self.network_policy,
             transport: self.transport.clone(),
@@ -287,6 +294,66 @@ impl LocalWarcSink {
 }
 
 impl DatumSink for LocalWarcSink {
+    async fn redirect_continuation(
+        &self,
+        url: &Url,
+    ) -> super::Result<Option<super::RedirectContinuation>> {
+        let frontier = self.frontier.clone();
+        let url = url.clone();
+        Ok(self
+            .pipeline
+            .control
+            .run(url.as_str().len(), move || {
+                frontier.redirect_continuation(&url)
+            })
+            .await??)
+    }
+    async fn save_redirect_continuation(
+        &self,
+        url: &Url,
+        continuation: super::RedirectContinuation,
+    ) -> super::Result<()> {
+        let frontier = self.frontier.clone();
+        let url = url.clone();
+        let bytes = serde_json::to_vec(&continuation)
+            .map_err(anyhow::Error::from)?
+            .len();
+        self.pipeline
+            .control
+            .run_durable(bytes, move || {
+                frontier.save_redirect_continuation(&url, continuation)
+            })
+            .await??;
+        Ok(())
+    }
+    async fn is_sitemap(&self, url: &Url) -> super::Result<bool> {
+        let frontier = self.frontier.clone();
+        let url = url.clone();
+        Ok(self
+            .pipeline
+            .control
+            .run(url.as_str().len(), move || frontier.is_sitemap(&url))
+            .await??)
+    }
+    async fn discovered_urls(&self, urls: Vec<Url>, sitemaps: Vec<Url>) -> super::Result<()> {
+        if urls.is_empty() && sitemaps.is_empty() {
+            return Ok(());
+        }
+        let frontier = self.frontier.clone();
+        let bytes = urls
+            .iter()
+            .chain(&sitemaps)
+            .map(|url| url.as_str().len())
+            .sum();
+        self.pipeline
+            .control
+            .run_durable(bytes, move || {
+                frontier.admit_urls(urls)?;
+                frontier.admit_sitemaps(sitemaps)
+            })
+            .await??;
+        Ok(())
+    }
     async fn reserve_url(&self, url: &Url) -> super::Result<Option<String>> {
         if self.segmented.is_none() {
             return Ok(Some(uuid::Uuid::new_v4().to_string()));
@@ -472,6 +539,7 @@ pub async fn run(config: Config) -> Result<()> {
         observer.clone(),
     )?);
     observer.observe_frontier(frontier.metrics.clone());
+    observer.observe_robots(client.robots_txt_manager().clone());
     frontier.discover(seeds.clone())?;
     let commit_frontier = frontier.clone();
     let commit_observer = observer.clone();
@@ -526,6 +594,7 @@ pub async fn run(config: Config) -> Result<()> {
     let cancellation = Arc::new(AtomicBool::new(false));
     let mut shutting_down = false;
     let mut can_claim = true;
+    let mut claim_due = tokio::time::Instant::now();
     let mut heartbeat = tokio::time::interval(Duration::from_secs(2));
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
@@ -540,12 +609,13 @@ pub async fn run(config: Config) -> Result<()> {
                 let frontier = frontier.clone();
                 let control = pipeline.control.clone();
                 let seeds = seeds.clone();
+                let fair_turns = config.scheduler.mode == super::scheduler::Mode::FairTurns;
                 let restart = exhausted_at.is_some_and(|since| since.elapsed() >= Duration::from_secs(config.revisit_interval_seconds));
                 claims.spawn(async move {
                     control.run_durable(seed_bytes, move || {
                         if restart && frontier.is_empty() { frontier.restart_round(seeds.as_ref().clone())?; }
-                        let job = frontier.claim()?;
-                        Ok::<_, anyhow::Error>((job, frontier.is_empty()))
+                        let job = if fair_turns { frontier.claim_turn_at(Utc::now())? } else { frontier.claim()? };
+                        Ok::<_, anyhow::Error>((job, frontier.is_empty(), frontier.next_eligible_at()?))
                     }).await.map_err(anyhow::Error::from)?
                 });
             }
@@ -556,9 +626,11 @@ pub async fn run(config: Config) -> Result<()> {
                     cancellation.store(true, Ordering::Release);
                     pipeline.stop_admission();
                 }
-                _ = heartbeat.tick() => { observer.heartbeat(); can_claim = true; }
+                _ = heartbeat.tick() => { observer.heartbeat(); }
+                _ = tokio::time::sleep_until(claim_due), if !can_claim && claims.is_empty() && jobs.len() < config.num_worker_threads && !shutting_down => { can_claim = true; }
                 result = claims.join_next(), if !claims.is_empty() => {
-                    let (job, empty) = result.unwrap().context("Frontier task panicked")??;
+                    let (job, empty, eligible) = result.unwrap().context("Frontier task panicked")??;
+                    claim_due = tokio::time::Instant::now() + Duration::from_millis(eligible.map_or(1000, |due| due.saturating_sub(Utc::now().timestamp_millis().max(0) as u64)).max(1));
                     if let Some(job) = job {
                         exhausted_at = None;
                         observer.phase("running");
@@ -571,12 +643,14 @@ pub async fn run(config: Config) -> Result<()> {
                         let frontier = frontier.clone();
                         let sink = sink.clone();
                         let minimum = config.min_crawl_delay_ms;
+                        let crawler_fair = config.scheduler.mode == super::scheduler::Mode::FairTurns;
                         jobs.spawn(async move {
                             let outcome = executor.run().await;
                             let bytes = outcome.urls.iter().map(|entry| entry.url.as_str().len() + 128).sum::<usize>();
                             control.run_durable(bytes, move || {
                                 persist_job_outcome(&directory, &domain, &outcome)?;
-                                frontier.resolve(&domain, &outcome, minimum, Utc::now())?;
+                                if crawler_fair { frontier.resolve_turn(&domain, &outcome, minimum, Utc::now())?; }
+                                else { frontier.resolve(&domain, &outcome, minimum, Utc::now())?; }
                                 sink.check()?;
                                 Ok::<_, anyhow::Error>(())
                             }).await.map_err(anyhow::Error::from)?

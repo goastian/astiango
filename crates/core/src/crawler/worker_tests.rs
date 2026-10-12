@@ -72,6 +72,7 @@ impl Http for FixtureHttp {
                 return Err(anyhow!("injected network failure").into());
             }
             let (status, location, retry_after, content_type, body) = match path {
+                "/robots.txt" if url.host_str() == Some("map.example.com") => (200, None, None, None, "User-agent: *\nAllow: /\nSitemap: https://map.example.com/index.xml\n"),
                 "/robots.txt" if url.host_str() == Some("down.example.com") => (503, None, None, None, ""),
                 "/robots.txt" => (200, None, None, None, "User-agent: *\nDisallow: /blocked\n"),
                 "/relative" => (302, Some("next".to_owned()), None, None, ""),
@@ -87,6 +88,8 @@ impl Http for FixtureHttp {
                 "/not-found" => (404, None, None, None, ""),
                 "/unavailable" => (503, None, None, None, ""),
                 "/invalid-mime" => (200, None, None, Some("application/json"), "{}"),
+                "/index.xml" => (200, None, None, Some("application/xml"), "<sitemapindex><sitemap><loc>https://map.example.com/child.xml</loc></sitemap></sitemapindex>"),
+                "/child.xml" => (200, None, None, Some("application/xml"), "<urlset><url><loc>https://map.example.com/from-map</loc></url><url><loc>https://map.example.com/page</loc></url></urlset>"),
                 value if value.starts_with("/chain/") => {
                     let next = value.trim_start_matches("/chain/").parse::<u16>().unwrap() + 1;
                     (302, Some(format!("/chain/{next}")), None, None, "")
@@ -118,6 +121,219 @@ struct MemorySink {
     checkpoint_error: bool,
     checkpoints: std::sync::atomic::AtomicUsize,
     cancel_after_write: Option<Arc<AtomicBool>>,
+}
+
+struct TurnSink {
+    frontier: Arc<crate::crawler::frontier::Frontier>,
+    data: Mutex<Vec<CrawlDatum>>,
+}
+impl DatumSink for TurnSink {
+    async fn reserve_url(&self, url: &Url) -> Result<Option<String>> {
+        Ok(self.frontier.begin_url(url)?)
+    }
+    async fn redirect_continuation(
+        &self,
+        url: &Url,
+    ) -> Result<Option<crate::crawler::RedirectContinuation>> {
+        Ok(self.frontier.redirect_continuation(url)?)
+    }
+    async fn save_redirect_continuation(
+        &self,
+        url: &Url,
+        state: crate::crawler::RedirectContinuation,
+    ) -> Result<()> {
+        Ok(self.frontier.save_redirect_continuation(url, state)?)
+    }
+    async fn is_sitemap(&self, url: &Url) -> Result<bool> {
+        Ok(self.frontier.is_sitemap(url)?)
+    }
+    async fn discovered_urls(&self, urls: Vec<Url>, sitemaps: Vec<Url>) -> Result<()> {
+        self.frontier.admit_urls(urls)?;
+        Ok(self.frontier.admit_sitemaps(sitemaps)?)
+    }
+    async fn write(&self, datum: CrawlDatum) -> Result<()> {
+        let metadata = &datum.capture.as_ref().unwrap().metadata;
+        let receipt = crate::crawler::spool::Receipt {
+            capture_id: metadata.fetch_id.clone(),
+            capture_version: Some(1),
+            record_offset: Some(0),
+            segment: "fixture.warc.gz".into(),
+            start: 0,
+            end: 500,
+            sha256: metadata.payload_sha256.clone(),
+        };
+        self.frontier.commit_capture(metadata, &receipt, false)?;
+        self.frontier.drain_outbox()?;
+        self.data.lock().unwrap().push(datum);
+        Ok(())
+    }
+    async fn finish(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn fair_turns_resume_relative_and_cross_origin_redirects_and_release_retry_jobs() {
+    let directory = tempfile::tempdir().unwrap();
+    let frontier = Arc::new(
+        crate::crawler::frontier::Frontier::open_database(
+            directory.path().join("frontier.json"),
+            256,
+            30,
+        )
+        .unwrap(),
+    );
+    let sink = Arc::new(TurnSink {
+        frontier: frontier.clone(),
+        data: Mutex::new(Vec::new()),
+    });
+    let mut options = config();
+    options.scheduler.mode = crate::crawler::scheduler::Mode::FairTurns;
+    let options = Arc::new(options);
+    let http = Arc::new(FixtureHttp::default());
+    let clock = Arc::new(ManualClock::default());
+    let client = RobotClient::with_runtime(
+        &options,
+        Arc::new(Runtime {
+            http: http.clone(),
+            clock: clock.clone(),
+            metrics: Arc::new(Metrics::default()),
+        }),
+    )
+    .unwrap();
+    frontier
+        .admit_urls(
+            [
+                "relative",
+                "cross-origin",
+                "retry-once",
+                "redirect-blocked",
+                "cycle-a",
+            ]
+            .map(|path| Url::parse(&format!("https://one.example.com/{path}")).unwrap()),
+        )
+        .unwrap();
+    let mut turns = 0;
+    while !frontier.is_empty() {
+        *clock.elapsed.lock().unwrap() += Duration::from_millis(20);
+        if let Some(job) = frontier.claim_turn_at(clock.utc_now()).unwrap() {
+            let domain = job.domain.clone();
+            let outcome =
+                JobExecutor::new(job.into(), options.clone(), sink.clone(), client.clone())
+                    .run()
+                    .await;
+            assert_ne!(outcome.status, JobStatus::StorageFailed);
+            frontier
+                .resolve_turn(&domain, &outcome, 10, clock.utc_now())
+                .unwrap();
+        }
+        turns += 1;
+        assert!(turns < 80);
+    }
+    let data = sink.data.lock().unwrap();
+    assert_eq!(data.len(), 3);
+    for path in ["relative", "cross-origin"] {
+        let metadata = &data
+            .iter()
+            .find(|datum| {
+                datum
+                    .capture
+                    .as_ref()
+                    .unwrap()
+                    .metadata
+                    .requested_url
+                    .ends_with(path)
+            })
+            .unwrap()
+            .capture
+            .as_ref()
+            .unwrap()
+            .metadata;
+        assert_eq!(metadata.redirects.len(), 1);
+        assert_ne!(metadata.requested_url, metadata.response.url);
+        assert_eq!(
+            http.counts.lock().unwrap()[&format!("https://one.example.com/{path}")],
+            1
+        );
+    }
+    assert_eq!(
+        http.counts.lock().unwrap()["https://one.example.com/retry-once"],
+        2
+    );
+    assert_eq!(
+        http.counts.lock().unwrap()["https://one.example.com/cycle-a"],
+        1
+    );
+    assert!(clock.sleeps.lock().unwrap().is_empty());
+    assert_eq!(
+        client
+            .robots_txt_manager()
+            .scheduler()
+            .stats()
+            .active_requests,
+        0
+    );
+    assert_eq!(frontier.metrics.snapshot().commits, 3);
+}
+
+#[tokio::test]
+async fn sitemap_discovery_is_durable_and_uses_separate_fair_turns_through_the_common_gate() {
+    let directory = tempfile::tempdir().unwrap();
+    let frontier = Arc::new(
+        crate::crawler::frontier::Frontier::open_database(
+            directory.path().join("frontier.json"),
+            256,
+            30,
+        )
+        .unwrap(),
+    );
+    let sink = Arc::new(TurnSink {
+        frontier: frontier.clone(),
+        data: Mutex::new(Vec::new()),
+    });
+    let mut options = config();
+    options.scheduler.mode = crate::crawler::scheduler::Mode::FairTurns;
+    let options = Arc::new(options);
+    let http = Arc::new(FixtureHttp::default());
+    let clock = Arc::new(ManualClock::default());
+    let client = RobotClient::with_runtime(
+        &options,
+        Arc::new(Runtime {
+            http: http.clone(),
+            clock: clock.clone(),
+            metrics: Arc::new(Metrics::default()),
+        }),
+    )
+    .unwrap();
+    frontier
+        .admit_urls([Url::parse("https://map.example.com/page").unwrap()])
+        .unwrap();
+    let mut turns = 0;
+    while !frontier.is_empty() {
+        *clock.elapsed.lock().unwrap() += Duration::from_millis(20);
+        if let Some(job) = frontier.claim_turn_at(clock.utc_now()).unwrap() {
+            assert_eq!(job.urls.len(), 1);
+            let domain = job.domain.clone();
+            let outcome =
+                JobExecutor::new(job.into(), options.clone(), sink.clone(), client.clone())
+                    .run()
+                    .await;
+            assert_ne!(outcome.status, JobStatus::StorageFailed);
+            frontier
+                .resolve_turn(&domain, &outcome, 10, clock.utc_now())
+                .unwrap();
+        }
+        turns += 1;
+        assert!(turns < 40);
+    }
+    assert_eq!(sink.data.lock().unwrap().len(), 2);
+    assert_eq!(frontier.metrics.snapshot().urls, 4);
+    let counts = http.counts.lock().unwrap();
+    assert_eq!(counts["https://map.example.com/robots.txt"], 1);
+    assert_eq!(counts["https://map.example.com/index.xml"], 1);
+    assert_eq!(counts["https://map.example.com/child.xml"], 1);
+    assert_eq!(counts["https://map.example.com/from-map"], 1);
+    assert!(clock.sleeps.lock().unwrap().is_empty());
 }
 impl DatumSink for MemorySink {
     async fn write_extracted(
@@ -474,7 +690,7 @@ async fn transient_network_and_robots_failures_are_not_silent_success() {
         result.outcome.urls[1].outcome,
         FetchOutcome::Deferred {
             reason: "robots_unavailable".into(),
-            retry_after_ms: None
+            retry_after_ms: Some(60_000)
         }
     );
     assert!(!result

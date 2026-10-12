@@ -117,9 +117,12 @@ async fn robots_pages_and_client_clones_share_pool_without_cross_origin_reuse() 
         .await
         .unwrap();
     let robots = response.text().await.unwrap();
-    for host in [first.host_str().unwrap(), second.host_str().unwrap()] {
+    for origin in [
+        first.origin().ascii_serialization(),
+        second.origin().ascii_serialization(),
+    ] {
         client.robots_txt_manager().insert(
-            host.to_string(),
+            origin,
             robotstxt::Robots::parse(&config.user_agent.token, &robots).unwrap(),
         );
     }

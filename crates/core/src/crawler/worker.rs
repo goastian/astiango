@@ -284,15 +284,34 @@ impl<S: DatumSink> JobExecutor<S> {
                 "Trabajo de dominio iniciado",
             );
         }
-        for site in self
-            .job
-            .urls
-            .iter()
-            .filter_map(|url| url.url().normalized_host())
+        if self.client.robots_txt_manager().scheduler().mode() == super::scheduler::Mode::FairTurns
         {
-            if let Ok(url) = Url::parse(format!("https://{}", site).as_str()) {
-                self.wander_prioritiser.inc(url, 1.0);
+            let seeds = self.seed_urls.clone();
+            for url in &seeds {
+                let sitemaps = self.client.robots_txt_manager().sitemaps(url).await;
+                if let Err(error) = self.writer.discovered_urls(Vec::new(), sitemaps).await {
+                    self.record(
+                        url.clone(),
+                        FetchOutcome::StorageFailure {
+                            message: error.to_string(),
+                        },
+                    );
+                    break;
+                }
             }
+            self.scheduled_urls().await;
+            self.confirm_storage().await;
+            if self.cancelled() && self.outcome.status != JobStatus::StorageFailed {
+                self.outcome.status = JobStatus::Cancelled;
+            }
+            return self.outcome;
+        }
+        for seed in &self.seed_urls {
+            let mut homepage = seed.clone();
+            homepage.set_path("/");
+            homepage.set_query(None);
+            homepage.set_fragment(None);
+            self.wander_prioritiser.inc(homepage, 1.0);
         }
 
         let mut wander_steps = 0;
@@ -401,7 +420,7 @@ impl<S: DatumSink> JobExecutor<S> {
                 (url, score)
             })
             .filter(|(url, _)| !self.crawled_urls.contains(url))
-            .filter(|(url, _)| self.job.domain == Domain::from(url))
+            .filter(|(url, _)| self.job.domain.covers(url))
             .filter(|(_, score)| score.is_finite())
             .unique_by(|(url, _)| url.clone())
             .collect();
@@ -432,7 +451,7 @@ impl<S: DatumSink> JobExecutor<S> {
                 reason: reason.into(),
             })
         };
-        if Domain::from(url) != self.job.domain {
+        if !self.job.domain.covers(url) {
             return skipped("outside_job_domain");
         }
         if self.crawled_urls.contains(url) {
@@ -451,9 +470,13 @@ impl<S: DatumSink> JobExecutor<S> {
             Err(_) => UrlVisit::Stop(FetchOutcome::Cancelled),
             Ok(RobotAccess::Allowed) => UrlVisit::CanCrawl,
             Ok(RobotAccess::Disallowed) => skipped("robots_disallowed"),
+            Ok(RobotAccess::Deferred(ms)) => UrlVisit::Stop(FetchOutcome::Deferred {
+                reason: "origin_not_eligible".into(),
+                retry_after_ms: Some(ms),
+            }),
             Ok(RobotAccess::Unreachable) => UrlVisit::Stop(FetchOutcome::Deferred {
                 reason: "robots_unavailable".into(),
-                retry_after_ms: None,
+                retry_after_ms: Some(self.client.robots_txt_manager().retry_after_ms(url)),
             }),
         }
     }
@@ -462,7 +485,7 @@ impl<S: DatumSink> JobExecutor<S> {
         let urls = self.seed_urls.clone();
 
         for url in urls {
-            let site = Site(url.host_str().unwrap_or_default().to_string());
+            let site = Site(url.origin().ascii_serialization());
             if !self.crawled_sitemaps.contains(&site) {
                 self.crawled_sitemaps.insert(site.clone());
 
@@ -538,6 +561,28 @@ impl<S: DatumSink> JobExecutor<S> {
                 continue;
             }
             self.attempted += 1;
+            match self.writer.is_sitemap(&url).await {
+                Ok(true) => {
+                    let outcome = match self.process_sitemap_turn(url.clone()).await {
+                        Ok(()) => FetchOutcome::Skipped {
+                            reason: "sitemap_discovery_durable".into(),
+                        },
+                        Err(outcome) => outcome,
+                    };
+                    self.record(url, outcome);
+                    continue;
+                }
+                Err(error) => {
+                    self.record(
+                        url,
+                        FetchOutcome::StorageFailure {
+                            message: error.to_string(),
+                        },
+                    );
+                    continue;
+                }
+                Ok(false) => {}
+            }
             if let Some(observer) = &self.observer {
                 observer.event(
                     &self.job.domain,
@@ -549,8 +594,7 @@ impl<S: DatumSink> JobExecutor<S> {
             match self.process_url(url.clone()).await {
                 Ok(processed) => {
                     for new_url in processed.new_urls {
-                        if new_url.host_str().is_some() && Domain::from(&new_url) == self.job.domain
-                        {
+                        if new_url.host_str().is_some() && self.job.domain.covers(&new_url) {
                             self.wander_prioritiser
                                 .inc(new_url, retryable_url.weighted_url.weight);
                         }
@@ -572,6 +616,10 @@ impl<S: DatumSink> JobExecutor<S> {
             return FetchOutcome::Cancelled;
         }
         match error {
+            Error::CrawlDeferred { retry_after_ms } => FetchOutcome::Deferred {
+                reason: "origin_not_eligible".into(),
+                retry_after_ms: Some(retry_after_ms),
+            },
             Error::Pipeline(super::pipeline::PipelineError::Closed) => FetchOutcome::Cancelled,
             Error::Pipeline(error) => FetchOutcome::Deferred {
                 reason: error.to_string(),
@@ -609,6 +657,46 @@ impl<S: DatumSink> JobExecutor<S> {
                 reason: error.to_string(),
             },
         }
+    }
+
+    async fn process_sitemap_turn(&mut self, url: Url) -> std::result::Result<(), FetchOutcome> {
+        self.writer
+            .reserve_url(&url)
+            .await
+            .map_err(|error| FetchOutcome::StorageFailure {
+                message: error.to_string(),
+            })?
+            .ok_or_else(|| FetchOutcome::Skipped {
+                reason: "sitemap_already_resolved".into(),
+            })?;
+        let response = self
+            .fetch(url)
+            .await
+            .map_err(|error| self.error_outcome(error))?;
+        let body = self
+            .client
+            .body(response, BodyKind::Sitemap)
+            .await
+            .map_err(|error| self.error_outcome(error))?;
+        let entries = self
+            .client
+            .parse_body(body, |text| parse_sitemap(text))
+            .await
+            .map_err(|error| self.error_outcome(error))?;
+        let mut urls = Vec::new();
+        let mut sitemaps = Vec::new();
+        for entry in entries.into_iter().take(super::MAX_OUTGOING_URLS_PER_PAGE) {
+            match entry {
+                SitemapEntry::Url(url) => urls.push(url.url),
+                SitemapEntry::Sitemap(url) => sitemaps.push(url),
+            }
+        }
+        self.writer
+            .discovered_urls(urls, sitemaps)
+            .await
+            .map_err(|error| FetchOutcome::StorageFailure {
+                message: error.to_string(),
+            })
     }
 
     fn increase_politeness(&mut self) {
@@ -649,9 +737,24 @@ impl<S: DatumSink> JobExecutor<S> {
             .ok_or_else(|| FetchOutcome::Skipped {
                 reason: "URL already durable, leased or outside the origin budget".into(),
             })?;
-        let mut redirects = Vec::new();
-        let mut visited = HashSet::new();
-        let mut hops = 0;
+        let continuation = self
+            .writer
+            .redirect_continuation(&requested_url)
+            .await
+            .map_err(|error| FetchOutcome::StorageFailure {
+                message: error.to_string(),
+            })?;
+        let mut redirects = if let Some(continuation) = continuation {
+            url = continuation.url;
+            continuation.redirects
+        } else {
+            Vec::new()
+        };
+        let mut visited = redirects
+            .iter()
+            .filter_map(|response| Url::parse(&response.url).ok())
+            .collect::<HashSet<_>>();
+        let mut hops = redirects.len() as u8;
         let mut retries = 0;
         loop {
             if self.cancelled() {
@@ -681,7 +784,7 @@ impl<S: DatumSink> JobExecutor<S> {
                 .map_err(|error| self.error_outcome(error))?;
             let started = self.client.now();
             let telemetry_before = self.telemetry_time;
-            let response = self.fetch_with_https_priority(url.clone()).await;
+            let response = self.fetch_exact(url.clone()).await;
             let response = match response {
                 Ok(response) => response,
                 Err(error) => {
@@ -754,9 +857,6 @@ impl<S: DatumSink> JobExecutor<S> {
                         reason: "redirect_limit".into(),
                     });
                 }
-                if let UrlVisit::Stop(outcome) = self.verify_url(&location).await {
-                    return Err(outcome);
-                }
                 redirects.push(captured_response);
                 hops += 1;
                 self.outcome.counters.redirect_hops += 1;
@@ -764,6 +864,22 @@ impl<S: DatumSink> JobExecutor<S> {
                     observer.redirect(&self.job.domain, &location);
                 }
                 url = location;
+                if self.client.robots_txt_manager().scheduler().mode()
+                    == super::scheduler::Mode::FairTurns
+                {
+                    self.writer
+                        .save_redirect_continuation(
+                            &requested_url,
+                            super::RedirectContinuation {
+                                url: url.clone(),
+                                redirects: redirects.clone(),
+                            },
+                        )
+                        .await
+                        .map_err(|error| FetchOutcome::StorageFailure {
+                            message: error.to_string(),
+                        })?;
+                }
                 continue;
             }
             if status.as_u16() == 429 {
@@ -792,7 +908,9 @@ impl<S: DatumSink> JobExecutor<S> {
                                     })
                             })
                     });
-                if retries >= self.max_url_slowdown_retry
+                if self.client.robots_txt_manager().scheduler().mode()
+                    == super::scheduler::Mode::FairTurns
+                    || retries >= self.max_url_slowdown_retry
                     || retry_after.is_some_and(|delay| delay > self.max_crawl_delay)
                 {
                     let retry_after_ms =
@@ -931,32 +1049,10 @@ impl<S: DatumSink> JobExecutor<S> {
         self.cancellable(request.send()).await
     }
 
-    async fn fetch_with_https_priority(&mut self, url: Url) -> Result<(Url, reqwest::Response)> {
-        if url.scheme() == "http" {
-            let mut https = url.clone();
-            https
-                .set_scheme("https")
-                .map_err(|_| anyhow!("set scheme on url failed"))?;
-            match self.fetch(https.clone()).await {
-                Ok(res) => Ok((https, res)),
-                Err(
-                    error @ (Error::DisallowedPath
-                    | Error::RobotsUnavailable
-                    | Error::NonPublicDestination(_)),
-                ) => Err(error),
-                Err(error) if self.cancelled() => Err(error),
-                Err(_) => {
-                    self.sleep(self.delay_duration()).await;
-                    self.fetch(url.clone())
-                        .await
-                        .map(|response| (url, response))
-                }
-            }
-        } else {
-            self.fetch(url.clone())
-                .await
-                .map(|response| (url, response))
-        }
+    async fn fetch_exact(&mut self, url: Url) -> Result<(Url, reqwest::Response)> {
+        self.fetch(url.clone())
+            .await
+            .map(|response| (url, response))
     }
 
     fn delay_duration(&self) -> Duration {
@@ -971,6 +1067,10 @@ impl<S: DatumSink> JobExecutor<S> {
     }
 
     async fn politeness_delay(&self, fetch_time: Duration) {
+        if self.client.robots_txt_manager().scheduler().mode() == super::scheduler::Mode::FairTurns
+        {
+            return;
+        }
         let mut delay = fetch_time;
 
         if delay < self.min_crawl_delay {
@@ -1002,7 +1102,7 @@ impl<S: DatumSink> JobExecutor<S> {
             }
 
             let entries = async {
-                let (_, response) = self.fetch_with_https_priority(url.clone()).await?;
+                let (_, response) = self.fetch_exact(url.clone()).await?;
                 if response.status() != reqwest::StatusCode::OK {
                     return Err(Error::FetchFailed {
                         status_code: response.status(),

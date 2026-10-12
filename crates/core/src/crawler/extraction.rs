@@ -136,7 +136,7 @@ fn admissible_internal(url: &Url, document_url: &Url, context: &ExtractionContex
         && url != document_url
         && url != context.requested_url
         && !context.crawled_urls.contains(url)
-        && Domain::from(url) == *context.domain
+        && context.domain.covers(url)
 }
 
 /// Reference mechanism, constructible only in tests/the local benchmark.

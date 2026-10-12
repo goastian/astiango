@@ -149,6 +149,8 @@ impl From<LiveCrawlerConfig> for CrawlerConfig {
     fn from(config: LiveCrawlerConfig) -> Self {
         Self {
             num_worker_threads: 1,
+            scheduler: crate::crawler::scheduler::Config::default(),
+            robots: crate::crawler::robots_txt::Config::default(),
             user_agent: config.user_agent,
             network_policy: config.network_policy,
             transport: config.transport,

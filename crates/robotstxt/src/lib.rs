@@ -14,13 +14,16 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! A robots.txt parser and matcher compliant with [RFC 9309](https://www.rfc-editor.org/rfc/rfc9309.html)
-//! and [Google's Robots.txt parser](https://github.com/google/robotstxt) (with some extensions).
+//! `parse_rfc` implements RFC 9309; `parse` retains the historical matching
+//! behavior for existing callers. The crawler uses the normative entry point.
 
 const MAX_CHAR_LIMIT_DEFAULT: usize = 512_000; // 512 KB
 
 mod parser;
 mod pattern;
+
+#[cfg(test)]
+mod rfc_tests;
 
 use std::time::Duration;
 
@@ -90,6 +93,7 @@ pub struct Robots {
     rules: Vec<Rule>,
     crawl_delay: Option<f32>,
     sitemaps: Vec<String>,
+    rfc: bool,
 }
 
 impl Robots {
@@ -223,6 +227,102 @@ impl Robots {
             rules,
             crawl_delay,
             sitemaps,
+            rfc: false,
+        })
+    }
+
+    pub fn parse_rfc(useragent: &str, input: &str) -> Result<Self, anyhow::Error> {
+        Self::parse_rfc_with_params(useragent, input, Params::default())
+    }
+
+    pub fn parse_rfc_with_params(
+        useragent: &str,
+        input: &str,
+        params: Params,
+    ) -> Result<Self, anyhow::Error> {
+        anyhow::ensure!(Self::is_valid_user_agent(useragent), "Invalid user agent");
+        anyhow::ensure!(
+            params.char_limit >= 500 * 1024,
+            "robots parsing limit must be at least 500 KiB"
+        );
+        let mut end = input.len().min(params.char_limit);
+        while !input.is_char_boundary(end) {
+            end -= 1;
+        }
+        let input = input[..end]
+            .trim_start_matches('\u{feff}')
+            .replace('\0', "\n");
+        let (_, lines) = parser::parse(&input).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        #[derive(Default)]
+        struct Group {
+            agents: Vec<String>,
+            rules: Vec<Rule>,
+            delay: Option<f32>,
+            has_rules: bool,
+        }
+        let mut groups = Vec::new();
+        let mut group = Group::default();
+        let mut sitemaps = Vec::new();
+        for line in lines {
+            match line {
+                Line::UserAgent(agents) => {
+                    if group.has_rules {
+                        groups.push(std::mem::take(&mut group));
+                    }
+                    group.agents.extend(agents.into_iter().map(str::to_owned));
+                }
+                Line::Allow(path) | Line::Disallow(path) if !group.agents.is_empty() => {
+                    group.has_rules = true;
+                    if path.starts_with('/') {
+                        group.rules.push(Rule {
+                            pattern: Pattern::rfc(path),
+                            directive: if matches!(line, Line::Allow(_)) {
+                                Directive::Allow
+                            } else {
+                                Directive::Disallow
+                            },
+                        });
+                    }
+                }
+                Line::CrawlDelay(Some(delay)) if !group.agents.is_empty() && delay.is_finite() => {
+                    group.delay = Some(group.delay.unwrap_or(0.0).max(delay.min(31_536_000.0)));
+                }
+                Line::Sitemap(url) => sitemaps.push(url.to_owned()),
+                _ => {}
+            }
+        }
+        groups.push(group);
+        let specific = groups.iter().any(|group| {
+            group
+                .agents
+                .iter()
+                .any(|agent| agent.eq_ignore_ascii_case(useragent))
+        });
+        let mut rules = Vec::new();
+        let mut crawl_delay: Option<f32> = None;
+        for group in groups {
+            if group.agents.iter().any(|agent| {
+                if specific {
+                    agent.eq_ignore_ascii_case(useragent)
+                } else {
+                    agent == "*"
+                }
+            }) {
+                rules.extend(group.rules);
+                if let Some(delay) = group.delay {
+                    crawl_delay = Some(crawl_delay.unwrap_or(0.0).max(delay));
+                }
+            }
+        }
+        rules.sort();
+        rules.dedup();
+        sitemaps.sort();
+        sitemaps.dedup();
+        Ok(Self {
+            rules,
+            crawl_delay,
+            sitemaps,
+            rfc: true,
         })
     }
 
@@ -231,8 +331,15 @@ impl Robots {
     }
 
     pub fn is_allowed(&self, url: &Url) -> bool {
-        let path = &Self::prepare_path(url);
-        self.is_path_allowed(path)
+        if self.rfc {
+            let path = match url.query() {
+                Some(query) => format!("{}?{}", url.path(), query),
+                None => url.path().to_owned(),
+            };
+            self.is_path_allowed(&path)
+        } else {
+            self.is_path_allowed(&Self::prepare_path(url))
+        }
     }
 
     fn prepare_path(url: &Url) -> String {
@@ -285,7 +392,7 @@ impl Robots {
     pub fn is_path_allowed(&self, path: &str) -> bool {
         let res = self.is_precise_path_allowed(path);
 
-        if !res && path.ends_with('/') {
+        if !self.rfc && !res && path.ends_with('/') {
             self.is_precise_path_allowed(format!("{}index.html", path).as_str())
         } else {
             res
