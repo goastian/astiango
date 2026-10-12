@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use super::{Error, Result};
+use super::{transport::SharedTransport, Error, Result};
 use crate::config::{CrawlNetworkPolicy, CrawlerConfig};
 use crate::crawler::robots_txt::{RobotAccess, RobotsTxtManager};
 use anyhow::anyhow;
@@ -41,12 +41,6 @@ pub(super) fn client_builder(config: &CrawlerConfig) -> reqwest::ClientBuilder {
         .default_headers(headers)
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(&config.user_agent.full)
-}
-
-pub(super) fn reqwest_client(config: &CrawlerConfig) -> Result<reqwest::Client> {
-    client_builder(config)
-        .build()
-        .map_err(|e| Error::from(anyhow!(e)))
 }
 
 /// Fail closed for non-public addresses, including IPv4 encoded as IPv6.
@@ -127,6 +121,7 @@ pub fn validate_seed_urls(config: &CrawlerConfig, seeds: &[Url]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_public_addresses(host: &str, addresses: &[std::net::SocketAddr]) -> Result<()> {
     if addresses.is_empty() || addresses.iter().any(|addr| !is_public_address(addr.ip())) {
         return Err(Error::NonPublicDestination(format!(
@@ -136,45 +131,22 @@ fn validate_public_addresses(host: &str, addresses: &[std::net::SocketAddr]) -> 
     Ok(())
 }
 
-/// Resolve once and pin this request to validated addresses. Never let a second
-/// DNS lookup or a proxy turn a public hostname into an internal connection.
-pub(super) async fn public_request(
-    config: &CrawlerConfig,
-    url: &Url,
-) -> Result<reqwest::RequestBuilder> {
-    validate_public_url(url)?;
-    let mut builder = client_builder(config).no_proxy();
-    if let Some(url::Host::Domain(host)) = url.host() {
-        let addresses: Vec<_> = tokio::time::timeout(
-            Duration::from_secs(config.timeout_seconds),
-            tokio::net::lookup_host((host, 0)),
-        )
-        .await
-        .map_err(|e| Error::from(anyhow!(e)))?
-        .map_err(|e| Error::from(anyhow!(e)))?
-        .collect();
-        validate_public_addresses(host, &addresses)?;
-        builder = builder.resolve_to_addrs(host, &addresses);
-    }
-    let client = builder.build().map_err(|e| Error::from(anyhow!(e)))?;
-    Ok(client.get(url.clone()))
-}
-
 /// Reqwest client that respects robots.txt for each request.
 #[derive(Clone)]
 pub struct RobotClient {
     robots_txt_manager: RobotsTxtManager,
-    client: reqwest::Client,
+    transport: SharedTransport,
     config: Arc<CrawlerConfig>,
     runtime: Option<Arc<super::runtime::Runtime>>,
 }
 
 impl RobotClient {
     pub fn new(config: &CrawlerConfig) -> Result<Self> {
+        let transport = SharedTransport::new(config, config.transport.clone())?;
         Ok(Self {
             runtime: None,
-            client: reqwest_client(config)?,
-            robots_txt_manager: RobotsTxtManager::new(config),
+            robots_txt_manager: RobotsTxtManager::with_transport(config, transport.clone()),
+            transport,
             config: Arc::new(config.clone()),
         })
     }
@@ -196,7 +168,7 @@ impl RobotClient {
         runtime: Arc<super::runtime::Runtime>,
     ) -> Result<Self> {
         Ok(Self {
-            client: reqwest_client(config)?,
+            transport: SharedTransport::new(config, config.transport.clone())?,
             robots_txt_manager: RobotsTxtManager::with_runtime(config, runtime.clone()),
             config: Arc::new(config.clone()),
             runtime: Some(runtime),
@@ -205,6 +177,20 @@ impl RobotClient {
 
     pub(crate) fn metrics(&self) -> Option<&Arc<super::runtime::Metrics>> {
         self.runtime.as_ref().map(|runtime| &runtime.metrics)
+    }
+
+    pub(crate) fn transport(&self) -> &SharedTransport {
+        &self.transport
+    }
+
+    #[cfg(any(test, feature = "crawler-bench"))]
+    pub fn with_transport(config: &CrawlerConfig, transport: SharedTransport) -> Self {
+        Self {
+            robots_txt_manager: RobotsTxtManager::with_transport(config, transport.clone()),
+            transport,
+            config: Arc::new(config.clone()),
+            runtime: None,
+        }
     }
 
     pub(crate) fn now(&self) -> std::time::Instant {
@@ -248,17 +234,14 @@ impl RobotClient {
         if let Some(runtime) = &self.runtime {
             return Ok(RequestBuilder::injected(runtime.clone(), url));
         }
-        let request = match self.config.network_policy {
-            CrawlNetworkPolicy::PublicOnly => public_request(&self.config, &url).await?,
-            CrawlNetworkPolicy::AllowPrivate => self.client.get(url),
-        };
-        Ok(RequestBuilder::new(request))
+        Ok(RequestBuilder::managed(self.transport.clone(), url))
     }
 }
 
 pub struct RequestBuilder {
     request: Option<reqwest::RequestBuilder>,
     injected: Option<(Arc<super::runtime::Runtime>, Url, Option<Duration>)>,
+    managed: Option<(SharedTransport, Url, Option<Duration>)>,
 }
 
 impl From<reqwest::RequestBuilder> for RequestBuilder {
@@ -272,6 +255,7 @@ impl RequestBuilder {
         Self {
             request: Some(builder),
             injected: None,
+            managed: None,
         }
     }
 
@@ -279,12 +263,24 @@ impl RequestBuilder {
         Self {
             request: None,
             injected: Some((runtime, url, None)),
+            managed: None,
+        }
+    }
+
+    pub(crate) fn managed(transport: SharedTransport, url: Url) -> Self {
+        Self {
+            request: None,
+            injected: None,
+            managed: Some((transport, url, None)),
         }
     }
 
     pub async fn send(self) -> Result<reqwest::Response> {
         if let Some((runtime, url, timeout)) = self.injected {
             return runtime.http.send(url, timeout).await;
+        }
+        if let Some((transport, url, timeout)) = self.managed {
+            return transport.send(url, timeout).await;
         }
         #[cfg(not(test))]
         {
@@ -304,6 +300,9 @@ impl RequestBuilder {
         if let Some((_, _, value)) = &mut self.injected {
             *value = Some(timeout);
         }
+        if let Some((_, _, value)) = &mut self.managed {
+            *value = Some(timeout);
+        }
         self.request = self.request.map(|request| request.timeout(timeout));
         self
     }
@@ -318,9 +317,12 @@ mod tests {
         let mut legacy = serde_json::to_value(CrawlerConfig::for_tests()).unwrap();
         legacy.as_object_mut().unwrap().remove("network_policy");
         legacy.as_object_mut().unwrap().remove("max_redirect_hops");
+        legacy.as_object_mut().unwrap().remove("transport");
         let config: CrawlerConfig = serde_json::from_value(legacy.clone()).unwrap();
         assert_eq!(config.network_policy, CrawlNetworkPolicy::PublicOnly);
         assert_eq!(config.max_redirect_hops, 10);
+        assert_eq!(config.transport.max_client_slots, 128);
+        assert_eq!(config.transport.max_slots_per_origin, 4);
 
         legacy["network_policy"] = serde_json::json!("allow_private");
         legacy["max_redirect_hops"] = serde_json::json!(3);

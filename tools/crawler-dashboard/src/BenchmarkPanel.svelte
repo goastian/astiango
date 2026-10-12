@@ -1,22 +1,25 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import TransportBenchmarkPanel from "./TransportBenchmarkPanel.svelte";
   import type {
     BenchmarkReport,
     Distribution,
     BenchmarkScenario,
     BenchmarkRun,
+    TransportBenchmarkReport,
   } from "./benchmark-types";
 
   let { onavailability }: { onavailability: (available: boolean, profile?: string) => void } =
     $props();
   let report = $state<BenchmarkReport | null>(null);
+  let transportReport = $state<TransportBenchmarkReport | null>(null);
   let enabled = $state(false);
   let error = $state("");
   let loading = $state(false);
   let selectedIndex = $state(0);
   let controller: AbortController | null = null;
   const selected = $derived(report?.scenarios[selectedIndex]);
-  const profile = $derived(report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
+  const profile = $derived(transportReport ? "C04" : report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
   const formatter = new Intl.NumberFormat("es-CO", {
     maximumFractionDigits: 2,
   });
@@ -129,12 +132,19 @@
       onavailability(enabled);
       if (!enabled) {
         report = null;
+        transportReport = null;
         error = "";
         return;
       }
       if (!response.ok)
         throw new Error(data.error || "No se pudo consultar el informe del banco.");
-      report = data.report;
+      if (data.report.kind === "crawler_transport_benchmark") {
+        transportReport = data.report;
+        report = null;
+      } else {
+        report = data.report;
+        transportReport = null;
+      }
       onavailability(true, profile);
       if (selectedIndex >= (report?.scenarios.length ?? 0)) selectedIndex = 0;
       error = "";
@@ -151,13 +161,14 @@
     }
   }
   function download() {
-    if (!report) return;
+    const currentReport = transportReport ?? report;
+    if (!currentReport) return;
     const url = URL.createObjectURL(
-      new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }),
+      new Blob([JSON.stringify(currentReport, null, 2)], { type: "application/json" }),
     );
     const link = document.createElement("a");
     link.href = url;
-    link.download = `crawler-${profile.toLowerCase()}-${Date.parse(report.generated_at)}.json`;
+    link.download = `crawler-${profile.toLowerCase()}-${Date.parse(currentReport.generated_at)}.json`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -192,16 +203,18 @@
         <button class="button" onclick={refresh} disabled={loading}
           >Actualizar banco</button
         >
-        <button class="button" onclick={download} disabled={!report}
+        <button class="button" onclick={download} disabled={!report && !transportReport}
           >Descargar {profile}</button
         >
       </div>
     </div>
     {#if error}<p class="benchmark-error" role="status">
         {error}
-        {report ? "Se conserva el último informe leído." : ""}
+        {report || transportReport ? "Se conserva el último informe leído." : ""}
       </p>{/if}
-    {#if report}
+    {#if transportReport}
+      <TransportBenchmarkPanel report={transportReport} />
+    {:else if report}
       <div class="benchmark-summary">
         <span class="benchmark-result" class:passed={report.acceptance.passed}>
           {report.acceptance.passed

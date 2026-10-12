@@ -54,3 +54,44 @@ export type BenchmarkReport = {
   }[];
   acceptance: { passed: boolean; [key: string]: unknown };
 };
+
+export type TransportBenchmarkSummary = {
+  scheme: "http" | "https";
+  origins: number;
+  mode: "legacy" | "pooled";
+  repetitions: number;
+  metrics: Record<string, Distribution>;
+};
+export type TransportBenchmarkRun = {
+  scheme: "http" | "https";
+  origins: number;
+  mode: "legacy" | "pooled";
+  repetition: number;
+  pages: number;
+  requests: number;
+  fd_baseline?: number;
+  fd_peak?: number;
+  fd_final?: number;
+  server: { connections: number; requests: number; peak_connections?: number };
+  verification?: { passed: boolean };
+};
+export type TransportBenchmarkReport = {
+  schema_version: 1;
+  kind: "crawler_transport_benchmark";
+  generated_at: string;
+  configuration: Record<string, unknown>;
+  summaries: TransportBenchmarkSummary[];
+  runs: TransportBenchmarkRun[];
+  comparisons?: {
+    scheme: "http" | "https";
+    origins: number;
+    equivalent: boolean;
+    connections_per_page_reduction_pct: Distribution;
+    dns_queries_per_page_reduction_pct?: Distribution;
+  }[];
+  acceptance: { passed: boolean; checks?: Record<string, boolean> };
+  code?: Record<string, unknown>;
+  corpus?: Record<string, unknown>;
+  hardware?: Record<string, unknown>;
+  source_unchanged?: boolean;
+};

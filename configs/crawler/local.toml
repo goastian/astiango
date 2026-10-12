@@ -16,3 +16,12 @@ revisit_interval_seconds = 3600
 [user_agent]
 full = "AstianGOBot/1.0 (+https://astiango.com/webmasters; contact@astian.org)"
 token = "AstianGOBot"
+
+[transport]
+max_client_slots = 128
+max_slots_per_origin = 4
+idle_timeout_seconds = 30
+dns_cache_entries = 1024
+dns_positive_ttl_seconds = 60
+dns_negative_ttl_seconds = 5
+dns_max_inflight = 32

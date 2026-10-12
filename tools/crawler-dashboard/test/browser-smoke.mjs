@@ -3,6 +3,7 @@ import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDashboardServer } from "../server.mjs";
+import { transportReport } from "./transport-report.mjs";
 // Reuse the repository's existing browser-test dependency; no network install.
 const { chromium } = await import(
   process.env.CRAWLER_PLAYWRIGHT_MODULE ||
@@ -171,6 +172,7 @@ try {
         "legacy snapshots do not fabricate C02 counters",
       );
       assert.equal(await page.locator(".telemetry-panel").count(), 0);
+      assert.equal(await page.locator(".transport-panel").count(), 0);
     } else {
       await page.getByRole("link", { name: "Banco C01 · local" }).click();
       await page.getByText("Aceptación verificada", { exact: true }).waitFor();
@@ -357,6 +359,58 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
   if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "c03-mobile.png"), fullPage: true });
+  const c04Snapshot = structuredClone(c03Snapshot);
+  c04Snapshot.run_id = "c04-http-dns";
+  c04Snapshot.telemetry.last_published_at = new Date().toISOString();
+  c04Snapshot.transport = {
+    requests_started: 120, headers_received: 116, request_failures: 4,
+    request_timeouts: 2, body_timeouts: 1, max_client_slots: 128, max_slots_per_origin: 4,
+    bodies_completed: 100, body_failures: 3, bodies_dropped: 11, bytes_received: 98304,
+    client_slots_total: 8, client_slots_active: 2, client_slots_idle: 6,
+    client_slots_peak: 10, clients_created: 12, clients_reused: 108,
+    clients_evicted: 4, pool_waits: 7, pool_wait_ms: 230,
+    dns_cache_entries: 5, dns_cache_hits: 110, dns_negative_hits: 2,
+    dns_cache_misses: 8, dns_coalesced: 3, dns_lookups: 5, dns_failures: 1,
+    dns_rejected: 2, dns_inflight: 0, dns_inflight_peak: 3, dns_lookup_ms: 50,
+  };
+  await writeFile(statePath, JSON.stringify(c04Snapshot));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".page-footer").filter({ hasText: "c04-http-dns" }).waitFor();
+  await page.locator(".transport-panel > summary").click();
+  const transportValue = (label) => page.locator(".transport-groups dl > div")
+    .filter({ has: page.getByText(label, { exact: true }) }).locator("dd");
+  for (const [label, expected] of [
+    ["Peticiones iniciadas", "120"], ["Reutilizaciones de cliente", "108"],
+    ["Clientes activos", "2"], ["Clientes disponibles", "6"],
+    ["Límite global de clientes", "128"], ["Límite de clientes por origen", "4"],
+    ["Timeouts de petición", "2"], ["Timeouts de cuerpo", "1"],
+    ["Consultas DNS", "5"], ["Aciertos de caché DNS", "110"],
+    ["Aciertos de caché negativa", "2"], ["Consultas simultáneas agrupadas", "3"],
+    ["Destinos rechazados", "2"], ["Consultas DNS lógicas en curso", "0"],
+    ["Consultas DNS al sistema en curso", "—"], ["Pico de consultas DNS al sistema", "—"],
+    ["Espera acumulada del pool", "230 ms"], ["Cuerpos liberados antes de terminar", "11"],
+  ]) assert.equal(await transportValue(label).textContent(), expected);
+  Object.assign(c04Snapshot.transport, { dns_blocking_inflight: 1, dns_blocking_inflight_peak: 2 });
+  await writeFile(statePath, JSON.stringify(c04Snapshot));
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await transportValue("Consultas DNS al sistema en curso").filter({ hasText: "1" }).waitFor();
+  assert.equal(await transportValue("Consultas DNS lógicas en curso").textContent(), "0");
+  assert.equal(await transportValue("Pico de consultas DNS al sistema").textContent(), "2");
+  assert.match(await page.locator(".transport-details > p").first().textContent(), /no miden conexiones TCP/);
+  assert.equal((await page.locator(".pages-panel .metric-value strong").textContent()).trim(), "91");
+  await writeFile(statePath, "{broken");
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".transport-notice").waitFor();
+  assert.equal(await transportValue("Reutilizaciones de cliente").textContent(), "108");
+  c04Snapshot.telemetry.last_published_at = new Date().toISOString();
+  await writeFile(statePath, JSON.stringify(c04Snapshot));
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".transport-notice").waitFor({ state: "hidden" });
+  if (screenshotDirectory) await page.locator(".transport-panel").screenshot({ path: join(screenshotDirectory, "c04-transport-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+  if (screenshotDirectory) await page.locator(".transport-panel").screenshot({ path: join(screenshotDirectory, "c04-transport-mobile.png") });
   const c03Report = structuredClone(report);
   c03Report.configuration.acceptance_profile = "c03";
   c03Report.configuration.observer_modes = ["legacy_sync", "async"];
@@ -387,6 +441,24 @@ try {
   if (screenshotDirectory) await page.locator("#banco-c01").screenshot({ path: join(screenshotDirectory, "c03-benchmark.png") });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+  await writeFile(benchmarkPath, JSON.stringify(transportReport()));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "Actualizar banco", exact: true }).click();
+  await page.getByRole("link", { name: "Banco C04 · local", exact: true }).waitFor();
+  const transportTable = page.getByRole("table", { name: "Resultados del transporte C04", exact: true });
+  assert.equal(await transportTable.locator("tbody tr").count(), 4);
+  await page.getByRole("combobox", { name: "Escenario de transporte para inspeccionar", exact: true }).selectOption("1");
+  const connectionsTable = page.getByRole("table", { name: "Conexiones reales por repetición", exact: true });
+  assert.equal(await connectionsTable.locator("tbody tr").count(), 3);
+  assert.equal(await connectionsTable.locator("tbody tr").first().locator("td").nth(2).textContent(), "2");
+  assert.equal((await page.locator(".pages-panel .metric-value strong").textContent()).trim(), "91");
+  const c04Download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Descargar C04", exact: true }).click();
+  assert.match((await c04Download).suggestedFilename(), /^crawler-c04-/);
+  if (screenshotDirectory) await page.locator("#banco-c01").screenshot({ path: join(screenshotDirectory, "c04-benchmark-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+  if (screenshotDirectory) await page.locator("#banco-c01").screenshot({ path: join(screenshotDirectory, "c04-benchmark-mobile.png") });
   assert.deepEqual(errors, []);
   console.log(
     JSON.stringify({
@@ -399,8 +471,15 @@ try {
       telemetryHealthAndRecovery: true,
       telemetryDroppedEvents: 150,
       unreadableMetricsKeepLastSnapshot: true,
+      transportMetricsCompatible: true,
+      clientReuseIsNotTcpConnections: true,
+      transportReadFailureKeepsCounters: true,
+      logicalAndSystemDnsAreSeparate: true,
+      legacySystemDnsCountersRemainUnknown: true,
       benchmarkObserverModes: ["legacy_sync", "async"],
       benchmarkBehaviorDifferencesVisible: true,
+      benchmarkTransportModesAndProtocols: true,
+      benchmarkActualServerConnections: true,
       mobileOverflow: false,
       pageErrors: errors,
     }),

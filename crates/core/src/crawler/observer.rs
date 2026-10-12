@@ -240,6 +240,8 @@ struct Projection {
     #[serde(flatten)]
     snapshot: Snapshot,
     telemetry: ObserverStats,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport: Option<super::transport::TransportStats>,
 }
 
 type Publisher = dyn Fn(&Path, &Projection, &IoCounters, bool) -> anyhow::Result<()> + Send + Sync;
@@ -253,6 +255,7 @@ struct Shared {
     publisher: Arc<Publisher>,
     publication: Mutex<()>,
     metrics: Mutex<Option<Arc<super::runtime::Metrics>>>,
+    transport: Mutex<Option<super::transport::SharedTransport>>,
 }
 
 pub struct Observer {
@@ -338,6 +341,7 @@ impl Observer {
             publisher,
             publication: Mutex::new(()),
             metrics: Mutex::new(None),
+            transport: Mutex::new(None),
         });
         let projector = if legacy {
             publish(&shared, true);
@@ -361,6 +365,11 @@ impl Observer {
     pub(super) fn with_metrics(self, metrics: Arc<super::runtime::Metrics>) -> Self {
         *self.shared.metrics.lock().unwrap() = Some(metrics);
         self
+    }
+
+    pub(super) fn observe_transport(&self, transport: super::transport::SharedTransport) {
+        *self.shared.transport.lock().unwrap() = Some(transport);
+        self.heartbeat();
     }
 
     fn update(&self, f: impl FnOnce(&mut Snapshot, &mut Rings, &mut HashMap<String, bool>)) {
@@ -763,7 +772,7 @@ fn project(shared: Arc<Shared>) {
 
 fn publish(shared: &Shared, legacy: bool) {
     let _publication = shared.publication.lock().unwrap();
-    let (projection, version, dirty_since) = {
+    let (mut projection, version, dirty_since) = {
         let mut state = shared.state.lock().unwrap();
         let mut snapshot = state.snapshot.clone();
         snapshot.recent_events = state.rings.events.iter().cloned().collect();
@@ -780,11 +789,14 @@ fn publish(shared: &Shared, legacy: bool) {
             Projection {
                 snapshot,
                 telemetry,
+                transport: None,
             },
             version,
             dirty_since,
         )
     };
+    let transport = shared.transport.lock().unwrap().clone();
+    projection.transport = transport.as_ref().map(|transport| transport.stats());
     let metrics = shared.metrics.lock().unwrap().clone();
     let _timer = super::runtime::StageTimer::optional(metrics.as_ref(), "observer_projection");
     let result = (shared.publisher)(&shared.path, &projection, &shared.io, legacy);

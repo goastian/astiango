@@ -44,6 +44,8 @@ pub mod router;
 pub use router::Router;
 #[cfg(feature = "crawler-bench")]
 pub mod benchmark;
+#[cfg(feature = "crawler-bench")]
+pub mod transport_benchmark;
 mod file_queue;
 pub mod local;
 mod observer;
@@ -51,6 +53,7 @@ pub mod outcome;
 pub mod planner;
 pub mod robot_client;
 pub mod runtime;
+pub mod transport;
 mod wander_prioritiser;
 mod warc_writer;
 mod worker;

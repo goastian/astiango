@@ -62,9 +62,45 @@ export interface ObserverStats {
   max_publish_latency_ms: number;
   legacy_write_estimate: number;
 }
+export interface TransportStats {
+  requests_started: number;
+  headers_received: number;
+  request_failures: number;
+  request_timeouts: number;
+  bodies_completed: number;
+  body_failures: number;
+  body_timeouts: number;
+  bodies_dropped: number;
+  bytes_received: number;
+  client_slots_total: number;
+  client_slots_active: number;
+  client_slots_idle: number;
+  client_slots_peak: number;
+  max_client_slots: number;
+  max_slots_per_origin: number;
+  clients_created: number;
+  clients_reused: number;
+  clients_evicted: number;
+  pool_waits: number;
+  pool_wait_ms: number;
+  dns_cache_entries: number;
+  dns_cache_hits: number;
+  dns_negative_hits: number;
+  dns_cache_misses: number;
+  dns_coalesced: number;
+  dns_lookups: number;
+  dns_failures: number;
+  dns_rejected: number;
+  dns_inflight: number;
+  dns_inflight_peak: number;
+  dns_blocking_inflight?: number;
+  dns_blocking_inflight_peak?: number;
+  dns_lookup_ms: number;
+}
 export interface Snapshot {
   schema_version: number;
   telemetry?: ObserverStats;
+  transport?: TransportStats;
   continuous?: boolean;
   frontier?: {
     pending_domains: number;

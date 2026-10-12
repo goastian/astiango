@@ -88,6 +88,7 @@ rayon.workspace = true
 redb.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+http-02 = { package = "http", version = "0.2" }
 ring.workspace = true
 rio_api.workspace = true
 rio_turtle.workspace = true
@@ -125,8 +126,6 @@ web-spell = { path = "../web-spell" }
 tikv-jemallocator.workspace = true
 
 [dev-dependencies]
-# Reqwest 0.11 uses HTTP 0.2; synthetic responses must use the same wire types.
-http-02 = { package = "http", version = "0.2" }
 tempfile.workspace = true
 criterion.workspace = true
 insta.workspace = true
@@ -165,4 +164,8 @@ name = "distributed_harmonic"
 
 [[example]]
 name = "crawler_bench"
+required-features = ["crawler-bench"]
+
+[[example]]
+name = "crawler_transport_bench"
 required-features = ["crawler-bench"]

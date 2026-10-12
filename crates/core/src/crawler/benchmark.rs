@@ -322,6 +322,7 @@ pub async fn run(config: Config) -> Result<serde_json::Value> {
             token: "CrawlerBench".into(),
         },
         network_policy: crate::config::CrawlNetworkPolicy::PublicOnly,
+        transport: super::transport::TransportConfig::default(),
         max_redirect_hops: crate::config::default_max_redirect_hops(),
         robots_txt_cache_sec: 3600,
         min_politeness_factor: 0,

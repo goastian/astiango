@@ -24,12 +24,9 @@ use std::{
 use dashmap::DashMap;
 use url::Url;
 
-use crate::{
-    config::{CrawlNetworkPolicy, CrawlerConfig},
-    crawler,
-};
+use crate::config::{CrawlNetworkPolicy, CrawlerConfig};
 
-use super::{encoded_body, Site};
+use super::{encoded_body, transport::SharedTransport, Site};
 
 const RETRY_ROBOTSTXT_UNREACHABLE: bool = false;
 
@@ -80,7 +77,7 @@ impl CheckedRobotsTxt {
 struct InnerRobotsTxtManager {
     cache: DashMap<Site, CheckedRobotsTxt>,
     last_prune: Arc<Mutex<std::time::Instant>>,
-    client: reqwest::Client,
+    transport: SharedTransport,
     cache_expiration: Duration,
     user_agent: String,
     min_crawl_delay: Duration,
@@ -90,15 +87,14 @@ struct InnerRobotsTxtManager {
 }
 
 impl InnerRobotsTxtManager {
-    fn new(config: &CrawlerConfig) -> Self {
-        let client = crawler::robot_client::reqwest_client(config).unwrap();
+    fn new(config: &CrawlerConfig, transport: SharedTransport) -> Self {
         let cache_expiration = Duration::from_secs(config.robots_txt_cache_sec);
         let user_agent = config.user_agent.token.clone();
         let min_crawl_delay = Duration::from_millis(config.min_crawl_delay_ms);
         let max_crawl_delay = Duration::from_millis(config.max_crawl_delay_ms);
 
         Self {
-            client,
+            transport,
             cache_expiration,
             last_prune: Arc::new(Mutex::new(std::time::Instant::now())),
             cache: DashMap::new(),
@@ -168,13 +164,10 @@ impl InnerRobotsTxtManager {
                 url,
             ));
         }
-        let request = match self.config.network_policy {
-            CrawlNetworkPolicy::PublicOnly => {
-                super::robot_client::public_request(&self.config, &url).await?
-            }
-            CrawlNetworkPolicy::AllowPrivate => self.client.get(url),
-        };
-        Ok(super::robot_client::RequestBuilder::new(request))
+        Ok(super::robot_client::RequestBuilder::managed(
+            self.transport.clone(),
+            url,
+        ))
     }
 
     async fn fetch_robots_txt_from_url(&self, initial_url: &str) -> Lookup<robotstxt::Robots> {
@@ -320,8 +313,14 @@ impl Clone for RobotsTxtManager {
 
 impl RobotsTxtManager {
     pub fn new(config: &CrawlerConfig) -> Self {
+        let transport = SharedTransport::new(config, config.transport.clone())
+            .expect("invalid crawler transport configuration");
+        Self::with_transport(config, transport)
+    }
+
+    pub(crate) fn with_transport(config: &CrawlerConfig, transport: SharedTransport) -> Self {
         Self {
-            inner: Arc::new(InnerRobotsTxtManager::new(config)),
+            inner: Arc::new(InnerRobotsTxtManager::new(config, transport)),
         }
     }
 
@@ -334,7 +333,9 @@ impl RobotsTxtManager {
 
     #[cfg(any(test, feature = "crawler-bench"))]
     pub fn with_runtime(config: &CrawlerConfig, runtime: Arc<super::runtime::Runtime>) -> Self {
-        let mut inner = InnerRobotsTxtManager::new(config);
+        let transport = SharedTransport::new(config, config.transport.clone())
+            .expect("invalid crawler transport configuration");
+        let mut inner = InnerRobotsTxtManager::new(config, transport);
         inner.last_prune = Arc::new(Mutex::new(runtime.clock.now()));
         inner.runtime = Some(runtime);
         Self {
@@ -364,6 +365,11 @@ impl RobotsTxtManager {
     pub fn insert(&self, site: String, robots_txt: robotstxt::Robots) {
         self.inner.insert(site, robots_txt);
     }
+}
+
+#[cfg(test)]
+mod transport_integration {
+    include!("robot_client_transport_tests.rs");
 }
 
 #[cfg(test)]

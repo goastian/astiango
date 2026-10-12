@@ -17,3 +17,12 @@ bucket = "crawl"
 endpoint = "http://s3.stract.com"
 folder = "test"
 secret_key = "<secret_key>"
+
+[transport]
+max_client_slots = 128
+max_slots_per_origin = 4
+idle_timeout_seconds = 30
+dns_cache_entries = 1024
+dns_positive_ttl_seconds = 60
+dns_negative_ttl_seconds = 5
+dns_max_inflight = 32
