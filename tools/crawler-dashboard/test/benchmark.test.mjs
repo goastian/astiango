@@ -8,6 +8,32 @@ import { transportReport } from "./transport-report.mjs";
 import { bodyReport } from "./body-fixture.mjs";
 import { extractionReport } from "./extraction-fixture.mjs";
 import { isBenchmarkReport } from "../benchmark-report.mjs";
+import { pipelineReport } from "./pipeline-fixture.mjs";
+
+test("C07 rejects missing repetitions, invalid byte quotas and nonfinite measurements", () => {
+  assert.equal(isBenchmarkReport(pipelineReport()), true);
+  for (const mutate of [
+    (r) => { r.runs.pop(); },
+    (r) => { r.runs.push(r.runs[0]); },
+    (r) => { r.runs[0].pipeline.parse.max_bytes = -1; },
+    (r) => { r.runs[0].runtime_lag_p99_ms = Infinity; },
+    (r) => { delete r.summaries[0].metrics.pages_per_second; },
+    (r) => { r.comparisons[0].throughput_gain_pct.median = NaN; },
+  ]) {
+    const report = pipelineReport(); mutate(report);
+    assert.equal(isBenchmarkReport(report), false);
+  }
+});
+
+test("C07 report cannot replace or alter the production snapshot", async (t) => {
+  const { base, statePath, benchmarkPath } = await setup(t);
+  const snapshot = { schema_version: 1, sites: [], counters: { downloaded: 17 } };
+  await writeFile(statePath, JSON.stringify(snapshot));
+  const report = pipelineReport();
+  await writeFile(benchmarkPath, JSON.stringify(report));
+  assert.deepEqual((await (await fetch(`${base}/api/benchmarks`)).json()).report, report);
+  assert.deepEqual((await (await fetch(`${base}/api/status`)).json()).snapshot, snapshot);
+});
 
 const metric = { median: 12, min: 10, max: 14, mad: 2 };
 

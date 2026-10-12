@@ -149,6 +149,7 @@ pub struct RobotClient {
     transport: SharedTransport,
     body_reader: BodyReader,
     extractor: super::extraction::Extractor,
+    pipeline: super::pipeline::Pipeline,
     config: Arc<CrawlerConfig>,
     runtime: Option<Arc<super::runtime::Runtime>>,
 }
@@ -157,16 +158,21 @@ impl RobotClient {
     pub fn new(config: &CrawlerConfig) -> Result<Self> {
         let transport = SharedTransport::new(config, config.transport.clone())?;
         let body_reader = BodyReader::new(config.body.clone())?;
+        config.pipeline.validate_body(&config.body)?;
+        let pipeline = super::pipeline::Pipeline::new(config.pipeline.clone())?;
+        transport.set_setup_stage(pipeline.network_setup.clone());
         Ok(Self {
             runtime: None,
-            robots_txt_manager: RobotsTxtManager::with_readers(
+            robots_txt_manager: RobotsTxtManager::with_pipeline_readers(
                 config,
                 transport.clone(),
                 body_reader.clone(),
+                pipeline.clone(),
             ),
             transport,
             body_reader,
             extractor: super::extraction::Extractor::default(),
+            pipeline,
             config: Arc::new(config.clone()),
         })
     }
@@ -188,15 +194,19 @@ impl RobotClient {
         runtime: Arc<super::runtime::Runtime>,
     ) -> Result<Self> {
         let body_reader = BodyReader::new(config.body.clone())?;
+        config.pipeline.validate_body(&config.body)?;
+        let pipeline = super::pipeline::Pipeline::new(config.pipeline.clone())?;
         Ok(Self {
             transport: SharedTransport::new(config, config.transport.clone())?,
-            robots_txt_manager: RobotsTxtManager::with_runtime_reader(
+            robots_txt_manager: RobotsTxtManager::with_runtime_pipeline_reader(
                 config,
                 runtime.clone(),
                 body_reader.clone(),
+                pipeline.clone(),
             ),
             body_reader,
             extractor: super::extraction::Extractor::default(),
+            pipeline,
             config: Arc::new(config.clone()),
             runtime: Some(runtime),
         })
@@ -213,15 +223,20 @@ impl RobotClient {
     #[cfg(any(test, feature = "crawler-bench"))]
     pub fn with_transport(config: &CrawlerConfig, transport: SharedTransport) -> Self {
         let body_reader = BodyReader::new(config.body.clone()).expect("invalid body configuration");
+        let pipeline = super::pipeline::Pipeline::new(config.pipeline.clone())
+            .expect("invalid pipeline configuration");
+        transport.set_setup_stage(pipeline.network_setup.clone());
         Self {
-            robots_txt_manager: RobotsTxtManager::with_readers(
+            robots_txt_manager: RobotsTxtManager::with_pipeline_readers(
                 config,
                 transport.clone(),
                 body_reader.clone(),
+                pipeline.clone(),
             ),
             transport,
             body_reader,
             extractor: super::extraction::Extractor::default(),
+            pipeline,
             config: Arc::new(config.clone()),
             runtime: None,
         }
@@ -252,6 +267,39 @@ impl RobotClient {
 
     pub(crate) fn extractor(&self) -> &super::extraction::Extractor {
         &self.extractor
+    }
+
+    pub(crate) fn pipeline(&self) -> &super::pipeline::Pipeline {
+        &self.pipeline
+    }
+
+    pub(crate) fn page_reservation_bytes(&self) -> usize {
+        self.config
+            .body
+            .html
+            .decoded_limit_bytes
+            .max(self.config.body.feed.decoded_limit_bytes)
+    }
+
+    pub(crate) async fn parse_body<T: Send + 'static>(
+        &self,
+        body: AdmittedBody,
+        parse: impl FnOnce(&str) -> T + Send + 'static,
+    ) -> Result<T> {
+        self.pipeline.start_monitor();
+        Ok(self
+            .pipeline
+            .parse
+            .run(body.len(), move || parse(&body))
+            .await?)
+    }
+
+    #[cfg(any(test, feature = "crawler-bench"))]
+    pub(crate) fn with_pipeline(mut self, pipeline: super::pipeline::Pipeline) -> Self {
+        self.transport
+            .set_setup_stage(pipeline.network_setup.clone());
+        self.pipeline = pipeline;
+        self
     }
 
     pub(crate) async fn body(

@@ -4,6 +4,21 @@ export type Distribution = {
   max: number;
   mad: number;
 };
+export type PipelineBenchmarkReport = {
+  schema_version: 1;
+  kind: "crawler_pipeline_benchmark";
+  generated_at: string;
+  configuration: { acceptance_profile: "c07"; [key: string]: unknown };
+  summaries: { scenario: string; mode: "legacy" | "bounded"; origins: number; repetitions: number; metrics: Record<string, Distribution> }[];
+  comparisons: { scenario: string; equivalent: boolean; throughput_gain_pct: Distribution; lag_reduction_pct: Distribution }[];
+  runs: { scenario: string; mode: "legacy" | "bounded"; repetition: number; pages: number; pages_per_second: number;
+    runtime_lag_p99_ms: number; controller_delay_ms: number; rss_peak_bytes: number;
+    pipeline: import("./types").PipelineStats; server: { requests: number; body_bytes_written: number } }[];
+  acceptance: { passed: boolean; checks?: Record<string, boolean> };
+  code?: Record<string, unknown>;
+  binary?: Record<string, unknown>;
+  hardware?: Record<string, unknown>;
+};
 export type BenchmarkRun = {
   observer_mode?: "legacy_sync" | "async" | "off";
   repetition?: number;

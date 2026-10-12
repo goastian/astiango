@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import TransportBenchmarkPanel from "./TransportBenchmarkPanel.svelte";
   import BodyBenchmarkPanel from "./BodyBenchmarkPanel.svelte";
+  import PipelineBenchmarkPanel from "./PipelineBenchmarkPanel.svelte";
   import ExtractionBenchmarkPanel from "./ExtractionBenchmarkPanel.svelte";
   import type {
     BenchmarkReport,
@@ -11,6 +12,7 @@
     TransportBenchmarkReport,
     BodyBenchmarkReport,
     ExtractionBenchmarkReport,
+    PipelineBenchmarkReport,
   } from "./benchmark-types";
 
   let { onavailability }: { onavailability: (available: boolean, profile?: string) => void } =
@@ -19,13 +21,14 @@
   let transportReport = $state<TransportBenchmarkReport | null>(null);
   let bodyReport = $state<BodyBenchmarkReport | null>(null);
   let extractionReport = $state<ExtractionBenchmarkReport | null>(null);
+  let pipelineReport = $state<PipelineBenchmarkReport | null>(null);
   let enabled = $state(false);
   let error = $state("");
   let loading = $state(false);
   let selectedIndex = $state(0);
   let controller: AbortController | null = null;
   const selected = $derived(report?.scenarios[selectedIndex]);
-  const profile = $derived(extractionReport ? "C06" : bodyReport ? "C05" : transportReport ? "C04" : report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
+  const profile = $derived(pipelineReport ? "C07" : extractionReport ? "C06" : bodyReport ? "C05" : transportReport ? "C04" : report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
   const formatter = new Intl.NumberFormat("es-CO", {
     maximumFractionDigits: 2,
   });
@@ -141,13 +144,20 @@
         transportReport = null;
         bodyReport = null;
         extractionReport = null;
+        pipelineReport = null;
         error = "";
         return;
       }
       if (!response.ok)
         throw new Error(data.error || "No se pudo consultar el informe del banco.");
       extractionReport = null;
-      if (data.report.kind === "crawler_extraction_benchmark") {
+      pipelineReport = null;
+      if (data.report.kind === "crawler_pipeline_benchmark") {
+        pipelineReport = data.report;
+        bodyReport = null;
+        transportReport = null;
+        report = null;
+      } else if (data.report.kind === "crawler_extraction_benchmark") {
         extractionReport = data.report;
         bodyReport = null;
         transportReport = null;
@@ -181,7 +191,7 @@
     }
   }
   function download() {
-    const currentReport = extractionReport ?? bodyReport ?? transportReport ?? report;
+    const currentReport = pipelineReport ?? extractionReport ?? bodyReport ?? transportReport ?? report;
     if (!currentReport) return;
     const url = URL.createObjectURL(
       new Blob([JSON.stringify(currentReport, null, 2)], { type: "application/json" }),
@@ -223,16 +233,18 @@
         <button class="button" onclick={refresh} disabled={loading}
           >Actualizar banco</button
         >
-        <button class="button" onclick={download} disabled={!report && !transportReport && !bodyReport && !extractionReport}
+        <button class="button" onclick={download} disabled={!report && !transportReport && !bodyReport && !extractionReport && !pipelineReport}
           >Descargar {profile}</button
         >
       </div>
     </div>
     {#if error}<p class="benchmark-error" role="status">
         {error}
-        {report || transportReport || bodyReport || extractionReport ? "Se conserva el último informe leído." : ""}
+        {report || transportReport || bodyReport || extractionReport || pipelineReport ? "Se conserva el último informe leído." : ""}
       </p>{/if}
-    {#if extractionReport}
+    {#if pipelineReport}
+      <PipelineBenchmarkPanel report={pipelineReport} />
+    {:else if extractionReport}
       <ExtractionBenchmarkPanel report={extractionReport} />
     {:else if bodyReport}
       <BodyBenchmarkPanel report={bodyReport} />

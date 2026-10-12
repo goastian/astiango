@@ -42,7 +42,6 @@ use crate::{
 
 use super::{
     body::BodyKind,
-    extraction::ExtractionContext,
     outcome::{FetchOutcome, JobOutcome, JobStatus, UrlOutcome},
     robot_client::RobotClient,
     robots_txt::RobotAccess,
@@ -154,7 +153,7 @@ pub struct JobExecutor<S: DatumSink> {
     client: RobotClient,
     has_gotten_429_response: bool,
     politeness_factor: u32,
-    crawled_urls: HashSet<Url>,
+    crawled_urls: Arc<HashSet<Url>>,
     crawled_sitemaps: HashSet<Site>,
     sitemap_urls: HashSet<Url>,
     min_crawl_delay: Duration,
@@ -189,7 +188,7 @@ impl<S: DatumSink> JobExecutor<S> {
             politeness_factor: config.start_politeness_factor,
             min_politeness_factor: config.min_politeness_factor,
             client,
-            crawled_urls: HashSet::new(),
+            crawled_urls: Arc::new(HashSet::new()),
             crawled_sitemaps: HashSet::new(),
             wandered_urls: 0,
             sitemap_urls: HashSet::new(),
@@ -573,6 +572,11 @@ impl<S: DatumSink> JobExecutor<S> {
             return FetchOutcome::Cancelled;
         }
         match error {
+            Error::Pipeline(super::pipeline::PipelineError::Closed) => FetchOutcome::Cancelled,
+            Error::Pipeline(error) => FetchOutcome::Deferred {
+                reason: error.to_string(),
+                retry_after_ms: None,
+            },
             Error::Body(error) if error.is_retryable() => FetchOutcome::Deferred {
                 reason: error.reason().into(),
                 retry_after_ms: None,
@@ -653,6 +657,16 @@ impl<S: DatumSink> JobExecutor<S> {
                 self.max_crawl_delay = self.max_crawl_delay.max(delay);
             }
             visited.insert(url.clone());
+            let admission = self
+                .cancellable(async {
+                    Ok(self
+                        .client
+                        .pipeline()
+                        .admit(self.client.page_reservation_bytes())
+                        .await?)
+                })
+                .await
+                .map_err(|error| self.error_outcome(error))?;
             let started = self.client.now();
             let telemetry_before = self.telemetry_time;
             let response = self.fetch_with_https_priority(url.clone()).await;
@@ -798,36 +812,48 @@ impl<S: DatumSink> JobExecutor<S> {
                 fetch_time_ms: elapsed.as_millis() as u64,
                 date: self.client.utc_now(),
             };
-            let extraction = {
+            let pipeline = self.client.pipeline().clone();
+            let domain = self.job.domain.clone();
+            let requested_url = url.clone();
+            let visited = self.crawled_urls.clone();
+            let extractor = self.client.extractor().clone();
+            let mut page = {
                 let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "parse");
-                self.client
-                    .extractor()
-                    .parse(
-                        &datum.body,
-                        &datum.url,
-                        ExtractionContext {
-                            domain: &self.job.domain,
-                            crawled_urls: &self.crawled_urls,
-                            requested_url: &url,
-                        },
-                    )
-                    .ok()
+                self.cancellable(async {
+                    Ok(pipeline
+                        .prepare_page(
+                            datum,
+                            body_lease,
+                            admission,
+                            extractor,
+                            domain,
+                            visited,
+                            requested_url,
+                        )
+                        .await?)
+                })
+                .await
+                .map_err(|error| self.error_outcome(error))?
             };
+            let new_urls = page
+                .extraction
+                .as_mut()
+                .map(|value| std::mem::take(&mut value.internal_urls))
+                .unwrap_or_default();
             {
                 let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "sink");
                 self.writer
-                    .write_extracted(datum, extraction.as_ref())
+                    .write_prepared(page)
                     .await
-                    .map_err(|error| FetchOutcome::StorageFailure {
-                        message: error.to_string(),
+                    .map_err(|error| match error {
+                        Error::Pipeline(_) => self.error_outcome(error),
+                        error => FetchOutcome::StorageFailure {
+                            message: error.to_string(),
+                        },
                     })?;
             }
-            self.crawled_urls.insert(url.clone());
-            self.crawled_urls.insert(fetched_url.clone());
-            let new_urls = extraction
-                .map(|value| value.internal_urls)
-                .unwrap_or_default();
-            drop(body_lease);
+            Arc::make_mut(&mut self.crawled_urls).insert(url.clone());
+            Arc::make_mut(&mut self.crawled_urls).insert(fetched_url.clone());
             if !self.has_gotten_429_response {
                 self.decrease_politeness();
             }
@@ -937,7 +963,8 @@ impl<S: DatumSink> JobExecutor<S> {
                 let body = self
                     .cancellable(self.client.body(response, BodyKind::Sitemap))
                     .await?;
-                Ok(parse_sitemap(&body))
+                self.cancellable(self.client.parse_body(body, |text| parse_sitemap(text)))
+                    .await
             }
             .await;
             self.sleep(self.delay_duration()).await;

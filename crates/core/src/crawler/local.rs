@@ -52,6 +52,8 @@ pub struct Config {
     pub transport: super::transport::TransportConfig,
     #[serde(default)]
     pub body: super::body::BodyConfig,
+    #[serde(default)]
+    pub pipeline: super::pipeline::PipelineConfig,
     #[serde(default = "default_max_redirect_hops")]
     pub max_redirect_hops: u8,
     #[serde(default = "default_frontier_capacity")]
@@ -88,6 +90,7 @@ impl Config {
     fn validate(&self) -> Result<()> {
         self.transport.validate()?;
         self.body.validate()?;
+        self.pipeline.validate_body(&self.body)?;
         anyhow::ensure!(
             self.network_policy == CrawlNetworkPolicy::PublicOnly,
             "The local crawler requires network_policy = public_only"
@@ -120,6 +123,7 @@ impl Config {
             network_policy: self.network_policy,
             transport: self.transport.clone(),
             body: self.body.clone(),
+            pipeline: self.pipeline.clone(),
             max_redirect_hops: self.max_redirect_hops,
             robots_txt_cache_sec: 3600,
             min_politeness_factor: 0,
@@ -400,12 +404,14 @@ impl Frontier {
     }
 }
 
-struct LocalWarcSink {
+#[derive(Clone)]
+pub(super) struct LocalWarcSink {
     directory: PathBuf,
     observer: Arc<Observer>,
     frontier: Arc<Frontier>,
-    fatal_error: Mutex<Option<String>>,
+    fatal_error: Arc<Mutex<Option<String>>>,
     extractor: Extractor,
+    pipeline: super::pipeline::Pipeline,
     store_warc: fn(&Path, &[u8]) -> Result<()>,
 }
 
@@ -452,31 +458,60 @@ impl LocalWarcSink {
 impl DatumSink for LocalWarcSink {
     async fn write(&self, datum: CrawlDatum) -> super::Result<()> {
         self.check().map_err(super::Error::Anyhow)?;
-        let extraction = self
-            .extractor
-            .parse(
-                &datum.body,
-                &datum.url,
-                ExtractionContext {
-                    domain: &Domain::from(&datum.url),
-                    crawled_urls: &VisitedUrls::default(),
-                    requested_url: &datum.url,
-                },
-            )
-            .ok();
-        self.write_extracted(datum, extraction.as_ref()).await
+        let admission = self.pipeline.admit(datum.body.len()).await?;
+        let extractor = self.extractor.clone();
+        let page = self
+            .pipeline
+            .parse
+            .run(datum.body.len(), move || {
+                let extraction = extractor
+                    .parse(
+                        &datum.body,
+                        &datum.url,
+                        ExtractionContext {
+                            domain: &Domain::from(&datum.url),
+                            crawled_urls: &VisitedUrls::default(),
+                            requested_url: &datum.url,
+                        },
+                    )
+                    .ok();
+                super::pipeline::PreparedPage {
+                    datum,
+                    extraction,
+                    body_lease: None,
+                    admission: Some(admission),
+                }
+            })
+            .await?;
+        self.write_prepared(page).await
     }
     async fn write_extracted(
         &self,
         datum: CrawlDatum,
         extraction: Option<&CrawlExtraction>,
     ) -> super::Result<()> {
+        let admission = self.pipeline.admit(datum.body.len()).await?;
+        let mut page = super::pipeline::PreparedPage::unleased(datum, extraction.cloned());
+        page.admission = Some(admission);
+        self.write_prepared(page).await
+    }
+    async fn write_prepared(&self, page: super::pipeline::PreparedPage) -> super::Result<()> {
         self.check().map_err(super::Error::Anyhow)?;
-        if let Err(error) = self.commit(&datum, extraction) {
-            *self.fatal_error.lock().unwrap() = Some(error.to_string());
-            return Err(super::Error::Anyhow(error));
-        }
-        Ok(())
+        let sink = self.clone();
+        self.pipeline
+            .storage
+            .run_durable(page.datum.body.len(), move || {
+                sink.check()?;
+                let result = sink.commit(&page.datum, page.extraction.as_ref());
+                if let Err(error) = &result {
+                    *sink.fatal_error.lock().unwrap() = Some(error.to_string());
+                    sink.pipeline.stop_admission();
+                }
+                drop(page);
+                result
+            })
+            .await?
+            .map_err(super::Error::Anyhow)
     }
     async fn finish(&self) -> super::Result<()> {
         self.check().map_err(super::Error::Anyhow)
@@ -484,6 +519,31 @@ impl DatumSink for LocalWarcSink {
     async fn checkpoint(&self) -> super::Result<()> {
         self.check().map_err(super::Error::Anyhow)
     }
+}
+
+#[cfg(feature = "crawler-bench")]
+pub(super) fn benchmark_sink(
+    directory: PathBuf,
+    observer: Arc<Observer>,
+    extractor: Extractor,
+    pipeline: super::pipeline::Pipeline,
+) -> Result<Arc<LocalWarcSink>> {
+    fs::create_dir_all(&directory)?;
+    let frontier = Arc::new(Frontier::open(
+        directory.with_extension("frontier.json"),
+        256,
+        1,
+        observer.clone(),
+    )?);
+    Ok(Arc::new(LocalWarcSink {
+        directory,
+        observer,
+        frontier,
+        fatal_error: Arc::new(Mutex::new(None)),
+        extractor,
+        pipeline,
+        store_warc: atomic_write,
+    }))
 }
 
 async fn shutdown_signal() -> Result<()> {
@@ -562,85 +622,100 @@ pub async fn run(config: Config) -> Result<()> {
         directory,
         observer: observer.clone(),
         frontier: frontier.clone(),
-        fatal_error: Mutex::new(None),
+        fatal_error: Arc::new(Mutex::new(None)),
         extractor: client.extractor().clone(),
+        pipeline: client.pipeline().clone(),
         store_warc: atomic_write,
     });
     let job_directory = config.state_directory().join("jobs").join(&run_id);
     fs::create_dir_all(&job_directory)?;
+    let pipeline = client.pipeline().clone();
+    pipeline.start_monitor();
+    observer.observe_pipeline(pipeline.clone());
     let mut jobs = tokio::task::JoinSet::new();
+    let mut claims = tokio::task::JoinSet::new();
     let cancellation = Arc::new(AtomicBool::new(false));
     let mut shutting_down = false;
+    let mut can_claim = true;
     let mut heartbeat = tokio::time::interval(Duration::from_secs(2));
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
-    let mut exhausted_at = None;
+    let mut exhausted_at: Option<std::time::Instant> = None;
+    let seeds = Arc::new(seeds);
+    let seed_bytes = seeds.iter().map(|url| url.as_str().len()).sum::<usize>();
     let outcome: Result<()> = async {
         loop {
-            while !shutting_down && jobs.len() < config.num_worker_threads {
-                let Some(job) = frontier.claim()? else { break };
-                if jobs.is_empty() {
-                    observer.phase("running");
-                }
-                observer.register_site(job.domain.as_str().into(), config.pages_per_domain);
-                let domain = job.domain.clone();
-                let executor = JobExecutor::new(
-                    job.into(),
-                    crawler_config.clone(),
-                    sink.clone(),
-                    client.clone(),
-                )
-                .with_observer(observer.clone())
-                .with_cancellation(cancellation.clone());
-                jobs.spawn(async move { (domain, executor.run().await) });
+            if !shutting_down && can_claim && claims.is_empty()
+                && jobs.len() < config.num_worker_threads {
+                can_claim = false;
+                let frontier = frontier.clone();
+                let control = pipeline.control.clone();
+                let seeds = seeds.clone();
+                let restart = exhausted_at.is_some_and(|since| since.elapsed() >= Duration::from_secs(config.revisit_interval_seconds));
+                claims.spawn(async move {
+                    control.run_durable(seed_bytes, move || {
+                        if restart && frontier.is_empty() { frontier.restart_round(seeds.as_ref().clone())?; }
+                        let job = frontier.claim()?;
+                        Ok::<_, anyhow::Error>((job, frontier.is_empty()))
+                    }).await.map_err(anyhow::Error::from)?
+                });
             }
-            if shutting_down && jobs.is_empty() {
-                break;
-            }
-            if jobs.is_empty() {
-                observer.phase("idle");
-                if frontier.is_empty() {
-                    let since = exhausted_at.get_or_insert_with(std::time::Instant::now);
-                    if since.elapsed() >= Duration::from_secs(config.revisit_interval_seconds) {
-                        frontier.restart_round(seeds.clone())?;
-                        exhausted_at = None;
-                        continue;
-                    }
-                } else {
-                    exhausted_at = None;
-                }
-            } else {
-                exhausted_at = None;
-            }
+            if shutting_down && jobs.is_empty() && claims.is_empty() { break; }
             tokio::select! {
                 stopped = &mut shutdown, if !shutting_down => {
-                    stopped?;
-                    shutting_down = true;
+                    stopped?; shutting_down = true;
                     cancellation.store(true, Ordering::Release);
+                    pipeline.stop_admission();
                 }
-                _ = heartbeat.tick() => observer.heartbeat(),
-                result = jobs.join_next(), if !jobs.is_empty() => {
-                    let (domain, job_outcome) = result.unwrap().context("Crawler worker panicked")?;
-                    persist_job_outcome(&job_directory, &domain, &job_outcome)?;
-                    if job_outcome.is_success() {
-                        tracing::info!(domain = domain.as_str(), "Crawler job durably resolved");
-                    } else {
-                        tracing::warn!(domain = domain.as_str(), status = ?job_outcome.status,
-                            "Crawler job finished with explicit non-success outcomes");
+                _ = heartbeat.tick() => { observer.heartbeat(); can_claim = true; }
+                result = claims.join_next(), if !claims.is_empty() => {
+                    let (job, empty) = result.unwrap().context("Frontier task panicked")??;
+                    if let Some(job) = job {
+                        exhausted_at = None;
+                        observer.phase("running");
+                        observer.register_site(job.domain.as_str().into(), config.pages_per_domain);
+                        let domain = job.domain.clone();
+                        let executor = JobExecutor::new(job.into(), crawler_config.clone(), sink.clone(), client.clone())
+                            .with_observer(observer.clone()).with_cancellation(cancellation.clone());
+                        let control = pipeline.control.clone();
+                        let directory = job_directory.clone();
+                        let frontier = frontier.clone();
+                        let sink = sink.clone();
+                        let minimum = config.min_crawl_delay_ms;
+                        jobs.spawn(async move {
+                            let outcome = executor.run().await;
+                            let bytes = outcome.urls.iter().map(|entry| entry.url.as_str().len() + 128).sum::<usize>();
+                            control.run_durable(bytes, move || {
+                                persist_job_outcome(&directory, &domain, &outcome)?;
+                                frontier.resolve(&domain, &outcome, minimum, Utc::now())?;
+                                sink.check()?;
+                                Ok::<_, anyhow::Error>(())
+                            }).await.map_err(anyhow::Error::from)?
+                        });
+                        can_claim = true;
+                    } else if jobs.is_empty() {
+                        observer.phase("idle");
+                        if empty { exhausted_at.get_or_insert_with(std::time::Instant::now); }
+                        else { exhausted_at = None; }
                     }
-                    frontier.resolve(&domain, &job_outcome, config.min_crawl_delay_ms, Utc::now())?;
-                    sink.check()?;
+                }
+                result = jobs.join_next(), if !jobs.is_empty() => {
+                    result.unwrap().context("Crawler worker panicked")??;
+                    can_claim = true;
                 }
             }
         }
         Ok(())
-    }
-    .await;
+    }.await;
+    pipeline.stop_admission();
     if outcome.is_err() {
         cancellation.store(true, Ordering::Release);
         jobs.abort_all();
+        claims.abort_all();
         while jobs.join_next().await.is_some() {}
+        while claims.join_next().await.is_some() {}
     }
+    pipeline.shutdown().await;
     observer.finish(if outcome.is_ok() { "stopped" } else { "failed" });
     outcome?;
     sink.check()?;
@@ -1005,8 +1080,9 @@ mod tests {
             directory: dir.path().to_path_buf(),
             observer: telemetry,
             frontier: frontier.clone(),
-            fatal_error: Mutex::new(None),
+            fatal_error: Arc::new(Mutex::new(None)),
             extractor: extractor.clone(),
+            pipeline: super::super::pipeline::Pipeline::new(Default::default()).unwrap(),
             store_warc: atomic_write,
         };
         sink.write_extracted(datum.clone(), Some(&extraction))
@@ -1034,6 +1110,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepted_local_write_retains_admission_and_survives_waiter_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let telemetry = observer(dir.path().join("status.json"));
+        let pipeline = super::super::pipeline::Pipeline::new(Default::default()).unwrap();
+        let frontier = Arc::new(
+            Frontier::open(dir.path().join("frontier.json"), 8, 5, telemetry.clone()).unwrap(),
+        );
+        let warcs = dir.path().join("warc");
+        fs::create_dir(&warcs).unwrap();
+        let sink = Arc::new(LocalWarcSink {
+            directory: warcs.clone(),
+            observer: telemetry,
+            frontier,
+            fatal_error: Arc::new(Mutex::new(None)),
+            extractor: Extractor::default(),
+            pipeline: pipeline.clone(),
+            store_warc: atomic_write,
+        });
+        let (release, blocked) = std::sync::mpsc::channel();
+        let holding = {
+            let stage = pipeline.storage.clone();
+            tokio::spawn(async move { stage.run_durable(1, move || blocked.recv().unwrap()).await })
+        };
+        while pipeline.stats().storage.running == 0 {
+            tokio::task::yield_now().await;
+        }
+        let datum = test_datum();
+        let mut page = super::super::pipeline::PreparedPage::unleased(datum.clone(), None);
+        page.admission = Some(pipeline.admit(datum.body.len()).await.unwrap());
+        let pending = tokio::spawn(async move { sink.write_prepared(page).await });
+        while pipeline.stats().storage.items < 2 {
+            tokio::task::yield_now().await;
+        }
+        pending.abort();
+        let _ = pending.await;
+        assert_eq!(pipeline.stats().admission.items, 1);
+        release.send(()).unwrap();
+        holding.await.unwrap().unwrap();
+        pipeline.shutdown().await;
+        assert_eq!(pipeline.stats().admission.items, 0);
+        let path = fs::read_dir(warcs).unwrap().next().unwrap().unwrap().path();
+        let file = warc::WarcFile::open(path).unwrap();
+        assert_eq!(
+            file.records().next().unwrap().unwrap().response.body,
+            datum.body
+        );
+    }
+
+    #[tokio::test]
     async fn failed_metrics_output_does_not_fail_warc_checkpoint_or_job_commit() {
         let dir = tempfile::tempdir().unwrap();
         let status = dir.path().join("status.json");
@@ -1053,8 +1178,9 @@ mod tests {
             directory: warcs.clone(),
             observer: telemetry.clone(),
             frontier: frontier.clone(),
-            fatal_error: Mutex::new(None),
+            fatal_error: Arc::new(Mutex::new(None)),
             extractor: Extractor::default(),
+            pipeline: super::super::pipeline::Pipeline::new(Default::default()).unwrap(),
             store_warc: atomic_write,
         };
         sink.write(datum.clone()).await.unwrap();
@@ -1116,8 +1242,9 @@ mod tests {
             directory: warcs.clone(),
             observer: telemetry.clone(),
             frontier: frontier.clone(),
-            fatal_error: Mutex::new(None),
+            fatal_error: Arc::new(Mutex::new(None)),
             extractor: Extractor::default(),
+            pipeline: super::super::pipeline::Pipeline::new(Default::default()).unwrap(),
             store_warc: full_device,
         };
         let error = sink.write(datum.clone()).await.unwrap_err();

@@ -293,6 +293,7 @@ struct Inner {
     pool: Mutex<Pool>,
     pool_changed: Notify,
     counters: Counters,
+    setup_stage: Mutex<super::pipeline::BlockingStage>,
     #[cfg(any(test, feature = "crawler-bench"))]
     fixture: Option<FixturePolicy>,
 }
@@ -323,6 +324,7 @@ impl SharedTransport {
     ) -> Result<Self> {
         options.validate().map_err(Error::from)?;
         config.body.validate().map_err(Error::from)?;
+        config.pipeline.validate().map_err(Error::from)?;
         if config.timeout_seconds == 0 {
             return Err(Error::from(anyhow!("transport timeout must be positive")));
         }
@@ -339,6 +341,10 @@ impl SharedTransport {
                 pool: Mutex::new(Pool::default()),
                 pool_changed: Notify::new(),
                 counters: Counters::default(),
+                setup_stage: Mutex::new(super::pipeline::BlockingStage::new(
+                    config.pipeline.network_setup.clone(),
+                    Duration::from_millis(config.pipeline.queue_wait_timeout_ms),
+                )),
                 #[cfg(any(test, feature = "crawler-bench"))]
                 fixture: None,
             }),
@@ -370,6 +376,10 @@ impl SharedTransport {
         let mut transport = Self::construct(config, options, resolver, clock)?;
         Arc::get_mut(&mut transport.inner).unwrap().fixture = Some(fixture);
         Ok(transport)
+    }
+
+    pub(crate) fn set_setup_stage(&self, stage: super::pipeline::BlockingStage) {
+        *self.inner.setup_stage.lock().unwrap() = stage;
     }
 
     pub fn stats(&self) -> TransportStats {
@@ -496,7 +506,19 @@ impl SharedTransport {
                 .fetch_add(1, Ordering::Relaxed);
             client
         } else {
-            self.make_client(host, &answer.addresses)?
+            let stage = self.inner.setup_stage.lock().unwrap().clone();
+            let transport = self.clone();
+            let bytes = host.len().saturating_add(
+                answer
+                    .addresses
+                    .len()
+                    .saturating_mul(std::mem::size_of::<IpAddr>()),
+            );
+            let host = host.to_owned();
+            let addresses = answer.addresses.clone();
+            stage
+                .run(bytes, move || transport.make_client(&host, &addresses))
+                .await??
         };
         {
             let mut pool = self.inner.pool.lock().unwrap();

@@ -9,7 +9,8 @@ const { chromium } = await import(
     new URL("../../../frontend/node_modules/playwright/index.mjs", import.meta.url).href
 );
 const base = process.env.CRAWLER_LIVE_URL || "http://127.0.0.1:3100/";
-const expectExtraction = process.env.CRAWLER_EXPECT_EXTRACTION === "1";
+const expectPipeline = process.env.CRAWLER_EXPECT_PIPELINE === "1";
+const expectExtraction = expectPipeline || process.env.CRAWLER_EXPECT_EXTRACTION === "1";
 const expectBody = expectExtraction || process.env.CRAWLER_EXPECT_BODY === "1";
 const expectTransport = expectBody || process.env.CRAWLER_EXPECT_TRANSPORT === "1";
 const output = process.env.CRAWLER_LIVE_OUTPUT || join(root, expectExtraction ? "data/crawler-c06-dashboard" : expectBody ? "data/crawler-c05-dashboard" : expectTransport ? "data/crawler-c04-dashboard" : "data/crawler-c03-dashboard");
@@ -23,6 +24,7 @@ assert.equal(initial.meta.process_alive, true);
 assert.ok(initial.snapshot.telemetry, "the operational crawler must publish C03 telemetry");
 if (expectTransport) assert.ok(initial.snapshot.transport, "the operational crawler must publish C04 transport measurements");
 if (expectBody) assert.ok(initial.snapshot.body, "the operational crawler must publish C05 body measurements");
+if (expectPipeline) assert.ok(initial.snapshot.pipeline, "the operational crawler must publish C07 pipeline measurements");
 if (expectExtraction) assert.ok(initial.snapshot.extraction, "the operational crawler must publish C06 extraction measurements");
 if (process.env.CRAWLER_EXPECTED_PID)
   assert.equal(initial.snapshot.pid, Number(process.env.CRAWLER_EXPECTED_PID));
@@ -52,6 +54,7 @@ try {
   if (expectTransport) await page.locator(".transport-panel > summary").click();
   if (expectBody) await page.locator(".body-panel > summary").click();
   if (expectExtraction) await page.locator(".extraction-panel > summary").click();
+  if (expectPipeline) await page.locator(".pipeline-panel > summary").click();
   await page.getByRole("button", { name: "Pausar lectura", exact: true }).click();
   const refreshing = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/status");
   await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
@@ -73,6 +76,20 @@ try {
     assert.equal(await telemetryValue(label).textContent(), formatter.format(stats[key]));
   }
   assert.equal(stats.events_total, stats.events_dropped + rendered.snapshot.recent_events.length);
+  if (expectPipeline) {
+    const pipeline = rendered.snapshot.pipeline;
+    const format = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 });
+    const lag = page.locator(".pipeline-lag > div").filter({ has: page.getByText("Lag p99 del temporizador", { exact: true }) }).locator("dd");
+    await lag.filter({ hasText: `${format.format(pipeline.runtime_lag_p99_us / 1000)} ms` }).waitFor();
+    for (const [name, stage] of [["Admisión de páginas", pipeline.admission], ["Parseo", pipeline.parse],
+        ["Compresión y almacenamiento", pipeline.storage], ["Frontera y control", pipeline.control]]) {
+      const quota = page.getByRole("region", { name, exact: true }).locator("dl > div")
+        .filter({ has: page.getByText("Trabajos reservados / límite", { exact: true }) }).locator("dd");
+      assert.equal(await quota.textContent(), `${format.format(stage.items)} / ${format.format(stage.max_items)}`);
+      assert.ok(stage.peak_items <= stage.max_items && stage.peak_bytes <= stage.max_bytes && stage.peak_running <= stage.workers);
+    }
+  }
+
   if (expectTransport) {
     const transport = rendered.snapshot.transport;
     const transportValue = (label) => page.locator(".transport-groups dl > div")
@@ -193,6 +210,7 @@ try {
     ...(expectTransport ? { transport_verified: rendered.snapshot.transport } : {}),
     ...(expectBody ? { body_verified: rendered.snapshot.body } : {}),
     ...(expectExtraction ? { extraction_verified: rendered.snapshot.extraction } : {}),
+    ...(expectPipeline ? { pipeline_verified: rendered.snapshot.pipeline } : {}),
     counters_verified: rendered.snapshot.counters,
     retained_events: rendered.snapshot.recent_events.length,
     benchmark_disabled: true, fixtures_visible: false,

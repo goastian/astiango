@@ -173,6 +173,18 @@ impl<'a, B: IndexBackend> LiveIndexSink<'a, B> {
 }
 
 impl<B: IndexBackend> crawler::DatumSink for LiveIndexSink<'_, B> {
+    async fn write_prepared(
+        &self,
+        page: crawler::pipeline::PreparedPage,
+    ) -> Result<(), crawler::Error> {
+        let result = match self.write(page.datum).await {
+            Ok(()) => self.checkpoint().await,
+            Err(error) => Err(error),
+        };
+        drop(page.body_lease);
+        drop(page.admission);
+        result
+    }
     async fn write(&self, crawl_datum: crawler::CrawlDatum) -> Result<(), crawler::Error> {
         self.pending.lock().await.push(crawl_datum);
         Ok(())
@@ -460,6 +472,42 @@ mod tests {
         assert!(sink.pending.lock().await.is_empty());
         sink.finish().await.unwrap();
         assert_eq!(*backend.acknowledged.lock().await, [1]);
+    }
+
+    #[tokio::test]
+    async fn prepared_live_pages_hold_admission_until_application_ack() {
+        struct DelayedIndex {
+            entered: tokio::sync::Notify,
+            release: tokio::sync::Notify,
+        }
+        impl IndexBackend for DelayedIndex {
+            async fn index(&self, pages: Vec<IndexableWebpage>) -> Result<()> {
+                assert_eq!(pages.len(), 1);
+                self.entered.notify_one();
+                self.release.notified().await;
+                Ok(())
+            }
+        }
+        let backend = DelayedIndex {
+            entered: Default::default(),
+            release: Default::default(),
+        };
+        let sink = LiveIndexSink::new(&backend);
+        let pipeline = crawler::pipeline::Pipeline::new(Default::default()).unwrap();
+        let mut page = crawler::pipeline::PreparedPage::unleased(datum(), None);
+        page.admission = Some(pipeline.admit(page.datum.body.len()).await.unwrap());
+        let work = sink.write_prepared(page);
+        tokio::pin!(work);
+        tokio::select! {
+            result = &mut work => panic!("page completed before ACK: {result:?}"),
+            _ = backend.entered.notified() => {}
+        }
+        assert_eq!(pipeline.stats().admission.items, 1);
+        backend.release.notify_one();
+        work.await.unwrap();
+        assert_eq!(pipeline.stats().admission.items, 0);
+        assert!(sink.pending.lock().await.is_empty());
+        pipeline.shutdown().await;
     }
 
     #[test]

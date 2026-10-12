@@ -69,7 +69,9 @@ impl Sitemap {
             let body = async {
                 let response = req.send().await?;
                 let body = self.client.body(response, BodyKind::Sitemap).await?;
-                Ok::<_, crate::crawler::Error>(parse_sitemap(&body))
+                self.client
+                    .parse_body(body, |text| parse_sitemap(text))
+                    .await
             }
             .await;
             self.client.sleep(SITEMAP_DELAY).await;

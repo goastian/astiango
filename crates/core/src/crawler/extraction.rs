@@ -26,7 +26,7 @@ pub struct ExtractionContext<'a> {
     pub requested_url: &'a Url,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CrawlExtraction {
     pub schema_version: u32,
     pub url: Url,

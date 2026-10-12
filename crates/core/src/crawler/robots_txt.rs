@@ -83,6 +83,7 @@ struct InnerRobotsTxtManager {
     last_prune: Arc<Mutex<std::time::Instant>>,
     transport: SharedTransport,
     body_reader: BodyReader,
+    pipeline: super::pipeline::Pipeline,
     cache_expiration: Duration,
     user_agent: String,
     min_crawl_delay: Duration,
@@ -92,7 +93,12 @@ struct InnerRobotsTxtManager {
 }
 
 impl InnerRobotsTxtManager {
-    fn new(config: &CrawlerConfig, transport: SharedTransport, body_reader: BodyReader) -> Self {
+    fn new(
+        config: &CrawlerConfig,
+        transport: SharedTransport,
+        body_reader: BodyReader,
+        pipeline: super::pipeline::Pipeline,
+    ) -> Self {
         let cache_expiration = Duration::from_secs(config.robots_txt_cache_sec);
         let user_agent = config.user_agent.token.clone();
         let min_crawl_delay = Duration::from_millis(config.min_crawl_delay_ms);
@@ -101,6 +107,7 @@ impl InnerRobotsTxtManager {
         Self {
             transport,
             body_reader,
+            pipeline,
             cache_expiration,
             last_prune: Arc::new(Mutex::new(std::time::Instant::now())),
             cache: DashMap::new(),
@@ -207,12 +214,18 @@ impl InnerRobotsTxtManager {
                     return Ok(Lookup::Unreachable);
                 };
                 let user_agent = self.user_agent.clone();
-                Ok(
-                    match panic::catch_unwind(|| robotstxt::Robots::parse(&user_agent, &body)) {
-                        Ok(Ok(robots)) => Lookup::Found(robots),
-                        _ => Lookup::Unreachable,
-                    },
-                )
+                self.pipeline.start_monitor();
+                Ok(self
+                    .pipeline
+                    .parse
+                    .run(body.len(), move || {
+                        match panic::catch_unwind(|| robotstxt::Robots::parse(&user_agent, &body)) {
+                            Ok(Ok(robots)) => Lookup::Found(robots),
+                            _ => Lookup::Unreachable,
+                        }
+                    })
+                    .await
+                    .unwrap_or(Lookup::Unreachable))
             }
             .await;
             self.sleep(self.min_crawl_delay).await;
@@ -337,8 +350,28 @@ impl RobotsTxtManager {
         transport: SharedTransport,
         body_reader: BodyReader,
     ) -> Self {
+        Self::with_pipeline_readers(
+            config,
+            transport,
+            body_reader,
+            super::pipeline::Pipeline::new(config.pipeline.clone())
+                .expect("invalid pipeline configuration"),
+        )
+    }
+
+    pub(crate) fn with_pipeline_readers(
+        config: &CrawlerConfig,
+        transport: SharedTransport,
+        body_reader: BodyReader,
+        pipeline: super::pipeline::Pipeline,
+    ) -> Self {
         Self {
-            inner: Arc::new(InnerRobotsTxtManager::new(config, transport, body_reader)),
+            inner: Arc::new(InnerRobotsTxtManager::new(
+                config,
+                transport,
+                body_reader,
+                pipeline,
+            )),
         }
     }
 
@@ -361,9 +394,25 @@ impl RobotsTxtManager {
         runtime: Arc<super::runtime::Runtime>,
         body_reader: BodyReader,
     ) -> Self {
+        Self::with_runtime_pipeline_reader(
+            config,
+            runtime,
+            body_reader,
+            super::pipeline::Pipeline::new(config.pipeline.clone())
+                .expect("invalid pipeline configuration"),
+        )
+    }
+
+    #[cfg(any(test, feature = "crawler-bench"))]
+    pub(crate) fn with_runtime_pipeline_reader(
+        config: &CrawlerConfig,
+        runtime: Arc<super::runtime::Runtime>,
+        body_reader: BodyReader,
+        pipeline: super::pipeline::Pipeline,
+    ) -> Self {
         let transport = SharedTransport::new(config, config.transport.clone())
             .expect("invalid crawler transport configuration");
-        let mut inner = InnerRobotsTxtManager::new(config, transport, body_reader);
+        let mut inner = InnerRobotsTxtManager::new(config, transport, body_reader, pipeline);
         inner.last_prune = Arc::new(Mutex::new(runtime.clock.now()));
         inner.runtime = Some(runtime);
         Self {

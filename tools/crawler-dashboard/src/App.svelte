@@ -7,6 +7,7 @@
   import TransportStatus from "./TransportStatus.svelte";
   import BodyStatus from "./BodyStatus.svelte";
   import ExtractionStatus from "./ExtractionStatus.svelte";
+  import PipelineStatus from "./PipelineStatus.svelte";
   import {
     buildHistoryBars,
     summarizeOutcomes,
@@ -683,6 +684,7 @@
     <TransportStatus stats={snapshot?.transport} readError={!!error} stale={stale && activeProcess} />
     <BodyStatus stats={snapshot?.body} readError={!!error} stale={stale && activeProcess} />
     <ExtractionStatus stats={snapshot?.extraction} readError={!!error} stale={stale && activeProcess} />
+    <PipelineStatus stats={snapshot?.pipeline} readError={!!error} stale={stale && activeProcess} />
     <div class="analysis-grid">
       <section class="panel issues-panel" aria-labelledby="issues-heading">
         <div class="card-heading">

@@ -40,6 +40,9 @@ pub use worker::JobExecutor;
 pub mod body;
 pub mod coordinator;
 pub mod extraction;
+pub mod pipeline;
+#[cfg(feature = "crawler-bench")]
+pub mod pipeline_benchmark;
 pub mod robots_txt;
 pub mod router;
 pub use router::Router;
@@ -72,6 +75,8 @@ pub const MAX_CONTENT_LENGTH: usize = 32 * 1024 * 1024; // 32 MB
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error(transparent)]
+    Pipeline(#[from] pipeline::PipelineError),
     #[error(transparent)]
     Body(#[from] body::BodyError),
 
@@ -297,14 +302,18 @@ pub struct CrawlDatum {
 pub struct Crawler {
     writer: Arc<WarcWriter>,
     handles: tokio::task::JoinSet<Result<()>>,
+    pipeline: pipeline::Pipeline,
 }
 
 impl Crawler {
     pub async fn new(config: CrawlerConfig) -> Result<Self> {
-        let writer = Arc::new(WarcWriter::new(config.s3.clone()));
         let mut handles = tokio::task::JoinSet::new();
         let mut router_hosts = Vec::new();
         let client = RobotClient::new(&config)?;
+        let writer = Arc::new(WarcWriter::with_pipeline(
+            config.s3.clone(),
+            client.pipeline().clone(),
+        ));
 
         for host in &config.router_hosts {
             router_hosts.push(
@@ -324,7 +333,13 @@ impl Crawler {
             handles.spawn(worker.run());
         }
 
-        Ok(Self { writer, handles })
+        let pipeline = client.pipeline().clone();
+        pipeline.start_monitor();
+        Ok(Self {
+            writer,
+            handles,
+            pipeline,
+        })
     }
 
     pub async fn run(mut self) -> Result<()> {
@@ -341,7 +356,9 @@ impl Crawler {
                 self.handles.abort_all();
             }
         }
-        self.writer.finish().await?;
+        let finished = self.writer.finish().await;
+        self.pipeline.shutdown().await;
+        finished?;
         failure.map_or(Ok(()), Err)
     }
 }
@@ -356,6 +373,19 @@ pub trait DatumSink: Send + Sync {
         _extraction: Option<&extraction::CrawlExtraction>,
     ) -> impl Future<Output = Result<()>> + Send {
         self.write(datum)
+    }
+    fn write_prepared(
+        &self,
+        page: pipeline::PreparedPage,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async move {
+            let result = self
+                .write_extracted(page.datum, page.extraction.as_ref())
+                .await;
+            drop(page.body_lease);
+            drop(page.admission);
+            result
+        }
     }
     /// Confirm all preceding writes; the default requires write itself to be durable.
     fn checkpoint(&self) -> impl Future<Output = Result<()>> + Send {

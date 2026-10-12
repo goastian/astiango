@@ -128,6 +128,7 @@ export interface BodyStats {
   max_reserved_bytes: number;
 }
 export interface Snapshot {
+  pipeline?: PipelineStats;
   extraction?: ExtractionStats;
   schema_version: number;
   telemetry?: ObserverStats;
@@ -167,6 +168,21 @@ export interface Snapshot {
     current_file: string | null;
   };
   history: { at: string; downloaded: number; failed: number; bytes: number }[];
+}
+
+export interface StageStats {
+  workers: number; max_items: number; max_bytes: number;
+  items: number; bytes: number; running: number; queued: number;
+  peak_items: number; peak_bytes: number; peak_running: number; peak_queued: number;
+  submitted: number; completed: number; cancelled: number; failed: number;
+  admission_waits: number; admission_wait_us: number; queue_wait_us: number; work_us: number;
+  queue_timeouts: number; input_rejections: number;
+}
+export interface PipelineStats {
+  admission: StageStats; parse: StageStats; network_setup: StageStats; storage: StageStats; control: StageStats; batch_queue: StageStats;
+  accepting: boolean; runtime_lag_samples: number; runtime_lag_window_samples: number;
+  runtime_lag_p99_us: number; runtime_lag_max_us: number; runtime_sample_interval_ms: number;
+  batch_segment_bytes: number; batch_segment_items: number;
 }
 
 export interface ExtractionStats {

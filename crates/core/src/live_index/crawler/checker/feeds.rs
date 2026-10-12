@@ -58,7 +58,12 @@ impl Checker for Feeds {
                 continue;
             };
 
-            let Ok(parsed_feed) = parse(&text, feed.kind) else {
+            let kind = feed.kind;
+            let Ok(Ok(parsed_feed)) = self
+                .client
+                .parse_body(text, move |text| parse(text, kind))
+                .await
+            else {
                 continue;
             };
 
@@ -66,7 +71,6 @@ impl Checker for Feeds {
                 urls.push(CrawlableUrl::from(link));
             }
 
-            drop(text);
             self.client.sleep(CRAWL_DELAY).await;
         }
 

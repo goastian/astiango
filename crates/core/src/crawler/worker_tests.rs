@@ -114,6 +114,7 @@ struct MemorySink {
     body_reader: Mutex<Option<crate::crawler::body::BodyReader>>,
     data: Mutex<Vec<CrawlDatum>>,
     write_error: bool,
+    queue_error: bool,
     checkpoint_error: bool,
     checkpoints: std::sync::atomic::AtomicUsize,
     cancel_after_write: Option<Arc<AtomicBool>>,
@@ -136,6 +137,9 @@ impl DatumSink for MemorySink {
                 reader.stats().active_bodies > 0,
                 "sink must retain the body reservation"
             );
+        }
+        if self.queue_error {
+            return Err(super::super::pipeline::PipelineError::QueueTimeout.into());
         }
         if self.write_error {
             return Err(anyhow!("injected disk failure").into());
@@ -500,6 +504,22 @@ async fn storage_write_failure_stops_work_and_defers_unattempted_pages() {
         .requests
         .iter()
         .any(|url| url.ends_with("/remaining")));
+}
+
+#[tokio::test]
+async fn pipeline_backpressure_timeout_is_deferred_without_becoming_a_disk_failure() {
+    for observed in [false, true] {
+        let sink = Arc::new(MemorySink {
+            queue_error: true,
+            ..Default::default()
+        });
+        let result = run(&["/ok"], observed, sink, None).await;
+        assert!(!result.outcome.is_success());
+        assert_ne!(result.outcome.status, JobStatus::StorageFailed);
+        assert!(matches!(&result.outcome.urls[0].outcome,
+            FetchOutcome::Deferred { reason, .. } if reason == "pipeline_queue_timeout"));
+        assert_eq!(result.outcome.counters.useful_pages, 0);
+    }
 }
 
 #[tokio::test]

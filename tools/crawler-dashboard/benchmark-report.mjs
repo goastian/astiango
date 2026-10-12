@@ -52,6 +52,8 @@ function signedDistribution(value) {
 }
 
 export function isBenchmarkReport(report) {
+  if (record(report) && report.kind === "crawler_pipeline_benchmark")
+    return isPipelineBenchmarkReport(report);
   if (record(report) && report.kind === "crawler_extraction_benchmark")
     return isExtractionBenchmarkReport(report);
   if (record(report) && report.kind === "crawler_body_benchmark")
@@ -135,6 +137,31 @@ export function isBenchmarkReport(report) {
   )
     return false;
   return true;
+}
+
+function isPipelineBenchmarkReport(report) {
+  if (report.schema_version !== 1 || typeof report.generated_at !== "string" ||
+      !Number.isFinite(Date.parse(report.generated_at)) || !record(report.configuration) ||
+      report.configuration.acceptance_profile !== "c07" || !record(report.acceptance) ||
+      typeof report.acceptance.passed !== "boolean") return false;
+  if (!Array.isArray(report.summaries) || !report.summaries.length ||
+      !report.summaries.every((row) => record(row) && typeof row.scenario === "string" && row.scenario &&
+        ["legacy", "bounded"].includes(row.mode) && row.repetitions === 3 && count(row.origins) && row.origins > 0 &&
+        record(row.metrics) && ["pages_per_second", "runtime_lag_p99_ms", "rss_peak_bytes", "cpu_ms_per_page", "controller_delay_ms"].every((key) => distribution(row.metrics[key])) &&
+        Object.values(row.metrics).every(distribution))) return false;
+  if (new Set(report.summaries.map((r) => `${r.scenario}:${r.mode}`)).size !== report.summaries.length) return false;
+  if (!Array.isArray(report.comparisons) || !report.comparisons.length ||
+      !report.comparisons.every((row) => record(row) && typeof row.scenario === "string" && typeof row.equivalent === "boolean" &&
+        signedDistribution(row.throughput_gain_pct) && signedDistribution(row.lag_reduction_pct))) return false;
+  if (!Array.isArray(report.runs) || !report.runs.every((run) => record(run) && typeof run.scenario === "string" &&
+      ["legacy", "bounded"].includes(run.mode) && [1, 2, 3].includes(run.repetition) && count(run.pages) &&
+      ["pages_per_second", "runtime_lag_p99_ms", "rss_peak_bytes", "controller_delay_ms"].every((key) => finite(run[key]) && run[key] >= 0) &&
+      record(run.server) && count(run.server.requests) && record(run.pipeline) &&
+      ["admission", "parse", "network_setup", "storage", "control", "batch_queue"].every((key) => record(run.pipeline[key]) &&
+        ["items", "bytes", "running", "queued", "peak_items", "peak_bytes", "peak_running", "max_items", "max_bytes", "workers", "admission_waits"].every((field) => count(run.pipeline[key][field]))))) return false;
+  const identities = report.runs.map((r) => `${r.scenario}:${r.mode}:${r.repetition}`);
+  return new Set(identities).size === identities.length && report.summaries.every((s) =>
+    [1, 2, 3].every((n) => identities.includes(`${s.scenario}:${s.mode}:${n}`)));
 }
 
 function transportIdentity(value) {

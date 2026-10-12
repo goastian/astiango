@@ -48,16 +48,18 @@ impl Checker for Frontpage {
         let res = self.client.get(self.url.clone()).await?.send().await?;
         let body = self.client.body(res, BodyKind::Html).await?;
 
-        let page = Html::parse(&body, self.url.as_str())?;
-
-        let urls = page
-            .anchor_links()
-            .into_iter()
-            .filter(|link| matches!(link.destination.scheme(), "http" | "https"))
-            .map(|link| CrawlableUrl::from(link.destination))
-            .collect::<Vec<_>>();
-
-        Ok(urls)
+        let url = self.url.clone();
+        self.client
+            .parse_body(body, move |text| {
+                let page = Html::parse(text, url.as_str())?;
+                Ok(page
+                    .anchor_links()
+                    .into_iter()
+                    .filter(|link| matches!(link.destination.scheme(), "http" | "https"))
+                    .map(|link| CrawlableUrl::from(link.destination))
+                    .collect::<Vec<_>>())
+            })
+            .await?
     }
 
     fn update_last_check(&mut self) {

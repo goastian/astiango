@@ -246,6 +246,8 @@ struct Projection {
     body: Option<super::body::BodyStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     extraction: Option<super::extraction::ExtractionStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pipeline: Option<super::pipeline::PipelineStats>,
 }
 
 type Publisher = dyn Fn(&Path, &Projection, &IoCounters, bool) -> anyhow::Result<()> + Send + Sync;
@@ -262,6 +264,7 @@ struct Shared {
     transport: Mutex<Option<super::transport::SharedTransport>>,
     body: Mutex<Option<super::body::BodyReader>>,
     extraction: Mutex<Option<super::extraction::Extractor>>,
+    pipeline: Mutex<Option<super::pipeline::Pipeline>>,
 }
 
 pub struct Observer {
@@ -350,6 +353,7 @@ impl Observer {
             transport: Mutex::new(None),
             body: Mutex::new(None),
             extraction: Mutex::new(None),
+            pipeline: Mutex::new(None),
         });
         let projector = if legacy {
             publish(&shared, true);
@@ -387,6 +391,10 @@ impl Observer {
 
     pub(super) fn observe_extraction(&self, extractor: super::extraction::Extractor) {
         *self.shared.extraction.lock().unwrap() = Some(extractor);
+        self.heartbeat();
+    }
+    pub(super) fn observe_pipeline(&self, pipeline: super::pipeline::Pipeline) {
+        *self.shared.pipeline.lock().unwrap() = Some(pipeline);
         self.heartbeat();
     }
 
@@ -810,6 +818,7 @@ fn publish(shared: &Shared, legacy: bool) {
                 transport: None,
                 body: None,
                 extraction: None,
+                pipeline: None,
             },
             version,
             dirty_since,
@@ -821,6 +830,8 @@ fn publish(shared: &Shared, legacy: bool) {
     projection.body = body.as_ref().map(|body| body.stats());
     let extraction = shared.extraction.lock().unwrap().clone();
     projection.extraction = extraction.as_ref().map(|extractor| extractor.stats());
+    let pipeline = shared.pipeline.lock().unwrap().clone();
+    projection.pipeline = pipeline.as_ref().map(|pipeline| pipeline.stats());
     let metrics = shared.metrics.lock().unwrap().clone();
     let _timer = super::runtime::StageTimer::optional(metrics.as_ref(), "observer_projection");
     let result = (shared.publisher)(&shared.path, &projection, &shared.io, legacy);
