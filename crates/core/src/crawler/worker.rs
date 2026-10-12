@@ -37,24 +37,19 @@ use crate::{
     distributed::{retry_strategy::ExponentialBackoff, sonic},
     entrypoint::crawler::router::{NewJob, RouterService},
     sitemap::{parse_sitemap, SitemapEntry},
-    webpage::{url_ext::UrlExt, Html},
+    webpage::url_ext::UrlExt,
 };
 
 use super::{
     body::BodyKind,
+    extraction::ExtractionContext,
     outcome::{FetchOutcome, JobOutcome, JobStatus, UrlOutcome},
     robot_client::RobotClient,
     robots_txt::RobotAccess,
     wander_prioritiser::WanderPrioritiser,
     CrawlDatum, DatumSink, Domain, Error, Result, RetrieableUrl, Site, WarcWriter, WeightedUrl,
-    WorkerJob, MAX_OUTGOING_URLS_PER_PAGE,
+    WorkerJob,
 };
-
-const IGNORED_EXTENSIONS: [&str; 27] = [
-    ".pdf", ".jpg", ".zip", ".png", ".css", ".js", ".json", ".jsonp", ".woff2", ".woff", ".ttf",
-    ".svg", ".gif", ".jpeg", ".ico", ".mp4", ".mp3", ".avi", ".mov", ".mpeg", ".webm", ".wav",
-    ".flac", ".aac", ".ogg", ".m4a", ".m4v",
-];
 
 const INITIAL_WANDER_STEPS: u64 = 4;
 
@@ -635,26 +630,6 @@ impl<S: DatumSink> JobExecutor<S> {
         self.politeness_factor = self.politeness_factor.saturating_sub(1);
     }
 
-    fn new_urls(&self, html: &Html) -> Vec<Url> {
-        html.anchor_links()
-            .into_iter()
-            .map(|link| link.destination)
-            .filter(|url| matches!(url.scheme(), "http" | "https"))
-            .map(|mut url| {
-                url.normalize_in_place();
-                url
-            })
-            .filter(|url| url.as_str().len() <= MAX_URL_LEN_BYTES)
-            .filter(|url| {
-                IGNORED_EXTENSIONS
-                    .iter()
-                    .all(|ext| !url.as_str().ends_with(ext))
-            })
-            .filter(|url| !self.crawled_urls.contains(url))
-            .unique()
-            .collect()
-    }
-
     async fn process_url(
         &mut self,
         mut url: Url,
@@ -823,30 +798,35 @@ impl<S: DatumSink> JobExecutor<S> {
                 fetch_time_ms: elapsed.as_millis() as u64,
                 date: self.client.utc_now(),
             };
+            let extraction = {
+                let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "parse");
+                self.client
+                    .extractor()
+                    .parse(
+                        &datum.body,
+                        &datum.url,
+                        ExtractionContext {
+                            domain: &self.job.domain,
+                            crawled_urls: &self.crawled_urls,
+                            requested_url: &url,
+                        },
+                    )
+                    .ok()
+            };
             {
                 let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "sink");
-                self.writer.write(datum.clone()).await.map_err(|error| {
-                    FetchOutcome::StorageFailure {
+                self.writer
+                    .write_extracted(datum, extraction.as_ref())
+                    .await
+                    .map_err(|error| FetchOutcome::StorageFailure {
                         message: error.to_string(),
-                    }
-                })?;
+                    })?;
             }
             self.crawled_urls.insert(url.clone());
             self.crawled_urls.insert(fetched_url.clone());
-            let new_urls = {
-                let _timer = super::runtime::StageTimer::optional(self.client.metrics(), "parse");
-                Html::parse(&datum.body, datum.url.as_str())
-                    .ok()
-                    .map(|html| {
-                        self.new_urls(&html)
-                            .into_iter()
-                            .filter(|new_url| Domain::from(new_url) == self.job.domain)
-                            .take(MAX_OUTGOING_URLS_PER_PAGE)
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            };
-            drop(datum);
+            let new_urls = extraction
+                .map(|value| value.internal_urls)
+                .unwrap_or_default();
             drop(body_lease);
             if !self.has_gotten_429_response {
                 self.decrease_politeness();

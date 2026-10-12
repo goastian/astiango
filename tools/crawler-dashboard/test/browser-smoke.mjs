@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createDashboardServer } from "../server.mjs";
 import { transportReport } from "./transport-report.mjs";
 import { bodyReport, bodyStats } from "./body-fixture.mjs";
+import { extractionReport, extractionStats } from "./extraction-fixture.mjs";
 // Reuse the repository's existing browser-test dependency; no network install.
 const { chromium } = await import(
   process.env.CRAWLER_PLAYWRIGHT_MODULE ||
@@ -175,6 +176,7 @@ try {
       assert.equal(await page.locator(".telemetry-panel").count(), 0);
       assert.equal(await page.locator(".transport-panel").count(), 0);
       assert.equal(await page.locator(".body-panel").count(), 0);
+      assert.equal(await page.locator(".extraction-panel").count(), 0);
     } else {
       await page.getByRole("link", { name: "Banco C01 · local" }).click();
       await page.getByText("Aceptación verificada", { exact: true }).waitFor();
@@ -453,6 +455,30 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
   if (screenshotDirectory) await page.locator(".body-panel").screenshot({ path: join(screenshotDirectory, "c05-body-mobile.png") });
   const c03Report = structuredClone(report);
+  const c06Snapshot = structuredClone(c05Snapshot);
+  c06Snapshot.run_id = "c06-single-extraction";
+  c06Snapshot.extraction = extractionStats();
+  c06Snapshot.telemetry.last_published_at = new Date().toISOString();
+  await writeFile(statePath, JSON.stringify(c06Snapshot));
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".page-footer").filter({ hasText: c06Snapshot.run_id }).waitFor();
+  await page.locator(".extraction-panel > summary").click();
+  const extractionValue = (label) => page.locator(".extraction-groups dl > div")
+    .filter({ has: page.getByText(label, { exact: true }) }).locator("dd");
+  for (const [label, value] of [["Documentos procesados", "10"], ["DOM por documento", "1"],
+    ["CPU por documento", "2 ms"], ["Tiempo por documento", "2,5 ms"], ["Límite por proyección", "512"]]) {
+    assert.equal(await extractionValue(label).textContent(), value);
+  }
+  await writeFile(statePath, "{broken");
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".extraction-notice").waitFor();
+  assert.equal(await extractionValue("Documentos procesados").textContent(), "10");
+  assert.equal((await page.locator(".pages-panel .metric-value strong").textContent()).trim(), "91");
+  await writeFile(statePath, JSON.stringify(c06Snapshot));
+  await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
+  await page.locator(".extraction-notice").waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+  if (screenshotDirectory) await page.locator(".extraction-panel").screenshot({ path: join(screenshotDirectory, "c06-extraction-mobile.png") });
   c03Report.configuration.acceptance_profile = "c03";
   c03Report.configuration.observer_modes = ["legacy_sync", "async"];
   c03Report.scenarios.forEach((scenario, index) => {
@@ -521,10 +547,25 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
   if (screenshotDirectory) await page.locator("#banco-c01").screenshot({ path: join(screenshotDirectory, "c05-benchmark-mobile.png") });
+  await writeFile(benchmarkPath, JSON.stringify(extractionReport()));
+  await page.getByRole("button", { name: "Actualizar banco", exact: true }).click();
+  await page.getByRole("link", { name: "Banco C06 · local", exact: true }).waitFor();
+  const extractionTable = page.getByRole("table", { name: "Resultados de extracción C06", exact: true });
+  assert.equal(await extractionTable.locator("tbody tr").count(), 2);
+  const extractionRuns = page.getByRole("table", { name: "Repeticiones de extracción C06", exact: true });
+  assert.equal(await extractionRuns.locator("tbody tr").count(), 6);
+  assert.equal((await page.locator(".pages-panel .metric-value strong").textContent()).trim(), "91");
+  const c06Download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Descargar C06", exact: true }).click();
+  assert.match((await c06Download).suggestedFilename(), /^crawler-c06-/);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
   assert.deepEqual(errors, []);
   console.log(
     JSON.stringify({
       passed: true,
+      extractionSharedCountersAndCpu: true,
+      extractionReadFailureKeepsCounters: true,
+      extractionReportAndDownload: true,
       productionCounter: 91,
       benchmarkRows: 2,
       benchmarkVisibleWithoutProduction: true,

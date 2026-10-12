@@ -148,6 +148,7 @@ pub struct RobotClient {
     robots_txt_manager: RobotsTxtManager,
     transport: SharedTransport,
     body_reader: BodyReader,
+    extractor: super::extraction::Extractor,
     config: Arc<CrawlerConfig>,
     runtime: Option<Arc<super::runtime::Runtime>>,
 }
@@ -165,6 +166,7 @@ impl RobotClient {
             ),
             transport,
             body_reader,
+            extractor: super::extraction::Extractor::default(),
             config: Arc::new(config.clone()),
         })
     }
@@ -194,6 +196,7 @@ impl RobotClient {
                 body_reader.clone(),
             ),
             body_reader,
+            extractor: super::extraction::Extractor::default(),
             config: Arc::new(config.clone()),
             runtime: Some(runtime),
         })
@@ -218,6 +221,7 @@ impl RobotClient {
             ),
             transport,
             body_reader,
+            extractor: super::extraction::Extractor::default(),
             config: Arc::new(config.clone()),
             runtime: None,
         }
@@ -244,6 +248,10 @@ impl RobotClient {
 
     pub(crate) fn body_reader(&self) -> &BodyReader {
         &self.body_reader
+    }
+
+    pub(crate) fn extractor(&self) -> &super::extraction::Extractor {
+        &self.extractor
     }
 
     pub(crate) async fn body(

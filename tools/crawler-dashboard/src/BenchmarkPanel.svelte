@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import TransportBenchmarkPanel from "./TransportBenchmarkPanel.svelte";
   import BodyBenchmarkPanel from "./BodyBenchmarkPanel.svelte";
+  import ExtractionBenchmarkPanel from "./ExtractionBenchmarkPanel.svelte";
   import type {
     BenchmarkReport,
     Distribution,
@@ -9,6 +10,7 @@
     BenchmarkRun,
     TransportBenchmarkReport,
     BodyBenchmarkReport,
+    ExtractionBenchmarkReport,
   } from "./benchmark-types";
 
   let { onavailability }: { onavailability: (available: boolean, profile?: string) => void } =
@@ -16,13 +18,14 @@
   let report = $state<BenchmarkReport | null>(null);
   let transportReport = $state<TransportBenchmarkReport | null>(null);
   let bodyReport = $state<BodyBenchmarkReport | null>(null);
+  let extractionReport = $state<ExtractionBenchmarkReport | null>(null);
   let enabled = $state(false);
   let error = $state("");
   let loading = $state(false);
   let selectedIndex = $state(0);
   let controller: AbortController | null = null;
   const selected = $derived(report?.scenarios[selectedIndex]);
-  const profile = $derived(bodyReport ? "C05" : transportReport ? "C04" : report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
+  const profile = $derived(extractionReport ? "C06" : bodyReport ? "C05" : transportReport ? "C04" : report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
   const formatter = new Intl.NumberFormat("es-CO", {
     maximumFractionDigits: 2,
   });
@@ -137,12 +140,19 @@
         report = null;
         transportReport = null;
         bodyReport = null;
+        extractionReport = null;
         error = "";
         return;
       }
       if (!response.ok)
         throw new Error(data.error || "No se pudo consultar el informe del banco.");
-      if (data.report.kind === "crawler_body_benchmark") {
+      extractionReport = null;
+      if (data.report.kind === "crawler_extraction_benchmark") {
+        extractionReport = data.report;
+        bodyReport = null;
+        transportReport = null;
+        report = null;
+      } else if (data.report.kind === "crawler_body_benchmark") {
         bodyReport = data.report;
         transportReport = null;
         report = null;
@@ -171,7 +181,7 @@
     }
   }
   function download() {
-    const currentReport = bodyReport ?? transportReport ?? report;
+    const currentReport = extractionReport ?? bodyReport ?? transportReport ?? report;
     if (!currentReport) return;
     const url = URL.createObjectURL(
       new Blob([JSON.stringify(currentReport, null, 2)], { type: "application/json" }),
@@ -205,24 +215,26 @@
         <span class="benchmark-eyebrow">BANCO LOCAL · {profile}</span>
         <h2 id="benchmark-heading">Capacidad y recursos</h2>
         <p>
-          Pruebas controladas en loopback. Sus peticiones y páginas pertenecen
-          exclusivamente a este informe.
+          {#if extractionReport}Pruebas de extracción con archivos locales, sin solicitudes de red.
+          {:else}Pruebas controladas en loopback. Sus peticiones y páginas pertenecen exclusivamente a este informe.{/if}
         </p>
       </div>
       <div class="benchmark-actions">
         <button class="button" onclick={refresh} disabled={loading}
           >Actualizar banco</button
         >
-        <button class="button" onclick={download} disabled={!report && !transportReport && !bodyReport}
+        <button class="button" onclick={download} disabled={!report && !transportReport && !bodyReport && !extractionReport}
           >Descargar {profile}</button
         >
       </div>
     </div>
     {#if error}<p class="benchmark-error" role="status">
         {error}
-        {report || transportReport || bodyReport ? "Se conserva el último informe leído." : ""}
+        {report || transportReport || bodyReport || extractionReport ? "Se conserva el último informe leído." : ""}
       </p>{/if}
-    {#if bodyReport}
+    {#if extractionReport}
+      <ExtractionBenchmarkPanel report={extractionReport} />
+    {:else if bodyReport}
       <BodyBenchmarkPanel report={bodyReport} />
     {:else if transportReport}
       <TransportBenchmarkPanel report={transportReport} />

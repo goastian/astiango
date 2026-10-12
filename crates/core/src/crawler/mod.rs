@@ -39,6 +39,7 @@ pub use worker::JobExecutor;
 
 pub mod body;
 pub mod coordinator;
+pub mod extraction;
 pub mod robots_txt;
 pub mod router;
 pub use router::Router;
@@ -46,6 +47,8 @@ pub use router::Router;
 pub mod benchmark;
 #[cfg(feature = "crawler-bench")]
 pub mod body_benchmark;
+#[cfg(feature = "crawler-bench")]
+pub mod extraction_benchmark;
 mod file_queue;
 pub mod local;
 mod observer;
@@ -345,6 +348,15 @@ impl Crawler {
 
 pub trait DatumSink: Send + Sync {
     fn write(&self, crawl_datum: CrawlDatum) -> impl Future<Output = Result<()>> + Send;
+    /// Reuse the ephemeral extraction when the sink also discovers links.
+    /// Existing sinks retain their original contract and durable acknowledgements.
+    fn write_extracted(
+        &self,
+        datum: CrawlDatum,
+        _extraction: Option<&extraction::CrawlExtraction>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        self.write(datum)
+    }
     /// Confirm all preceding writes; the default requires write itself to be durable.
     fn checkpoint(&self) -> impl Future<Output = Result<()>> + Send {
         async { Ok(()) }

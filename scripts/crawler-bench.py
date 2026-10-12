@@ -241,7 +241,7 @@ def scenario_paths(bodies, profile="c01"):
                        ["/large", "/oversized", "/error/404", "/error/500", "/error/429",
                         "/redirect/relative", "/redirect/loop", "/redirect/external", "/blocked"],
     }
-    if profile == "c02":
+    if profile in ("c02", "c03"):
         paths["adversarial"].remove("/error/429")
         paths["adversarial"].append("/error/429")
     return paths
@@ -263,7 +263,7 @@ def observer_equivalent(off, on):
     )
 
 
-def explicit_outcomes_verified(run):
+def explicit_outcomes_verified(run, paths=None):
     jobs = run.get("job_outcomes")
     policy = run.get("crawl_policy", {})
     if not isinstance(jobs, dict) or set(jobs) != set(run["requests_by_origin"]):
@@ -271,7 +271,9 @@ def explicit_outcomes_verified(run):
     if policy.get("observer_controls_behavior") is not False or policy.get("network_policy") != "public_only":
         return False
     durable = attempts = 0
-    for job in jobs.values():
+    for host, job in jobs.items():
+        if paths is not None and Counter(entry["url"] for entry in job["urls"]) != Counter(f"http://{host}{path}" for path in paths):
+            return False
         kinds = [entry["outcome"]["kind"] for entry in job["urls"]]
         if not set(kinds) <= {"durable_success", "skipped", "permanent_failure", "deferred"}:
             return False
@@ -285,6 +287,40 @@ def explicit_outcomes_verified(run):
         attempts += job["counters"]["page_http_attempts"]
     return (durable == run["saved_pages"] and
             attempts + run["requests_by_path"].get("/robots.txt", 0) == run["client_requests"])
+
+
+def observer_counters_verified(run):
+    counters = run.get("observer_counters")
+    stats = run.get("observer_stats", {})
+    if not isinstance(counters, dict) or stats.get("pending_updates") != 0 or stats.get("errors") != 0:
+        return False
+    if not all(isinstance(stats.get(key), (int, float)) and stats[key] > 0
+               for key in ("updates", "snapshot_writes", "write_calls", "bytes_written")):
+        return False
+    jobs = run["job_outcomes"].values()
+    outcomes = Counter(entry["outcome"]["kind"] for job in jobs for entry in job["urls"])
+    expected = {"downloaded": run["saved_pages"], "useful_pages": run["saved_pages"], "bytes": run["saved_bytes"],
+                "page_http_attempts": sum(job["counters"]["page_http_attempts"] for job in jobs),
+                "redirect_hops": sum(job["counters"]["redirect_hops"] for job in jobs),
+                "failed": outcomes["permanent_failure"], "skipped": outcomes["skipped"],
+                "deferred": outcomes["deferred"], "cancelled": outcomes["cancelled"],
+                "storage_failed": outcomes["storage_failure"]}
+    return all(counters.get(key) == value for key, value in expected.items())
+
+
+def observer_write_reductions(legacy, asynchronous):
+    baseline = {run["repetition"]: run for run in legacy}
+    candidate = {run["repetition"]: run for run in asynchronous}
+    raw, normalized = [], []
+    for repetition, original in baseline.items():
+        before, after = original["observer_stats"], candidate[repetition]["observer_stats"]
+        if min(before["write_calls"], before["updates"], after["updates"]) <= 0:
+            raise ValueError("C03 requires positive measured writes and updates")
+        raw.append(100 * (1 - after["write_calls"] / before["write_calls"]))
+        normalized.append(100 * (1 - (after["write_calls"] / after["updates"]) /
+                                (before["write_calls"] / before["updates"])))
+    return {"write_calls_reduction_pct": distribution(raw),
+            "writes_per_update_reduction_pct": distribution(normalized)}
 
 
 def code_version():
@@ -336,6 +372,12 @@ def summarize(name, origins, observer, runs):
         metrics[key] = distribution([run.get("resources_io", run["resources"]["sampled_peak"]).get(key, 0) for run in runs])
     for key in ("threads", "fds"):
         metrics[f"{key}_peak"] = distribution([run["resources"]["sampled_peak"].get(key, 0) for run in runs])
+    if runs and all(isinstance(run.get("observer_stats"), dict) for run in runs):
+        metrics["observer_stats"] = {
+            key: distribution([run["observer_stats"][key] for run in runs])
+            for key in ("updates", "events_total", "events_dropped", "snapshot_writes", "write_calls",
+                        "bytes_written", "errors", "max_publish_latency_ms")
+        }
     return {"name": name, "origins": origins, "observer": observer, "repetitions": len(runs),
             "metrics": metrics, "requests_match": all(run["requests_match"] for run in runs), "runs": runs}
 
@@ -357,27 +399,38 @@ def markdown_report(report):
              "|---|---:|---|---:|---:|---:|---:|---:|---|"]
     for row in report["scenarios"]:
         metric = row["metrics"]
-        lines.append(f"| {row['name']} | {row['origins']} | {'sí' if row['observer'] else 'no'} | "
+        mode = row.get("observer_mode", "sí" if row["observer"] else "no")
+        lines.append(f"| {row['name']} | {row['origins']} | {mode} | "
                      f"{metric['duration_ms']['median']:.2f} | {metric['duration_ms']['mad']:.2f} | "
                      f"{metric['cpu_seconds']['median']:.3f} | {metric['rss_peak_bytes']['median']/1048576:.1f} | "
                      f"{metric['requests']['median']:g} | {'sí' if all(r.get('warc_verified') for r in row['runs']) else 'no'} |")
     comparison_note = (
         "C02 compara solicitudes, decisiones, páginas y bytes por repetición con y sin observador. Las pruebas Rust verifican las pausas permitidas con reloj inyectado; el tiempo de pared real puede variar."
         if profile == "c02" else
+        "C03 cuantifica escrituras reales y latencia de publicación del observador; los tiempos conservan su contexto de solicitudes y resultados por repetición."
+        if profile == "c03" else
         "La matriz C01 mide capacidad. Comparar tiempos requiere revisar la igualdad de solicitudes y resultados; el perfil C02 verifica esa equivalencia explícitamente."
     )
     lines += ["", "Las etapas concurrentes se acumulan por tarea y no suman el tiempo de pared. HTTP excluye TLS y DNS público.",
               comparison_note,
               "El JSON conserva cada repetición, contadores del servidor, configuración, recursos y rangos completos.", ""]
-    if profile == "c02":
-        lines += ["El perfil C02 sitúa HTTP 429 al final del escenario adversarial para ejercer redirects y robots antes del aplazamiento. El corpus HTML y los límites permanecen iguales.", ""]
+    if profile in ("c02", "c03"):
+        lines += [f"El perfil {profile.upper()} sitúa HTTP 429 al final del escenario adversarial para ejercer redirects y robots antes del aplazamiento. El corpus HTML y los límites permanecen iguales.", ""]
+    if profile == "c03":
+        lines += ["C03 compara legacy_sync y async sobre la misma compilación. Se exige al menos 90% de reducción tanto de llamadas reales a File::write como de llamadas por actualización, en cada repetición. Se exige equivalencia de decisiones en dos orígenes. Las diferencias bajo presión en muchos orígenes se conservan y no se presentan como trabajo equivalente.", "",
+                  "| Escenario | Orígenes | Reducción llamadas/actualización (%) | MAD | Mínimo | Solicitudes/resultados iguales |",
+                  "|---|---:|---:|---:|---:|---|"]
+        for comparison in report["comparisons"]:
+            reduction = comparison["writes_per_update_reduction_pct"]
+            lines.append(f"| {comparison['name']} | {comparison['origins']} | {reduction['median']:.4f} | {reduction['mad']:.4f} | {reduction['min']:.4f} | {'sí' if comparison['behavior_equivalent'] else 'no'} |")
+        lines += ["", "Las estadísticas del observador incluyen registro inicial de orígenes y flush final. Los recursos del proceso conservan el alcance temporal del banco. Latencia máxima de publicación permitida: 5.000 ms.", ""]
     return "\n".join(lines)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--acceptance-profile", choices=["c01", "c02"], default="c01")
+    parser.add_argument("--acceptance-profile", choices=["c01", "c02", "c03"], default="c01")
     parser.add_argument("--origins", type=int, nargs="+")
     parser.add_argument("--scenarios", nargs="+", choices=["balanced", "slow", "adversarial"],
                         default=["balanced", "slow", "adversarial"])
@@ -426,12 +479,21 @@ def main():
                                             "total_bytes": disk.f_blocks * disk.f_frsize,
                                             "available_bytes_before": disk.f_bavail * disk.f_frsize}},
               "scenarios": [], "comparisons": [], "acceptance": {"passed": False}}
+    modes = {"legacy_sync": True, "async": True} if args.acceptance_profile == "c03" else {"off": False, "on": True}
+    if args.acceptance_profile == "c03":
+        report["configuration"].update(
+            observer_modes=list(modes), observer_stats_scope="entire observer lifetime, including registration and final flush",
+            observer_write_reduction_min_pct=90, observer_max_publish_latency_ms=5000,
+            observer_normalization="actual File::write calls divided by business updates",
+        )
     for name in args.scenarios:
         for count in args.origins:
-            groups = {False: [], True: []}
+            groups = {mode: [] for mode in modes}
             for repetition in range(args.repetitions):
-                for observer in ([False, True] if repetition % 2 == 0 else [True, False]):
-                    label = f"{name}-{count}-{'on' if observer else 'off'}-{repetition + 1}"
+                order = list(modes) if repetition % 2 == 0 else list(reversed(modes))
+                for mode in order:
+                    observer = modes[mode]
+                    label = f"{name}-{count}-{mode}-{repetition + 1}"
                     directory = output / "runs" / label
                     directory.mkdir(parents=True)
                     hosts = [f"origin-{index:03}.test" for index in range(count)]
@@ -440,6 +502,8 @@ def main():
                               "paths": paths[name], "observer": observer, "output_dir": str(directory),
                               "workers": args.workers, "min_crawl_delay_ms": 5,
                               "max_crawl_delay_ms": 50, "timeout_seconds": 1}
+                    if args.acceptance_profile == "c03":
+                        config["observer_mode"] = mode
                     config_path = directory / "config.json"
                     atomic_json(config_path, config)
                     print(f"[{label}] local fixture :{server.port}", flush=True)
@@ -465,15 +529,28 @@ def main():
                     run["origins_verified"] = set(observed_origins) == set(hosts)
                     run["robots_respected"] = counts["by_path"].get("/blocked", 0) == 0
                     atomic_json(directory / "measurement.json", run)
-                    groups[observer].append(run)
-            rows = [summarize(name, count, observer, groups[observer]) for observer in (False, True)]
+                    groups[mode].append(run)
+                    progress = f"[{label}] completed in {run['process_wall_ms']/1000:.2f}s; crawl={run['duration_ms']/1000:.2f}s; requests={run['client_requests']}; saved={run['saved_pages']}"
+                    if args.acceptance_profile == "c03":
+                        stats = run["observer_stats"]
+                        progress += f"; observer writes={stats['write_calls']}; updates={stats['updates']}; max publication={stats['max_publish_latency_ms']:.2f}ms"
+                    print(progress, flush=True)
+            rows = []
+            for mode, observer in modes.items():
+                row = summarize(name, count, observer, groups[mode])
+                if args.acceptance_profile == "c03":
+                    row["observer_mode"] = mode
+                rows.append(row)
             report["scenarios"].extend(rows)
             off, on = (row["metrics"] for row in rows)
+            baseline, candidate = groups.values()
             report["comparisons"].append({"name": name, "origins": count,
                 "duration_overhead_pct": 100 * (on["duration_ms"]["median"] / off["duration_ms"]["median"] - 1),
-                "requests_equal": all(a["requests_by_path"] == b["requests_by_path"] for a, b in zip(groups[False], groups[True])),
-                "saved_pages_equal": all(a["saved_pages"] == b["saved_pages"] for a, b in zip(groups[False], groups[True])),
-                "behavior_equivalent": observer_equivalent(groups[False], groups[True])})
+                "requests_equal": all(a["requests_by_path"] == b["requests_by_path"] for a, b in zip(baseline, candidate)),
+                "saved_pages_equal": all(a["saved_pages"] == b["saved_pages"] for a, b in zip(baseline, candidate)),
+                "behavior_equivalent": observer_equivalent(baseline, candidate)})
+            if args.acceptance_profile == "c03":
+                report["comparisons"][-1].update(observer_write_reductions(baseline, candidate))
             atomic_json(output / "report.json", report)
     runs = [run for scenario in report["scenarios"] for run in scenario["runs"]]
     report["acceptance"] = {
@@ -494,6 +571,16 @@ def main():
             explicit_outcomes=all(explicit_outcomes_verified(run) for run in runs),
         )
         required = [value for key, value in report["acceptance"].items() if key != "full_matrix"]
+    elif args.acceptance_profile == "c03":
+        report["acceptance"].update(
+            observer_equivalent_two_origins=all(row["behavior_equivalent"] for row in report["comparisons"] if row["origins"] == 2),
+            explicit_outcomes=all(explicit_outcomes_verified(run, paths[row["name"]]) for row in report["scenarios"] for run in row["runs"]),
+            observer_counters_reconciled=all(observer_counters_verified(run) for run in runs),
+            observer_write_reduction=all(row["writes_per_update_reduction_pct"]["min"] >= 90 and
+                                         row["write_calls_reduction_pct"]["min"] >= 90 for row in report["comparisons"]),
+            observer_latency=all(run["observer_stats"]["max_publish_latency_ms"] <= 5000 for run in runs if run["observer_mode"] == "async"),
+        )
+        required = list(report["acceptance"].values())
     else:
         required = list(report["acceptance"].values())
     report["acceptance"]["passed"] = all(required)

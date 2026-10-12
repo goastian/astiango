@@ -22,10 +22,10 @@ use url::Url;
 use crate::{
     config::{default_max_redirect_hops, CrawlNetworkPolicy, CrawlerConfig, S3Config, UserAgent},
     warc,
-    webpage::Html,
 };
 
 use super::{
+    extraction::{CrawlExtraction, ExtractionContext, Extractor, VisitedUrls},
     observer::{Counters, FrontierState, Observer, Snapshot, Warc},
     outcome::{FetchOutcome, JobOutcome, JobStatus},
     robot_client::{validate_seed_urls, RobotClient},
@@ -405,11 +405,12 @@ struct LocalWarcSink {
     observer: Arc<Observer>,
     frontier: Arc<Frontier>,
     fatal_error: Mutex<Option<String>>,
+    extractor: Extractor,
     store_warc: fn(&Path, &[u8]) -> Result<()>,
 }
 
 impl LocalWarcSink {
-    fn commit(&self, datum: &CrawlDatum) -> Result<()> {
+    fn commit(&self, datum: &CrawlDatum, extraction: Option<&CrawlExtraction>) -> Result<()> {
         let mut writer = warc::WarcWriter::new();
         writer.write(&warc::WarcRecord {
             request: warc::Request {
@@ -427,13 +428,9 @@ impl LocalWarcSink {
         let bytes = writer.finish()?;
         let filename = format!("{}.warc.gz", uuid::Uuid::new_v4());
         (self.store_warc)(&self.directory.join(&filename), &bytes)?;
-        if let Ok(html) = Html::parse(&datum.body, datum.url.as_str()) {
-            self.frontier.discover(
-                html.anchor_links()
-                    .into_iter()
-                    .map(|link| link.destination)
-                    .take(super::MAX_OUTGOING_URLS_PER_PAGE),
-            )?;
+        if let Some(extraction) = extraction {
+            self.frontier
+                .discover(extraction.discovery_urls.iter().cloned())?;
         }
         self.observer.saved(
             &Domain::from(&datum.url),
@@ -455,7 +452,27 @@ impl LocalWarcSink {
 impl DatumSink for LocalWarcSink {
     async fn write(&self, datum: CrawlDatum) -> super::Result<()> {
         self.check().map_err(super::Error::Anyhow)?;
-        if let Err(error) = self.commit(&datum) {
+        let extraction = self
+            .extractor
+            .parse(
+                &datum.body,
+                &datum.url,
+                ExtractionContext {
+                    domain: &Domain::from(&datum.url),
+                    crawled_urls: &VisitedUrls::default(),
+                    requested_url: &datum.url,
+                },
+            )
+            .ok();
+        self.write_extracted(datum, extraction.as_ref()).await
+    }
+    async fn write_extracted(
+        &self,
+        datum: CrawlDatum,
+        extraction: Option<&CrawlExtraction>,
+    ) -> super::Result<()> {
+        self.check().map_err(super::Error::Anyhow)?;
+        if let Err(error) = self.commit(&datum, extraction) {
             *self.fatal_error.lock().unwrap() = Some(error.to_string());
             return Err(super::Error::Anyhow(error));
         }
@@ -533,6 +550,7 @@ pub async fn run(config: Config) -> Result<()> {
     )?);
     observer.observe_transport(client.transport().clone());
     observer.observe_body(client.body_reader().clone());
+    observer.observe_extraction(client.extractor().clone());
     let frontier = Arc::new(Frontier::open(
         config.state_directory().join("frontier.json"),
         config.max_frontier,
@@ -545,6 +563,7 @@ pub async fn run(config: Config) -> Result<()> {
         observer: observer.clone(),
         frontier: frontier.clone(),
         fatal_error: Mutex::new(None),
+        extractor: client.extractor().clone(),
         store_warc: atomic_write,
     });
     let job_directory = config.state_directory().join("jobs").join(&run_id);
@@ -961,6 +980,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_extraction_discovers_domains_without_a_sink_parse_or_changed_warc() {
+        let dir = tempfile::tempdir().unwrap();
+        let telemetry = observer(dir.path().join("status.json"));
+        let frontier = Arc::new(
+            Frontier::open(dir.path().join("frontier.json"), 8, 5, telemetry.clone()).unwrap(),
+        );
+        let extractor = Extractor::default();
+        let mut datum = test_datum();
+        datum.body = "<base href='/base/'><meta name='robots' content='noindex'><a href='https://external.org/page'>other</a><a href='next'>internal</a>".into();
+        let extraction = extractor
+            .parse(
+                &datum.body,
+                &datum.url,
+                ExtractionContext {
+                    domain: &Domain::from(&datum.url),
+                    crawled_urls: &VisitedUrls::default(),
+                    requested_url: &datum.url,
+                },
+            )
+            .unwrap();
+        assert!(extraction.no_index);
+        let sink = LocalWarcSink {
+            directory: dir.path().to_path_buf(),
+            observer: telemetry,
+            frontier: frontier.clone(),
+            fatal_error: Mutex::new(None),
+            extractor: extractor.clone(),
+            store_warc: atomic_write,
+        };
+        sink.write_extracted(datum.clone(), Some(&extraction))
+            .await
+            .unwrap();
+        sink.checkpoint().await.unwrap();
+        assert_eq!(
+            extractor.stats().documents,
+            1,
+            "storage must reuse the worker's extraction"
+        );
+        let first = frontier.claim().unwrap().unwrap();
+        assert_eq!(first.urls[0].url.as_str(), "https://external.org/page");
+        let second = frontier.claim().unwrap().unwrap();
+        assert_eq!(second.urls[0].url.as_str(), "https://example.org/base/next");
+        let warc_path = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "gz"))
+            .unwrap();
+        let file = warc::WarcFile::open(&warc_path).unwrap();
+        let record = file.records().next().unwrap().unwrap();
+        assert_eq!(record.response.body, datum.body);
+        assert_eq!(record.request.url, datum.url.as_str());
+    }
+
+    #[tokio::test]
     async fn failed_metrics_output_does_not_fail_warc_checkpoint_or_job_commit() {
         let dir = tempfile::tempdir().unwrap();
         let status = dir.path().join("status.json");
@@ -981,6 +1054,7 @@ mod tests {
             observer: telemetry.clone(),
             frontier: frontier.clone(),
             fatal_error: Mutex::new(None),
+            extractor: Extractor::default(),
             store_warc: atomic_write,
         };
         sink.write(datum.clone()).await.unwrap();
@@ -1043,6 +1117,7 @@ mod tests {
             observer: telemetry.clone(),
             frontier: frontier.clone(),
             fatal_error: Mutex::new(None),
+            extractor: Extractor::default(),
             store_warc: full_device,
         };
         let error = sink.write(datum.clone()).await.unwrap_err();

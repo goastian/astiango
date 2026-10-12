@@ -212,7 +212,7 @@ impl Html {
         &self.url
     }
 
-    fn base_url(&self) -> &Url {
+    pub fn base_url(&self) -> &Url {
         &self.base_url
     }
 

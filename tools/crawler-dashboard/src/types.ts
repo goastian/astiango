@@ -128,6 +128,7 @@ export interface BodyStats {
   max_reserved_bytes: number;
 }
 export interface Snapshot {
+  extraction?: ExtractionStats;
   schema_version: number;
   telemetry?: ObserverStats;
   transport?: TransportStats;
@@ -166,6 +167,22 @@ export interface Snapshot {
     current_file: string | null;
   };
   history: { at: string; downloaded: number; failed: number; bytes: number }[];
+}
+
+export interface ExtractionStats {
+  documents: number;
+  dom_parses: number;
+  failures: number;
+  anchors_visited: number;
+  discovery_links: number;
+  internal_links: number;
+  pages_at_discovery_limit: number;
+  pages_at_internal_limit: number;
+  traversals_stopped: number;
+  wall_us: number;
+  cpu_us: number;
+  cpu_samples: number;
+  max_links_per_projection: number;
 }
 export interface StatusResponse {
   snapshot: Snapshot;

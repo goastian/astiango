@@ -9,9 +9,10 @@ const { chromium } = await import(
     new URL("../../../frontend/node_modules/playwright/index.mjs", import.meta.url).href
 );
 const base = process.env.CRAWLER_LIVE_URL || "http://127.0.0.1:3100/";
-const expectBody = process.env.CRAWLER_EXPECT_BODY === "1";
+const expectExtraction = process.env.CRAWLER_EXPECT_EXTRACTION === "1";
+const expectBody = expectExtraction || process.env.CRAWLER_EXPECT_BODY === "1";
 const expectTransport = expectBody || process.env.CRAWLER_EXPECT_TRANSPORT === "1";
-const output = process.env.CRAWLER_LIVE_OUTPUT || join(root, expectBody ? "data/crawler-c05-dashboard" : expectTransport ? "data/crawler-c04-dashboard" : "data/crawler-c03-dashboard");
+const output = process.env.CRAWLER_LIVE_OUTPUT || join(root, expectExtraction ? "data/crawler-c06-dashboard" : expectBody ? "data/crawler-c05-dashboard" : expectTransport ? "data/crawler-c04-dashboard" : "data/crawler-c03-dashboard");
 const endpoint = (path) => new URL(path, base);
 const health = await fetch(endpoint("/healthz"));
 assert.equal(health.status, 200);
@@ -22,6 +23,7 @@ assert.equal(initial.meta.process_alive, true);
 assert.ok(initial.snapshot.telemetry, "the operational crawler must publish C03 telemetry");
 if (expectTransport) assert.ok(initial.snapshot.transport, "the operational crawler must publish C04 transport measurements");
 if (expectBody) assert.ok(initial.snapshot.body, "the operational crawler must publish C05 body measurements");
+if (expectExtraction) assert.ok(initial.snapshot.extraction, "the operational crawler must publish C06 extraction measurements");
 if (process.env.CRAWLER_EXPECTED_PID)
   assert.equal(initial.snapshot.pid, Number(process.env.CRAWLER_EXPECTED_PID));
 const benchmark = await fetch(endpoint("/api/benchmarks"));
@@ -49,6 +51,7 @@ try {
   await page.locator(".telemetry-panel > summary").click();
   if (expectTransport) await page.locator(".transport-panel > summary").click();
   if (expectBody) await page.locator(".body-panel > summary").click();
+  if (expectExtraction) await page.locator(".extraction-panel > summary").click();
   await page.getByRole("button", { name: "Pausar lectura", exact: true }).click();
   const refreshing = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/status");
   await page.getByRole("button", { name: "Actualizar estado ahora", exact: true }).click();
@@ -149,6 +152,21 @@ try {
     assert.ok(body.peak_reserved_bytes <= body.max_reserved_bytes);
     assert.match(await page.locator(".body-details > p").first().textContent(), /no representa toda la memoria/);
   }
+  if (expectExtraction) {
+    const extraction = rendered.snapshot.extraction;
+    const format = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 });
+    const value = (label) => page.locator(".extraction-groups dl > div")
+      .filter({ has: page.getByText(label, { exact: true }) }).locator("dd");
+    for (const [label, key] of [["Documentos procesados", "documents"], ["Parseos DOM", "dom_parses"],
+      ["Anchors recorridos", "anchors_visited"], ["Enlaces para descubrimiento", "discovery_links"],
+      ["Enlaces internos admitidos", "internal_links"], ["Límite por proyección", "max_links_per_projection"]]) {
+      assert.equal(await value(label).textContent(), format.format(extraction[key]));
+    }
+    assert.ok(extraction.documents > 0, "verify actual admitted documents, not only a startup snapshot");
+    assert.equal(extraction.dom_parses, extraction.documents);
+    assert.equal(await value("DOM por documento").textContent(), "1");
+    assert.equal(await value("CPU por documento").textContent(), `${format.format(extraction.cpu_us / extraction.cpu_samples / 1000)} ms`);
+  }
   const visibleAgeMs = Math.max(0, Date.now() - Date.parse(stats.last_published_at));
   assert.ok(visibleAgeMs <= 5000, `visible telemetry is ${visibleAgeMs} ms old`);
   assert.equal(await page.locator("#banco-c01").count(), 0);
@@ -174,6 +192,7 @@ try {
     telemetry_verified: stats, visible_age_ms: visibleAgeMs,
     ...(expectTransport ? { transport_verified: rendered.snapshot.transport } : {}),
     ...(expectBody ? { body_verified: rendered.snapshot.body } : {}),
+    ...(expectExtraction ? { extraction_verified: rendered.snapshot.extraction } : {}),
     counters_verified: rendered.snapshot.counters,
     retained_events: rendered.snapshot.recent_events.length,
     benchmark_disabled: true, fixtures_visible: false,

@@ -110,6 +110,7 @@ impl Http for FixtureHttp {
 
 #[derive(Default)]
 struct MemorySink {
+    extracted_calls: std::sync::atomic::AtomicUsize,
     body_reader: Mutex<Option<crate::crawler::body::BodyReader>>,
     data: Mutex<Vec<CrawlDatum>>,
     write_error: bool,
@@ -118,6 +119,17 @@ struct MemorySink {
     cancel_after_write: Option<Arc<AtomicBool>>,
 }
 impl DatumSink for MemorySink {
+    async fn write_extracted(
+        &self,
+        datum: CrawlDatum,
+        extraction: Option<&super::super::extraction::CrawlExtraction>,
+    ) -> Result<()> {
+        let extraction = extraction.expect("admitted fixture has one shared extraction");
+        assert_eq!(extraction.schema_version, 1);
+        assert!(extraction.internal_urls.len() <= super::super::MAX_OUTGOING_URLS_PER_PAGE);
+        self.extracted_calls.fetch_add(1, Ordering::Relaxed);
+        self.write(datum).await
+    }
     async fn write(&self, datum: CrawlDatum) -> Result<()> {
         if let Some(reader) = self.body_reader.lock().unwrap().as_ref() {
             assert!(
@@ -190,6 +202,7 @@ async fn run_config(
     });
     let client = RobotClient::with_runtime(&config, runtime).unwrap();
     let body_reader = client.body_reader().clone();
+    let extractor = client.extractor().clone();
     *sink.body_reader.lock().unwrap() = Some(body_reader.clone());
     let base = Url::parse("https://one.example.com/").unwrap();
     let domain = Domain::from(&base);
@@ -243,6 +256,7 @@ async fn run_config(
             .unwrap(),
         );
         observer.observe_body(body_reader.clone());
+        observer.observe_extraction(extractor.clone());
         observer.register_site(domain.as_str().to_owned(), paths.len() as u64);
         executor = executor.with_observer(observer.clone());
         telemetry = Some(observer);
@@ -253,6 +267,11 @@ async fn run_config(
     let outcome = executor.run().await;
     assert_eq!(body_reader.stats().reserved_bytes, 0);
     assert_eq!(body_reader.stats().active_bodies, 0);
+    assert_eq!(
+        extractor.stats().documents,
+        sink.extracted_calls.load(Ordering::Relaxed) as u64
+    );
+    assert_eq!(extractor.stats().dom_parses, extractor.stats().documents);
     if let Some(observer) = telemetry {
         observer.flush().unwrap();
     }

@@ -6,8 +6,25 @@ import { join } from "node:path";
 import { createDashboardServer } from "../server.mjs";
 import { transportReport } from "./transport-report.mjs";
 import { bodyReport } from "./body-fixture.mjs";
+import { extractionReport } from "./extraction-fixture.mjs";
+import { isBenchmarkReport } from "../benchmark-report.mjs";
 
 const metric = { median: 12, min: 10, max: 14, mad: 2 };
+
+test("C06 accepts complete allocation/CPU reports and rejects invalid counters or projections", () => {
+  const original = extractionReport();
+  assert.equal(isBenchmarkReport(original), true);
+  for (const mutate of [
+    (report) => { report.runs[0].allocated_bytes_per_page = -1; },
+    (report) => { report.runs[0].extraction.internal_urls = Array(513).fill("https://example.org/"); },
+    (report) => { report.runs[0].extraction.no_follow = "false"; },
+    (report) => { report.summaries.push(report.summaries[0]); },
+    (report) => { delete report.summaries[0].metrics.cpu_ms_per_page; },
+  ]) {
+    const invalid = structuredClone(original); mutate(invalid);
+    assert.equal(isBenchmarkReport(invalid), false);
+  }
+});
 function report() {
   return {
     schema_version: 1,

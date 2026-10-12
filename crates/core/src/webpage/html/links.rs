@@ -181,6 +181,33 @@ bitflags! {
 }
 
 impl Html {
+    /// Visit destinations in the same closing-tag order as `anchor_links`,
+    /// without copying attributes or constructing anchor text/Link objects.
+    /// Returning false stops extraction before building any remaining URLs.
+    pub fn visit_anchor_destinations(&self, mut visit: impl FnMut(Url) -> bool) -> u64 {
+        if self.is_no_follow() {
+            return 0;
+        }
+        let mut visited = 0;
+        for edge in self.root.traverse() {
+            if let NodeEdge::End(node) = edge {
+                if let Some(element) = node.as_element() {
+                    if &element.name.local == "a" {
+                        visited += 1;
+                        if let Some(href) = element.attributes.borrow().get("href") {
+                            if let Ok(url) = Url::parse_with_base_url(self.base_url(), href) {
+                                if !visit(url) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        visited
+    }
+
     pub fn favicon(&self) -> Option<FaviconLink> {
         for node in self.root.select("link").unwrap() {
             if !matches!(node.attributes.borrow().get("rel"), Some("icon")) {

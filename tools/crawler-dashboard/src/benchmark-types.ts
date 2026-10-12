@@ -125,3 +125,21 @@ export type BodyBenchmarkReport = {
   build?: Record<string, unknown>;
   hardware?: Record<string, unknown>;
 };
+
+export type ExtractionBenchmarkReport = {
+  schema_version: 1;
+  kind: "crawler_extraction_benchmark";
+  generated_at: string;
+  configuration: { acceptance_profile: "c06"; [key: string]: unknown };
+  summaries: { scenario: string; mode: "legacy" | "shared"; repetitions: number; metrics: Record<string, Distribution> }[];
+  comparisons: { scenario: string; equivalent: boolean; cpu_reduction_pct: Distribution; allocated_bytes_reduction_pct: Distribution }[];
+  corpus_cpu_reduction_pct: Distribution;
+  runs: { scenario: string; mode: "legacy" | "shared"; repetition: number; cpu_ms_per_page: number;
+    allocated_bytes_per_page: number; allocation_calls_per_page: number; dom_parses_per_page: number;
+    extraction: { anchors_visited: number; discovery_urls: string[]; internal_urls: string[]; base_url: string;
+      no_index: boolean; no_follow: boolean; traversal_stopped: boolean } }[];
+  acceptance: { passed: boolean; checks?: Record<string, boolean> };
+  code?: Record<string, unknown>;
+  binary?: Record<string, unknown>;
+  hardware?: Record<string, unknown>;
+};
