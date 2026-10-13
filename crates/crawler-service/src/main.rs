@@ -15,6 +15,7 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    ExportQueue { directory: std::path::PathBuf },
     Normalize,
     Run { config: String },
     Validate { config: String },
@@ -37,6 +38,10 @@ fn main() -> Result<()> {
         .with_target(false)
         .init();
     let args = Args::parse();
+    if let Command::ExportQueue { directory } = &args.command {
+        astiango::crawler::queue_migration::export(directory, std::io::stdout().lock())?;
+        return Ok(());
+    }
     if matches!(args.command, Command::Normalize) {
         use std::io::Read;
         let mut input = String::new();
@@ -90,6 +95,7 @@ fn main() -> Result<()> {
         }
         Command::BuildInfo => unreachable!(),
         Command::Normalize => unreachable!(),
+        Command::ExportQueue { .. } => unreachable!(),
     }
     Ok(())
 }

@@ -1,0 +1,12 @@
+{
+  "enabled": false,
+  "directory": "data/crawler-specialized",
+  "maximum_jobs": 32,
+  "maximum_queue_bytes": 16777216,
+  "maximum_document_bytes": 4194304,
+  "maximum_text_bytes": 2097152,
+  "memory_bytes": 268435456,
+  "timeout_seconds": 5,
+  "cpu_seconds_per_job": 2,
+  "daily_cpu_seconds": 60
+}

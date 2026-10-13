@@ -1217,5 +1217,13 @@
   "Same-host laboratory. Automatic failover remains pending.": "同一主机上的测试。自动恢复仍待验证。",
   "CPU affinity verified; cgroup CPU and memory quotas unavailable on this host.": "已验证使用两个处理器；此主机没有处理器和内存配额控制。",
   "Graceful worker shutdown": "进程正常停止",
-  "Robots cache admission waits": "规则缓存等待"
+  "Robots cache admission waits": "规则缓存等待",
+  "Same-host laboratory. Independent disk failure remains unverified.": "同一主机的测试。独立磁盘故障尚未验证。",
+  "Short local integration checks": "本地集成测试",
+  "Simultaneous HTML memory": "并发 HTML 内存",
+  "Automatic local recovery": "自动本地恢复",
+  "Recovery HTTP requests": "恢复期间的 HTTP 请求",
+  "Isolated PDF extraction": "隔离 PDF 提取",
+  "Prolonged monitoring stopped. You can suspend the computer.": "持续监控已停止。可以暂停计算机。",
+  "Optional observation": "可选观察"
 }

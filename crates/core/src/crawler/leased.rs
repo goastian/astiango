@@ -167,10 +167,12 @@ struct Sink {
     authority: Authority,
     writer: Arc<super::WarcWriter>,
     pipeline: super::pipeline::Pipeline,
+    pending: Arc<super::replication_outbox::Pending>,
 }
 impl Sink {
     async fn confirm(&self, capture: crate::capture::Capture) -> Result<()> {
         let mut request = self.authority.request("commit");
+        let fetch_id = capture.metadata.fetch_id.clone();
         anyhow::ensure!(
             capture.payload.len() <= 4 * 1024 * 1024,
             "replicated capture exceeds 4 MiB profile"
@@ -179,7 +181,7 @@ impl Sink {
             .payload
             .len()
             .saturating_mul(5)
-            .saturating_add(65536);
+            .saturating_add(512 * 1024 + 65536);
         request = self
             .pipeline
             .control
@@ -196,6 +198,13 @@ impl Sink {
             "no replicated capture confirmation: {}",
             reply
         );
+        let pending = self.pending.clone();
+        self.pipeline.control.run_durable(0, move || pending.remove(&fetch_id)).await??;
+        Ok(())
+    }
+    async fn stage(&self, capture: crate::capture::Capture) -> Result<()> {
+        let pending = self.pending.clone();
+        self.pipeline.control.run_durable(capture.payload.len() + capture.metadata.memory_bytes(), move || pending.save(&capture)).await??;
         Ok(())
     }
 }
@@ -208,6 +217,7 @@ impl DatumSink for Sink {
             .capture
             .clone()
             .context("cluster worker requires capture contract")?;
+        self.stage(capture.clone()).await?;
         self.writer.write(datum).await?;
         self.confirm(capture).await.map_err(super::Error::from)
     }
@@ -217,6 +227,7 @@ impl DatumSink for Sink {
             .capture
             .clone()
             .context("cluster worker requires capture contract")?;
+        self.stage(capture.clone()).await?;
         self.writer.write_prepared(page).await?;
         self.confirm(capture).await.map_err(super::Error::from)
     }
@@ -245,6 +256,7 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
         config.crawler.body.html.wire_limit_bytes <= 4 * 1024 * 1024,
         "cluster profile supports at most 4 MiB captures"
     );
+    anyhow::ensure!(config.crawler.pipeline.control.max_bytes >= config.crawler.body.html.wire_limit_bytes.saturating_mul(5).saturating_add(512 * 1024 + 65536), "cluster control budget must cover replicated capture serialization");
     anyhow::ensure!(
         config.crawler.timeout_seconds <= 10 && config.crawler.body.total_timeout_ms <= 10000,
         "cluster request timeout must fit the 11 second takeover cooldown"
@@ -256,11 +268,40 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
     }
     let options = Arc::new(settings);
     let rpc = Rpc::new(&config)?;
+    let pending = Arc::new(super::replication_outbox::Pending::open(&options.spool.directory)?);
+    let resources = super::resources::Controller::new(config.crawler.resources.clone(), options.spool.directory.clone(), 1)?;
+    let reconciliation = super::pipeline::Pipeline::new(options.pipeline.clone())?;
+    for fetch_id in pending.ids()? {
+        let stored = pending.clone();
+        let id = fetch_id.clone();
+        let capture = reconciliation.control.run_durable(5 * 1024 * 1024, move || stored.load(&id)).await??.context("pending capture disappeared during reconciliation")?;
+        let serialization_bytes = capture.payload.len().saturating_mul(5).saturating_add(512 * 1024 + 65536);
+        let request = reconciliation.control.run_durable(serialization_bytes, move || {
+            json!({"action":"commit","url_id":crate::capture::sha256(capture.metadata.requested_url.as_bytes()),"epoch":0,"token":uuid::Uuid::nil(),"payload_sha256":capture.metadata.payload_sha256,"payload_hex":crate::capture::hex(&capture.payload),"metadata":capture.metadata})
+        }).await?;
+        let reply = rpc.call(request).await?;
+        if reply["ack"] == true && reply["replicated"] == true {
+            let stored = pending.clone();
+            reconciliation.control.run_durable(0, move || stored.remove(&fetch_id)).await??;
+        } else {
+            anyhow::ensure!(reply["error"] == "lease_fenced", "pending reconciliation unavailable: {}", reply);
+        }
+    }
+    reconciliation.shutdown().await;
+    let spool_config = options.spool.clone();
+    let spool_metrics = super::spool::SpoolMetrics::default();
+    let observed = spool_metrics.clone();
+    let mut spool_stats = tokio::task::spawn_blocking(move || -> Result<_> {
+        let spool = super::spool::Spool::open(spool_config, None, observed.clone())?;
+        drop(spool);
+        Ok(observed.stats())
+    }).await??;
     let transport = match fixture {
         Some(transport) => transport,
         None => SharedTransport::new(&options, options.transport.clone())?,
     };
     let mut completed = 0usize;
+    let mut received_bytes = 0u64;
     let shutdown = super::local::shutdown_signal();
     tokio::pin!(shutdown);
     loop {
@@ -269,6 +310,13 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
             .is_some_and(|maximum| completed >= maximum)
         {
             break;
+        }
+        if resources.sample_spool(received_bytes, &spool_stats)? == 0 {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(2)) => {},
+                stopped = &mut shutdown => { stopped?; break; }
+            }
+            continue;
         }
         let started = Instant::now();
         let result = tokio::select! {
@@ -306,6 +354,7 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
                 .clone()
                 .with_authority(Arc::new(authority.clone())),
         );
+        let body_reader = client.body_reader().clone();
         let writer = Arc::new(
             super::WarcWriter::open(options.spool.clone(), None, client.pipeline().clone(), None)
                 .await?,
@@ -314,6 +363,7 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
             authority: authority.clone(),
             writer,
             pipeline: client.pipeline().clone(),
+            pending: pending.clone(),
         });
         let renewing = authority.clone();
         let renew = tokio::spawn(async move {
@@ -345,22 +395,45 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
             urls: VecDeque::from([WeightedUrl { url, weight: 1.0 }]),
             wandering_urls: 0,
         };
-        let execution = JobExecutor::new(job.into(), options.clone(), sink.clone(), client)
-            .with_cancellation(authority.cancelled.clone())
-            .run();
+        let existing = {
+            let pending = pending.clone();
+            let fetch_id = lease["fetch_id"].as_str().context("missing fetch id")?.to_owned();
+            sink.pipeline.control.run_durable(5 * 1024 * 1024, move || pending.load(&fetch_id)).await??
+        };
+        let execution = async {
+            if let Some(capture) = existing {
+                let final_url = capture.metadata.response.url.clone();
+                let mime = capture.metadata.response.values("content-type").next().unwrap_or_default().to_ascii_lowercase();
+                let payload_type = if mime.starts_with("application/rss+xml") { crate::warc::PayloadType::Rss } else if mime.starts_with("application/atom+xml") { crate::warc::PayloadType::Atom } else { crate::warc::PayloadType::Html };
+                let datum = CrawlDatum { url: Url::parse(&final_url)?, payload_type,
+                    body: String::new(), fetch_time_ms:capture.metadata.fetch_time_ms, date:capture.metadata.response.received_at,
+                    capture:Some(capture) };
+                sink.write(datum).await?;
+                let mut outcome = super::JobOutcome::default();
+                outcome.record(Url::parse(lease["url"].as_str().unwrap())?, super::FetchOutcome::DurableSuccess { final_url:Url::parse(&final_url)? });
+                Ok::<_, anyhow::Error>(outcome)
+            } else {
+                anyhow::ensure!(!pending.full()?, "replication outbox is full; drain pending captures before HTTP");
+                Ok(JobExecutor::new(job.into(), options.clone(), sink.clone(), client)
+                    .with_cancellation(authority.cancelled.clone()).run().await)
+            }
+        };
         tokio::pin!(execution);
         let mut draining = false;
         let outcome = tokio::select! {
-            outcome = &mut execution => outcome,
+            outcome = &mut execution => outcome?,
             stopped = &mut shutdown => {
                 stopped?;
                 draining = true;
                 authority.cancelled.store(true, Ordering::Release);
-                execution.await
+                execution.await?
             }
         };
         // Keep renewing until admitted durable storage has drained.
         sink.finish().await?;
+        received_bytes = received_bytes.saturating_add(body_reader.stats().wire_bytes_received);
+        spool_stats = sink.writer.metrics.stats();
+        resources.sample_spool(received_bytes, &spool_stats)?;
         renew.abort();
         let _ = renew.await;
         if outcome.counters.useful_pages == 0 {
@@ -376,14 +449,15 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
                     _ => None,
                 })
                 .unwrap_or(60000);
-            let permanent = attempts >= options.retry.max_attempts
+            let pending_local = pending.load(lease["fetch_id"].as_str().unwrap())?.is_some();
+            let permanent = !pending_local && (attempts >= options.retry.max_attempts
                 || target.is_some_and(|entry| {
                     matches!(
                         entry.outcome,
                         super::FetchOutcome::PermanentFailure { .. }
                             | super::FetchOutcome::Skipped { .. }
                     )
-                });
+                }));
             request["retry_after_ms"] = json!(options.retry.delay(
                 attempts,
                 remote_minimum,

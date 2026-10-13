@@ -7,12 +7,17 @@
     report: { updated_at: string; reader?: { scans: Record<string, { median: Measurement }>; improvements?: Record<string, number> };
       postgres?: { passed: boolean; no_quorum_no_ack: boolean; replicated_payload_bytes: number; discovery_outbox_restart?: boolean; manual_failover?: { manual_rto_seconds: number } };
       worker_drain?: { passed: boolean };
+      quick_checks?: { passed: boolean; elapsed_seconds: number };
+      local_failover?: { passed: boolean; rto_seconds: number; one_partition_rebalanced: boolean };
+      extreme_html_memory?: { passed: boolean; peak_rss_bytes: number };
+      replication_recovery?: { passed: boolean; recovery_http_requests: number };
+      pdf_extraction?: { passed: boolean; median_elapsed_ms: number; production_enabled: boolean };
       artifact?: { binary_bytes: number; dependency_isolation_complete: boolean; reproducible_double_build_verified: boolean };
       backup?: { passed: boolean; verified_files: number; restored_frontier_commits: number };
       resources?: { effective_cpus: number; peak_rss_bytes: number; cpu_bound_method: string; cgroup_cpu_memory_controllers_available: boolean };
       worker_scale?: { scenarios: Record<string, { median_pages_per_second: number; repetitions: { max_worker_rss_bytes: number }[] }> };
       gates: Record<string, string> };
-    soak?: { observed_seconds: number; gate_24h: string; gate_7d: string; samples: number; failures: unknown[] };
+    soak?: { observed_seconds: number; gate_24h: string; gate_7d: string; samples: number; failures: unknown[]; status?: string };
   };
   let evidence = $state<Evidence | null>(null);
   let available = $state(true);
@@ -56,7 +61,7 @@
       <div><dt>{$t("Descubrimiento")}</dt><dd>{$t(evidence.report.postgres.discovery_outbox_restart ? "Verified" : "Pending verification")}</dd></div>
       {#if evidence.report.worker_drain}<div><dt>{$t("Graceful worker shutdown")}</dt><dd>{$t(evidence.report.worker_drain.passed ? "Verified" : "Pending verification")}</dd></div>{/if}
     </dl>
-    <p>{$t("Same-host laboratory. Automatic failover remains pending.")}</p>
+    <p>{$t("Same-host laboratory. Independent disk failure remains unverified.")}</p>
   {/if}
   {#if evidence?.report.worker_scale}
     <h3>{$t("Native worker scaling")}</h3>
@@ -84,12 +89,23 @@
   {#if evidence?.report.resources && !evidence.report.resources.cgroup_cpu_memory_controllers_available}
     <p>{$t("CPU affinity verified; cgroup CPU and memory quotas unavailable on this host.")}</p>
   {/if}
+  {#if evidence?.report.quick_checks}
+    <h3>{$t("Short local integration checks")}</h3>
+    <dl>
+      <div><dt>{$t("Verificación")}</dt><dd>{$t(evidence.report.quick_checks.passed ? "Verified" : "Pending verification")} · {number.format(evidence.report.quick_checks.elapsed_seconds)} s</dd></div>
+      {#if evidence.report.extreme_html_memory}<div><dt>{$t("Simultaneous HTML memory")}</dt><dd>{number.format(evidence.report.extreme_html_memory.peak_rss_bytes / 1048576)} / 512 MiB</dd></div>{/if}
+      {#if evidence.report.local_failover}<div><dt>{$t("Automatic local recovery")}</dt><dd>{number.format(evidence.report.local_failover.rto_seconds)} s</dd></div>{/if}
+      {#if evidence.report.replication_recovery}<div><dt>{$t("Recovery HTTP requests")}</dt><dd>{number.format(evidence.report.replication_recovery.recovery_http_requests)}</dd></div>{/if}
+      {#if evidence.report.pdf_extraction}<div><dt>{$t("Isolated PDF extraction")}</dt><dd>{number.format(evidence.report.pdf_extraction.median_elapsed_ms)} ms</dd></div>{/if}
+    </dl>
+  {/if}
   {#if evidence?.soak}
     <h3>{$t("Continuous operation")}</h3>
     <dl><div><dt>{$t("Monitored hours")}</dt><dd>{number.format(evidence.soak.observed_seconds / 3600)}</dd></div>
-      <div><dt>24 h</dt><dd>{$t(evidence.soak.gate_24h === "passed" ? "Verified" : "Pending verification")}</dd></div>
-      <div><dt>7 d</dt><dd>{$t(evidence.soak.gate_7d === "passed" ? "Verified" : "Pending verification")}</dd></div>
+      <div><dt>24 h</dt><dd>{$t(evidence.soak.gate_24h === "passed" ? "Verified" : evidence.soak.status === "stopped_by_user" ? "Optional observation" : "Pending verification")}</dd></div>
+      <div><dt>7 d</dt><dd>{$t(evidence.soak.gate_7d === "passed" ? "Verified" : evidence.soak.status === "stopped_by_user" ? "Optional observation" : "Pending verification")}</dd></div>
     </dl>
+    {#if evidence.soak.status === "stopped_by_user"}<p>{$t("Prolonged monitoring stopped. You can suspend the computer.")}</p>{/if}
   {/if}
 </section>
 

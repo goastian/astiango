@@ -10,6 +10,7 @@ use crate::{
 
 use super::Job;
 
+#[derive(Clone)]
 struct RemoteCoordinator {
     addr: SocketAddr,
 }
@@ -51,20 +52,6 @@ impl InnerRouter {
         })
     }
 
-    async fn sample_job(&mut self) -> Result<Option<Job>> {
-        while !self.coordinators.is_empty() {
-            let idx = rand::thread_rng().gen_range(0..self.coordinators.len());
-            let res = self.coordinators[idx].sample_job().await?;
-
-            if res.is_some() {
-                return Ok(res);
-            }
-
-            self.coordinators.remove(idx);
-        }
-
-        Ok(None)
-    }
 }
 
 pub struct Router {
@@ -79,6 +66,16 @@ impl Router {
     }
 
     pub async fn sample_job(&self) -> Result<Option<Job>> {
-        self.inner.lock().await.sample_job().await
+        loop {
+            let selected = {
+                let inner = self.inner.lock().await;
+                if inner.coordinators.is_empty() { return Ok(None); }
+                inner.coordinators[rand::thread_rng().gen_range(0..inner.coordinators.len())].clone()
+            };
+            // Network errors propagate; only a confirmed empty queue retires a peer.
+            let result = selected.sample_job().await?;
+            if result.is_some() { return Ok(result); }
+            self.inner.lock().await.coordinators.retain(|peer| peer.addr != selected.addr);
+        }
     }
 }

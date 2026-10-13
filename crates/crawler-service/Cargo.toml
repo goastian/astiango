@@ -70,5 +70,9 @@ tikv-jemallocator.workspace = true
 name = "crawler_node_lab"
 required-features = ["integration-fixtures"]
 
+[[example]]
+name = "crawler_quick_integration"
+required-features = ["integration-fixtures"]
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("crawler-bench"))'] }

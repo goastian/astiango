@@ -245,7 +245,7 @@ pub fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-fn create_durable_directory(path: &Path) -> Result<()> {
+pub(super) fn create_durable_directory(path: &Path) -> Result<()> {
     let mut missing = Vec::new();
     let mut parent = path;
     while !parent.exists() && !parent.as_os_str().is_empty() {

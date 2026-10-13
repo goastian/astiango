@@ -79,6 +79,8 @@ mod observer;
 pub mod outcome;
 pub mod plan_signals;
 pub mod plan_store;
+pub mod queue_migration;
+mod replication_outbox;
 #[cfg(not(crawler_standalone))]
 pub mod planner;
 pub mod recrawl;

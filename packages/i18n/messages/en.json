@@ -1217,5 +1217,13 @@
   "Same-host laboratory. Automatic failover remains pending.": "Same-host laboratory. Automatic failover remains pending.",
   "CPU affinity verified; cgroup CPU and memory quotas unavailable on this host.": "CPU affinity verified; cgroup CPU and memory quotas unavailable on this host.",
   "Graceful worker shutdown": "Graceful worker shutdown",
-  "Robots cache admission waits": "Robots cache admission waits"
+  "Robots cache admission waits": "Robots cache admission waits",
+  "Same-host laboratory. Independent disk failure remains unverified.": "Same-host laboratory. Independent disk failure remains unverified.",
+  "Short local integration checks": "Short local integration checks",
+  "Simultaneous HTML memory": "Simultaneous HTML memory",
+  "Automatic local recovery": "Automatic local recovery",
+  "Recovery HTTP requests": "Recovery HTTP requests",
+  "Isolated PDF extraction": "Isolated PDF extraction",
+  "Prolonged monitoring stopped. You can suspend the computer.": "Prolonged monitoring stopped. You can suspend the computer.",
+  "Optional observation": "Optional observation"
 }

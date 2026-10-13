@@ -1217,5 +1217,13 @@
   "Same-host laboratory. Automatic failover remains pending.": "Laboratoire sur un seul hôte. Le basculement automatique reste à vérifier.",
   "CPU affinity verified; cgroup CPU and memory quotas unavailable on this host.": "Affinité CPU vérifiée ; quotas cgroup CPU et mémoire indisponibles sur cet hôte.",
   "Graceful worker shutdown": "Arrêt ordonné du worker",
-  "Robots cache admission waits": "Attentes de capacité du cache robots"
+  "Robots cache admission waits": "Attentes de capacité du cache robots",
+  "Same-host laboratory. Independent disk failure remains unverified.": "Laboratoire sur le même ordinateur. La panne de disques indépendants reste à vérifier.",
+  "Short local integration checks": "Tests courts d’intégration locale",
+  "Simultaneous HTML memory": "Mémoire des HTML simultanés",
+  "Automatic local recovery": "Récupération locale automatique",
+  "Recovery HTTP requests": "Requêtes HTTP pendant la récupération",
+  "Isolated PDF extraction": "Extraction PDF isolée",
+  "Prolonged monitoring stopped. You can suspend the computer.": "Suivi prolongé arrêté. Vous pouvez mettre l’ordinateur en veille.",
+  "Optional observation": "Observation facultative"
 }
