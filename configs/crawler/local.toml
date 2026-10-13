@@ -13,6 +13,15 @@ max_redirect_hops = 10
 max_frontier = 10000
 revisit_interval_seconds = 3600
 
+[resources]
+automatic = true
+memory_limit_bytes = 1073741824
+minimum_disk_free_bytes = 268435456
+minimum_free_inodes = 1024
+max_open_fds = 1024
+min_workers = 1
+max_workers = 2
+
 [user_agent]
 full = "AstianGOBot/1.0 (+https://astiango.com/webmasters; contact@astian.org)"
 token = "AstianGOBot"

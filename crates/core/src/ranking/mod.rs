@@ -770,6 +770,7 @@ mod tests {
         let temp_dir = file_store::temp::TempDir::new().unwrap();
         let worker = crate::block_on(IndexingWorker::new(
             IndexerConfig {
+                consumer: Default::default(),
                 dedup: Default::default(),
                 host_centrality_store_path: temp_dir
                     .as_ref()

@@ -51,7 +51,6 @@ pub struct ImageLink {
     PartialEq,
     Eq,
     Hash,
-    utoipa::ToSchema,
 )]
 pub struct RelFlags(u64);
 

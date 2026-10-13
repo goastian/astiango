@@ -89,11 +89,15 @@ impl EdgeStore {
     }
 
     fn prepare_writer(&mut self) -> Result<()> {
+        self.prepare_writer_with_budget(1_000_000_000)
+    }
+
+    pub(super) fn prepare_writer_with_budget(&mut self, bytes: usize) -> Result<()> {
         if self.writer.is_some() {
             return Ok(());
         }
 
-        let writer = self.index.writer_with_num_threads(1, 1_000_000_000)?;
+        let writer = self.index.writer_with_num_threads(1, bytes)?;
 
         let merge_policy = NoMergePolicy;
         writer.set_merge_policy(Box::new(merge_policy));
@@ -174,6 +178,19 @@ impl EdgeStore {
         self.warmed_column_fields = WarmedColumnFields::new(&self.reader.searcher())?;
         Ok(())
     }
+
+    pub(super) fn commit_with_payload(&mut self, payload: &str) -> Result<()> {
+        self.prepare_writer()?;
+        let mut commit = self.writer.as_mut().unwrap().prepare_commit()?;
+        commit.set_payload(payload);
+        commit.commit()?;
+        self.writer_dedup.clear();
+        self.reader.reload()?;
+        self.warmed_column_fields = WarmedColumnFields::new(&self.reader.searcher())?;
+        Ok(())
+    }
+
+    pub(super) fn commit_payload(&self) -> Result<Option<String>> { Ok(self.index.load_metas()?.payload) }
 
     pub fn merge(&mut self, mut other: Self) -> Result<()> {
         self.prepare_writer()?;

@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 use kuchiki::NodeRef;
 
+#[cfg(not(crawler_standalone))]
 use crate::tokenizer::fields::FlattenedJson;
 use crate::{OneOrMany, Result};
 
@@ -268,6 +269,7 @@ pub fn parse(root: NodeRef) -> Vec<Item> {
     res.into_iter().map(Item::from).collect()
 }
 
+#[cfg(not(crawler_standalone))]
 pub(crate) fn flattened_json(schemas: Vec<Item>) -> Result<FlattenedJson> {
     let single_maps: Vec<_> = schemas
         .into_iter()

@@ -29,11 +29,14 @@ use super::{adservers::AD_SERVERS, schema_org, Meta, Script};
 
 use super::url_ext::UrlExt;
 
+#[cfg(not(crawler_standalone))]
 pub use fn_cache::FnCache;
 
 mod feeds;
+#[cfg(not(crawler_standalone))]
 mod fn_cache;
 mod headings;
+#[cfg(not(crawler_standalone))]
 mod into_tantivy;
 pub mod links;
 mod microformats;

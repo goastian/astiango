@@ -179,6 +179,10 @@ enum LiveIndex {
 
 #[derive(Subcommand)]
 enum Crawler {
+    /// Run an opt-in worker against the authenticated replicated protocol-v2 frontier.
+    LeasedWorker { config_path: String },
+    /// Validate local crawler configuration without sending requests.
+    Validate { config_path: String },
     /// Run the standalone crawler with a durable local WARC archive and dashboard telemetry.
     Local { config_path: String },
     /// Deploy the crawl worker. The worker is responsible for downloading webpages, saving them to S3,
@@ -389,9 +393,22 @@ fn main() -> Result<()> {
             configure::run(skip_download)?;
         }
         Commands::Crawler { options } => match options {
+            Crawler::LeasedWorker { config_path } => {
+                let config: astiango::crawler::leased::Config = load_toml_config(config_path);
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(astiango::crawler::resources::effective_cpus().min(4))
+                    .enable_all().build()?.block_on(astiango::crawler::leased::run(config))?;
+            }
+            Crawler::Validate { config_path } => {
+                let config: astiango::crawler::local::Config = load_toml_config(config_path);
+                config.validate()?;
+                println!("Crawler configuration is valid");
+            }
             Crawler::Local { config_path } => {
                 let config: astiango::crawler::local::Config = load_toml_config(config_path);
+                config.validate()?;
                 tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(astiango::crawler::resources::effective_cpus().min(4))
                     .enable_all()
                     .build()?
                     .block_on(astiango::crawler::local::run(config))?;

@@ -333,6 +333,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "astiango-crawler-service"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.11",
+ "anyhow",
+ "bincode",
+ "bitflags 2.6.0",
+ "bloom",
+ "chardetng",
+ "chrono",
+ "clap",
+ "crossbeam-channel",
+ "encoding_rs",
+ "flate2",
+ "fnv",
+ "fs4",
+ "futures",
+ "hashbrown 0.14.5",
+ "http 0.2.12",
+ "itertools 0.13.0",
+ "kuchiki",
+ "libc",
+ "log",
+ "md5",
+ "memmap2",
+ "mime",
+ "postcard",
+ "publicsuffix",
+ "quick-xml",
+ "rand",
+ "rayon",
+ "redb",
+ "regex",
+ "reqwest",
+ "ring",
+ "robotstxt",
+ "rust-s3",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tikv-jemallocator",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "whatlang",
+]
+
+[[package]]
 name = "astiango-fuzz"
 version = "0.0.0"
 dependencies = [

@@ -1,0 +1,74 @@
+[package]
+name = "astiango-crawler-service"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0"
+publish = false
+
+[features]
+default = []
+integration-fixtures = []
+
+[lib]
+test = false
+doctest = false
+
+[[bin]]
+name = "astiango-crawler"
+path = "src/main.rs"
+
+[dependencies]
+ahash.workspace = true
+anyhow.workspace = true
+bincode.workspace = true
+bitflags.workspace = true
+bloom = { path = "../bloom" }
+chardetng.workspace = true
+chrono.workspace = true
+clap.workspace = true
+crossbeam-channel.workspace = true
+encoding_rs.workspace = true
+flate2.workspace = true
+fnv.workspace = true
+futures.workspace = true
+fs4.workspace = true
+hashbrown.workspace = true
+itertools.workspace = true
+libc.workspace = true
+log.workspace = true
+md5.workspace = true
+memmap2.workspace = true
+mime.workspace = true
+postcard.workspace = true
+publicsuffix.workspace = true
+quick-xml.workspace = true
+rand.workspace = true
+rayon.workspace = true
+redb.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+ring.workspace = true
+rust-s3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+whatlang.workspace = true
+http-02 = { package = "http", version = "0.2" }
+kuchiki = { path = "../kuchiki" }
+robotstxt = { path = "../robotstxt" }
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator.workspace = true
+
+[[example]]
+name = "crawler_node_lab"
+required-features = ["integration-fixtures"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("crawler-bench"))'] }

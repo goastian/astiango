@@ -36,6 +36,8 @@ use super::{
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
+    pub resources: super::resources::Config,
+    #[serde(default)]
     pub retry: super::retry::Config,
     #[serde(default)]
     pub recrawl: super::recrawl::Config,
@@ -111,7 +113,8 @@ impl Config {
         }
     }
 
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
+        self.resources.validate()?;
         self.retry.validate()?;
         self.recrawl.validate()?;
         self.discovery.validate()?;
@@ -121,6 +124,10 @@ impl Config {
         self.body.validate()?;
         self.pipeline.validate_body(&self.body)?;
         self.spool_config().validate()?;
+        if self.resources.automatic {
+            anyhow::ensure!(self.resources.spool_reserve_bytes < self.spool_config().max_spool_bytes, "resource spool reserve must be smaller than spool quota");
+            anyhow::ensure!(self.resources.max_open_fds >= self.transport.max_client_slots + 32, "FD budget must cover HTTP pool and 32 control/storage descriptors");
+        }
         anyhow::ensure!(
             self.network_policy == CrawlNetworkPolicy::PublicOnly,
             "The local crawler requires network_policy = public_only"
@@ -146,7 +153,7 @@ impl Config {
         Ok(())
     }
 
-    fn crawler_config(&self) -> CrawlerConfig {
+    pub fn crawler_config(&self) -> CrawlerConfig {
         CrawlerConfig {
             num_worker_threads: self.num_worker_threads,
             discovery: self.discovery.clone(),
@@ -534,7 +541,7 @@ pub(super) fn benchmark_sink(
     }))
 }
 
-async fn shutdown_signal() -> Result<()> {
+pub(super) async fn shutdown_signal() -> Result<()> {
     #[cfg(unix)]
     {
         let mut terminate =
@@ -662,6 +669,10 @@ pub async fn run(config: Config) -> Result<()> {
     let job_directory = config.state_directory().join("jobs").join(&run_id);
     fs::create_dir_all(&job_directory)?;
     let pipeline = client.pipeline().clone();
+    let resources = super::resources::Controller::new(config.resources.clone(), config.spool_config().directory, config.num_worker_threads)?;
+    let mut admission_limit = resources.stats().workers_allowed;
+    observer.observe_resources(resources.clone());
+    let mut resource_probes = tokio::task::JoinSet::new();
     pipeline.start_monitor();
     observer.observe_pipeline(pipeline.clone());
     let mut jobs = tokio::task::JoinSet::new();
@@ -680,7 +691,7 @@ pub async fn run(config: Config) -> Result<()> {
     let outcome: Result<()> = async {
         loop {
             if !shutting_down && can_claim && claims.is_empty()
-                && jobs.len() < config.num_worker_threads {
+                && jobs.len() < admission_limit {
                 can_claim = false;
                 let frontier = frontier.clone();
                 let control = pipeline.control.clone();
@@ -688,9 +699,14 @@ pub async fn run(config: Config) -> Result<()> {
                 let control_directory = control_directory.clone();
                 let fair_turns = config.scheduler.mode == super::scheduler::Mode::FairTurns;
                 let restart = exhausted_at.is_some_and(|since| since.elapsed() >= Duration::from_secs(config.revisit_interval_seconds));
+                let resources = resources.clone(); let body = client.body_reader().clone();
+                let spool_metrics = sink.segmented.as_ref().unwrap().metrics.clone();
                 claims.spawn(async move {
                     control.run_durable(seed_bytes, move || {
                         frontier.process_controls(&control_directory)?;
+                        let spool = spool_metrics.stats();
+                        let allowed = resources.sample_spool(body.stats().wire_bytes_received, &spool)?;
+                        if allowed == 0 { return Ok((None, false, Some(Utc::now().timestamp_millis().max(0) as u64 + 2000))); }
                         frontier.requeue_recrawls(Utc::now())?;
                         if restart && frontier.is_empty() { frontier.restart_round(seeds.as_ref().clone())?; }
                         frontier.promote_candidates()?;
@@ -706,9 +722,33 @@ pub async fn run(config: Config) -> Result<()> {
                     cancellation.store(true, Ordering::Release);
                     pipeline.stop_admission();
                 }
-                _ = heartbeat.tick() => { observer.heartbeat(); if !shutting_down { can_claim = true; } }
+                _ = heartbeat.tick() => {
+                    observer.heartbeat();
+                    if !shutting_down {
+                        can_claim = true;
+                        if resource_probes.is_empty() {
+                            let resources = resources.clone(); let body = client.body_reader().clone();
+                            let spool = sink.segmented.as_ref().unwrap().metrics.clone(); let control = pipeline.control.clone();
+                            let frontier = frontier.clone(); let controls = control_directory.clone();
+                            resource_probes.spawn(async move {
+                                control.run_durable(0, move || {
+                                    frontier.process_controls(&controls)?;
+                                    let spool = spool.stats();
+                                    resources.sample_spool(body.stats().wire_bytes_received, &spool)
+                                }).await.map_err(anyhow::Error::from)?
+                            });
+                        }
+                    }
+                }
+                result = resource_probes.join_next(), if !resource_probes.is_empty() => {
+                    match result.unwrap().context("resource probe task panicked")? {
+                        Ok(allowed) => { admission_limit = allowed; if allowed == 0 { observer.phase("backpressure"); } can_claim = true; }
+                        Err(error) => { tracing::warn!("resource probe failed: {error}"); if config.resources.automatic { admission_limit = 0; observer.phase("backpressure"); } }
+                    }
+                }
                 _ = tokio::time::sleep_until(claim_due), if !can_claim && claims.is_empty() && jobs.len() < config.num_worker_threads && !shutting_down => { can_claim = true; }
                 result = claims.join_next(), if !claims.is_empty() => {
+                    admission_limit = resources.stats().workers_allowed;
                     let (job, empty, eligible) = result.unwrap().context("Frontier task panicked")??;
                     claim_due = tokio::time::Instant::now() + Duration::from_millis(eligible.map_or(1000, |due| due.saturating_sub(Utc::now().timestamp_millis().max(0) as u64)).max(1));
                     if let Some(job) = job {
@@ -737,7 +777,7 @@ pub async fn run(config: Config) -> Result<()> {
                         });
                         can_claim = true;
                     } else if jobs.is_empty() {
-                        observer.phase("idle");
+                        observer.phase(if admission_limit == 0 { "backpressure" } else { "idle" });
                         if empty { exhausted_at.get_or_insert_with(std::time::Instant::now); }
                         else { exhausted_at = None; }
                     }

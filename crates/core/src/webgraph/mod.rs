@@ -111,6 +111,10 @@ impl Webgraph {
         Ok(())
     }
 
+    pub fn prepare_writer_with_budget(&mut self, bytes: usize) -> Result<()> { self.store.prepare_writer_with_budget(bytes) }
+    pub fn commit_with_payload(&mut self, payload: &str) -> Result<()> { self.store.commit_with_payload(payload) }
+    pub fn commit_payload(&self) -> Result<Option<String>> { self.store.commit_payload() }
+
     pub fn commit(&mut self) -> Result<()> {
         self.store.commit()?;
         Ok(())

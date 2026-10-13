@@ -41,57 +41,94 @@ impl From<String> for IndexPointer {
 }
 
 pub fn run(config: &config::IndexerConfig) -> Result<()> {
-    let warc_paths = config.warc_source.paths()?;
+    config.consumer.validate()?;
+    anyhow::ensure!(
+        config.batch_size > 0 && config.limit_warc_files != Some(0),
+        "invalid indexer batch or file limit"
+    );
+    let workspace =
+        crate::warc::publication::Workspace::open(std::path::Path::new(&config.output_path))?;
+    let warc_paths = config
+        .warc_source
+        .paths()?
+        .into_iter()
+        .unique()
+        .collect::<Vec<_>>();
 
     let job_config: WarcSource = config.warc_source.clone();
 
     let worker = crate::block_on(IndexingWorker::new(config.clone().into()));
 
     let thread_pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(usize::from(std::thread::available_parallelism()?))
-        .stack_size(160_000_000)
+        .num_threads(
+            config
+                .consumer
+                .workers
+                .min(crate::crawler::resources::effective_cpus()),
+        )
+        .stack_size(config.consumer.stack_bytes)
         .thread_name(move |num| format!("indexer-worker-{num}"))
         .build()?;
 
-    let indexes = thread_pool.install(|| {
+    let indexes: Result<Vec<IndexPointer>> = thread_pool.install(|| {
         warc_paths
             .into_par_iter()
             .skip(config.skip_warc_files.unwrap_or(0))
             .take(config.limit_warc_files.unwrap_or(usize::MAX))
-            .map(|warc_path| Job {
-                source_config: job_config.clone(),
-                warc_path,
-                base_path: config.output_path.clone(),
-                settings: JobSettings {
-                    host_centrality_threshold: config.host_centrality_threshold,
-                    minimum_clean_words: config.minimum_clean_words,
-                    batch_size: config.batch_size,
-                    autocommit_after_num_inserts: config.autocommit_after_num_inserts,
-                },
-            })
-            .map(|job| {
-                IndexPointer(
-                    job.process(&worker)
+            .map(|warc_path| {
+                let key = crate::warc::publication::Workspace::key(&job_config, &warc_path)?;
+                let job = Job {
+                    source_config: job_config.clone(),
+                    warc_path,
+                    base_path: workspace.jobs.join(key).to_string_lossy().into_owned(),
+                    settings: JobSettings {
+                        host_centrality_threshold: config.host_centrality_threshold,
+                        minimum_clean_words: config.minimum_clean_words,
+                        batch_size: config.batch_size,
+                        autocommit_after_num_inserts: config.autocommit_after_num_inserts,
+                    },
+                };
+                Ok(IndexPointer(
+                    job.try_process(&worker)?
                         .path()
                         .as_os_str()
                         .to_str()
                         .unwrap()
                         .to_string(),
-                )
+                ))
             })
             .collect()
     });
 
-    let index = merge(indexes)?;
-    crate::mv(index.path(), &config.output_path)?;
+    let indexes = indexes?;
+    anyhow::ensure!(
+        !indexes.is_empty(),
+        "no WARC inputs selected for index publication"
+    );
+    let copies = workspace.copies(
+        &indexes
+            .into_iter()
+            .map(|p| std::path::PathBuf::from(p.0))
+            .collect::<Vec<_>>(),
+    )?;
+    let index = merge(
+        copies
+            .into_iter()
+            .map(|p| IndexPointer(p.to_string_lossy().into_owned()))
+            .collect(),
+    )?;
+    let completed = index.path();
+    drop(index);
+    workspace.publish(&completed)?;
 
     Ok(())
 }
 
 pub fn merge(indexes: Vec<IndexPointer>) -> Result<Index> {
+    anyhow::ensure!(!indexes.is_empty(), "cannot merge an empty index list");
     let num_indexes = indexes.len();
     let mut it = indexes.into_iter();
-    let num_cores = usize::from(std::thread::available_parallelism()?);
+    let num_cores = crate::crawler::resources::effective_cpus().min(2);
 
     let mut threads = Vec::new();
 
@@ -105,28 +142,34 @@ pub fn merge(indexes: Vec<IndexPointer>) -> Result<Index> {
             break;
         }
 
-        threads.push(thread::spawn(move || {
+        threads.push(thread::spawn(move || -> Result<Index> {
             let mut it = indexes.into_iter();
-            let mut index = Index::open(it.next().unwrap().0).unwrap();
+            let mut index = Index::open(it.next().unwrap().0)?;
 
             for other in it {
                 let other_path = other.0;
-                let other = Index::open(&other_path).unwrap();
+                let other = Index::open(&other_path)?;
 
-                index = index.merge(other);
+                index = index.try_merge(other)?;
 
-                std::fs::remove_dir_all(other_path).unwrap();
+                if std::path::Path::new(&other_path).exists() {
+                    std::fs::remove_dir_all(other_path)?;
+                }
             }
 
-            index.inverted_index.merge_into_max_segments(1).unwrap();
+            index.inverted_index.merge_into_max_segments(1)?;
 
-            index
+            Ok(index)
         }));
     }
 
     let mut indexes = Vec::new();
     for thread in threads {
-        indexes.push(thread.join().unwrap());
+        indexes.push(
+            thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("index merge worker panicked; inputs retained"))??,
+        );
     }
 
     let mut it = indexes.into_iter();
@@ -134,11 +177,13 @@ pub fn merge(indexes: Vec<IndexPointer>) -> Result<Index> {
 
     for other in it {
         let other_path = other.path();
-        index = index.merge(other);
-        std::fs::remove_dir_all(other_path).unwrap();
+        index = index.try_merge(other)?;
+        if other_path.exists() {
+            std::fs::remove_dir_all(other_path)?;
+        }
     }
 
-    index.inverted_index.merge_into_max_segments(1).unwrap();
+    index.inverted_index.merge_into_max_segments(1)?;
 
     Ok(index)
 }

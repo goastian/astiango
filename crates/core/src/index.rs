@@ -104,6 +104,15 @@ impl Index {
         Ok(())
     }
 
+    pub fn commit_with_payload(&mut self, payload: &str) -> Result<()> {
+        self.inverted_index.commit_with_payload(payload)?;
+        self.region_count
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .commit();
+        Ok(())
+    }
+
     pub fn retrieve_websites(
         &self,
         websites: &[inverted_index::WebpagePointer],
@@ -113,7 +122,12 @@ impl Index {
     }
 
     pub fn merge(self, other: Self) -> Self {
-        let _ = self.inverted_index.merge(other.inverted_index);
+        self.try_merge(other)
+            .expect("index merge failed; source inputs retained by the consumer")
+    }
+
+    pub fn try_merge(self, other: Self) -> Result<Self> {
+        self.inverted_index.try_merge(other.inverted_index)?;
 
         let mut self_region_count = self
             .region_count
@@ -126,9 +140,10 @@ impl Index {
 
         self_region_count.merge(other_region_count);
 
-        let mut res = Self::open(&self.path).expect("failed to open index");
-        res.prepare_writer().expect("failed to prepare writer");
-        res
+        let mut res = Self::open(&self.path)?;
+        res.inverted_index
+            .prepare_writer_with_budget(64 * 1024 * 1024)?;
+        Ok(res)
     }
 
     pub(crate) fn prepare_writer(&mut self) -> Result<()> {

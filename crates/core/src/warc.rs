@@ -34,7 +34,14 @@ use proptest::prelude::*;
 
 use tracing::{debug, trace};
 
+#[path = "warc/capture.rs"]
 pub mod capture;
+#[path = "warc/consumer.rs"]
+pub mod consumer;
+#[path = "warc/publication.rs"]
+pub mod publication;
+#[path = "warc/stream.rs"]
+pub mod stream;
 
 impl WarcRecord {
     pub fn is_revalidation(&self) -> bool {
@@ -67,8 +74,8 @@ fn rtrim(s: &mut String) {
 }
 
 fn decode_string(raw: &[u8]) -> String {
-    if let Ok(res) = String::from_utf8(raw.to_owned()) {
-        res
+    if let Ok(res) = std::str::from_utf8(raw) {
+        res.to_owned()
     } else {
         let mut detector = chardetng::EncodingDetector::new();
         let end = std::cmp::min(64, raw.len());
@@ -102,11 +109,7 @@ impl WarcFile {
     }
 
     pub fn records(&self) -> RecordIterator<&[u8]> {
-        RecordIterator {
-            reader: BufReader::new(MultiGzDecoder::new(&self.bytes[..])),
-            num_reads: 0,
-            failed: false,
-        }
+        RecordIterator::new(&self.bytes[..])
     }
 
     pub(crate) fn download(source: &WarcSource, warc_path: &str) -> Result<Self> {
@@ -365,7 +368,7 @@ pub struct Response {
 }
 
 impl Response {
-    fn from_raw(record: RawWarcRecord) -> Result<Self> {
+    fn from_raw(record: RawWarcRecord, decoded_limit: usize) -> Result<Self> {
         let separator = record
             .content
             .windows(4)
@@ -390,9 +393,18 @@ impl Response {
                     }
                 }
             }
-            crate::capture::decode(payload, &encoding, &charset, 128 * 1024 * 1024)?
+            crate::capture::decode(payload, &encoding, &charset, decoded_limit)?
         } else {
-            decode_string(payload)
+            anyhow::ensure!(
+                payload.len() <= decoded_limit,
+                "decoded WARC payload exceeds consumer limit"
+            );
+            let text = decode_string(payload);
+            anyhow::ensure!(
+                text.len() <= decoded_limit,
+                "decoded legacy text exceeds consumer limit"
+            );
+            text
         };
         Ok(Self {
             body,
@@ -479,20 +491,36 @@ pub struct RecordIterator<R: Read> {
     reader: BufReader<MultiGzDecoder<R>>,
     num_reads: usize,
     failed: bool,
+    limits: stream::Limits,
 }
 
 impl<R: Read> RecordIterator<R> {
     pub fn new(reader: R) -> Self {
+        Self::with_limits(reader, stream::Limits::default())
+    }
+    pub fn with_limits(reader: R, limits: stream::Limits) -> Self {
         Self {
             reader: BufReader::new(MultiGzDecoder::new(reader)),
             num_reads: 0,
             failed: false,
+            limits,
         }
+    }
+    fn header_line(&mut self, line: &mut String, remaining: usize) -> Result<usize> {
+        let mut bytes = Vec::new();
+        let size = self
+            .reader
+            .by_ref()
+            .take(remaining.saturating_add(1) as u64)
+            .read_until(b'\n', &mut bytes)?;
+        anyhow::ensure!(size <= remaining, "WARC headers exceed consumer limit");
+        *line = String::from_utf8(bytes)?;
+        Ok(size)
     }
     fn next_raw(&mut self) -> Option<Result<RawWarcRecord>> {
         let mut version = String::new();
 
-        if let Err(error) = self.reader.read_line(&mut version) {
+        if let Err(error) = self.header_line(&mut version, self.limits.header_bytes) {
             return Some(Err(error.into()));
         }
 
@@ -509,12 +537,17 @@ impl<R: Read> RecordIterator<R> {
         }
 
         let mut header = BTreeMap::<String, String>::new();
+        let mut header_bytes = version.len();
 
         loop {
             let mut line_buf = String::new();
-            if let Err(io) = self.reader.read_line(&mut line_buf) {
-                return Some(Err(io.into()));
-            }
+            match self.header_line(
+                &mut line_buf,
+                self.limits.header_bytes.saturating_sub(header_bytes),
+            ) {
+                Ok(size) => header_bytes += size,
+                Err(error) => return Some(Err(error)),
+            };
 
             if &line_buf == "\r\n" || line_buf.is_empty() {
                 // end of header
@@ -562,7 +595,7 @@ impl<R: Read> RecordIterator<R> {
         }
 
         let content_len = content_len.unwrap();
-        if content_len > 256 * 1024 * 1024 {
+        if content_len > self.limits.record_bytes {
             return Some(Err(anyhow::anyhow!("WARC record exceeds reader limit")));
         }
         if let Some(version) = header.get("ASTIAN-CAPTURE-VERSION") {
@@ -662,7 +695,7 @@ impl<R: Read> RecordIterator<R> {
                             .map(|offset| crate::capture::sha256(&item.content[offset + 4..]));
                         record_id = item.header.get("WARC-RECORD-ID").cloned();
                     }
-                    match Response::from_raw(item) {
+                    match Response::from_raw(item, self.limits.decoded_bytes) {
                         Ok(res) => {
                             response = Some(res);
                         }

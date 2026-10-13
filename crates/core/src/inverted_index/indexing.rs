@@ -30,13 +30,15 @@ use super::InvertedIndex;
 
 impl InvertedIndex {
     pub fn prepare_writer(&mut self) -> Result<()> {
+        self.prepare_writer_with_budget(1_000_000_000)
+    }
+
+    pub fn prepare_writer_with_budget(&mut self, bytes: usize) -> Result<()> {
         if self.writer.is_some() {
             return Ok(());
         }
 
-        let writer = self
-            .tantivy_index
-            .writer_with_num_threads(1, 1_000_000_000)?;
+        let writer = self.tantivy_index.writer_with_num_threads(1, bytes)?;
 
         let merge_policy = NoMergePolicy;
         writer.set_merge_policy(Box::new(merge_policy));
@@ -72,6 +74,20 @@ impl InvertedIndex {
         self.columnfield_reader = NumericalFieldReader::new(&self.reader.searcher());
 
         Ok(())
+    }
+
+    pub fn commit_with_payload(&mut self, payload: &str) -> Result<()> {
+        self.prepare_writer()?;
+        let mut commit = self.writer.as_mut().unwrap().prepare_commit()?;
+        commit.set_payload(payload);
+        commit.commit()?;
+        self.reader.reload()?;
+        self.columnfield_reader = NumericalFieldReader::new(&self.reader.searcher());
+        Ok(())
+    }
+
+    pub fn commit_payload(&self) -> Result<Option<String>> {
+        Ok(self.tantivy_index.load_metas()?.payload)
     }
 
     #[allow(clippy::missing_panics_doc)] // cannot panic as writer is prepared
@@ -131,43 +147,39 @@ impl InvertedIndex {
     }
 
     #[must_use]
-    pub fn merge(mut self, mut other: InvertedIndex) -> Self {
+    pub fn merge(self, other: InvertedIndex) -> Self {
+        self.try_merge(other).expect("index merge failed")
+    }
+
+    pub fn try_merge(mut self, mut other: InvertedIndex) -> Result<Self> {
         let shard_id = self.shard_id();
-        self.prepare_writer().expect("failed to prepare writer");
-        other.prepare_writer().expect("failed to prepare writer");
+        self.prepare_writer_with_budget(64 * 1024 * 1024)?;
+        other.prepare_writer_with_budget(64 * 1024 * 1024)?;
 
         let path = self.path.clone();
 
         {
-            other.commit().expect("failed to commit index");
-            self.commit().expect("failed to commit index");
+            other.commit()?;
+            self.commit()?;
 
-            let other_meta = other
-                .tantivy_index
-                .load_metas()
-                .expect("failed to load tantivy metadata for index");
+            let other_meta = other.tantivy_index.load_metas()?;
 
-            let mut meta = self
-                .tantivy_index
-                .load_metas()
-                .expect("failed to load tantivy metadata for index");
+            let mut meta = self.tantivy_index.load_metas()?;
 
             let other_path = other.path.clone();
             let other_path = Path::new(other_path.as_str());
             other
                 .writer
                 .take()
-                .expect("writer has not been prepared")
-                .wait_merging_threads()
-                .unwrap();
+                .ok_or_else(|| anyhow::anyhow!("merge writer missing"))?
+                .wait_merging_threads()?;
 
             let path = self.path.clone();
             let self_path = Path::new(path.as_str());
             self.writer
                 .take()
-                .expect("writer has not been prepared")
-                .wait_merging_threads()
-                .unwrap();
+                .ok_or_else(|| anyhow::anyhow!("merge writer missing"))?
+                .wait_merging_threads()?;
 
             let ids: HashSet<_> = meta.segments.iter().map(|segment| segment.id()).collect();
 
@@ -180,7 +192,7 @@ impl InvertedIndex {
                 for file in segment.list_files() {
                     let p = other_path.join(&file);
                     if p.exists() {
-                        fs::rename(p, self_path.join(&file)).unwrap();
+                        fs::rename(p, self_path.join(&file))?;
                     }
                 }
                 meta.segments.push(segment);
@@ -189,25 +201,25 @@ impl InvertedIndex {
             meta.segments
                 .sort_by_key(|a| std::cmp::Reverse(a.max_doc()));
 
-            fs::remove_dir_all(other_path).ok();
-
             let self_path = Path::new(&path);
 
             std::fs::write(
                 self_path.join("meta.json"),
-                serde_json::to_string_pretty(&meta).unwrap(),
-            )
-            .unwrap();
+                serde_json::to_string_pretty(&meta)?,
+            )?;
+            fs::File::open(self_path.join("meta.json"))?.sync_all()?;
+            fs::File::open(self_path)?.sync_all()?;
+            fs::remove_dir_all(other_path)?;
         }
 
-        let mut res = Self::open(path).expect("failed to open index");
+        let mut res = Self::open(path)?;
 
-        res.prepare_writer().expect("failed to prepare writer");
+        res.prepare_writer_with_budget(64 * 1024 * 1024)?;
         if let Some(shard_id) = shard_id {
             res.set_shard_id(shard_id);
         }
 
-        res
+        Ok(res)
     }
 
     #[allow(clippy::missing_panics_doc)] // cannot panic as writer is prepared

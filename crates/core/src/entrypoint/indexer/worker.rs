@@ -58,6 +58,7 @@ impl From<crate::config::IndexerGraphConfig> for IndexerGraphConfig {
 
 #[derive(Clone)]
 pub struct Config {
+    pub consumer: crate::warc::stream::Limits,
     pub dedup: crate::crawler::dedup::Config,
     pub host_centrality_store_path: String,
     pub page_centrality_store_path: Option<String>,
@@ -70,6 +71,7 @@ impl From<IndexerConfig> for Config {
     fn from(config: IndexerConfig) -> Self {
         Self {
             dedup: config.dedup,
+            consumer: config.consumer,
             host_centrality_store_path: config.host_centrality_store_path,
             page_centrality_store_path: config.page_centrality_store_path,
             page_webgraph: config.page_webgraph.map(IndexerGraphConfig::from),
@@ -189,6 +191,7 @@ impl Webgraph {
 }
 
 pub struct IndexingWorker {
+    pub(super) consumer: crate::warc::stream::Limits,
     host_centrality_store: speedy_kv::Db<NodeID, f64>,
     host_centrality_rank_store: speedy_kv::Db<NodeID, u64>,
     page_centrality_store: Option<speedy_kv::Db<NodeID, f64>>,
@@ -243,6 +246,7 @@ impl IndexingWorker {
                 }
             }),
             dedup: config.dedup,
+            consumer: config.consumer,
         }
     }
 
@@ -527,6 +531,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let worker = crate::block_on(IndexingWorker::new(
             IndexerConfig {
+                consumer: Default::default(),
                 dedup: Default::default(),
                 host_centrality_store_path: temp_dir
                     .as_ref()

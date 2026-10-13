@@ -369,6 +369,7 @@ impl Frontier {
         }
         frontier.recover_leases()?;
         frontier.recover_jobs()?;
+        frontier.repair_ready_indexes()?;
         frontier.drain_outbox()?;
         frontier.publish();
         Ok(frontier)
@@ -506,7 +507,7 @@ impl Frontier {
             .is_some();
         if remaining {
             tx.open_table(HTTP_READY)?
-                .insert((origin.site.as_str(), due, origin.sequence), key)?;
+                .insert((origin.site.as_str(), origin.not_before, origin.sequence), key)?;
         }
         put(tx, HTTP_ORIGINS, key, &origin)
     }
@@ -518,6 +519,71 @@ impl Frontier {
             .next()
             .transpose()?
             .map(|(key, origin)| (key.value().1, origin.value().to_owned())))
+    }
+
+    fn repair_ready_indexes(&self) -> Result<()> {
+        let version = {
+            let tx = self.db.begin_read()?;
+            let table = tx.open_table(META)?;
+            let value = table.get("ready-index-version")?;
+            value.map(|v| serde_json::from_slice::<u32>(v.value())).transpose()?.unwrap_or(1)
+        };
+        anyhow::ensure!(version <= 2, "unsupported frontier readiness index version");
+        if version == 2 { return Ok(()); }
+        self.transaction(|tx, _| {
+            if read::<String>(tx, META, "ready-repair-phase")?.is_none() {
+                // Derived indexes only: URL identities, leases, capture commits,
+                // retry deadlines and outbox remain the durable authorities.
+                tx.delete_table(HTTP_READY)?;
+                tx.delete_table(READY)?;
+                tx.open_table(HTTP_READY)?;
+                tx.open_table(READY)?;
+                put(tx, META, "ready-repair-phase", &"http")?;
+                put(tx, META, "ready-repair-cursor", &String::new())?;
+            }
+            Ok(())
+        })?;
+        loop {
+            let finished = self.transaction(|tx, stats| {
+                let phase: String = read(tx, META, "ready-repair-phase")?.context("missing readiness repair phase")?;
+                anyhow::ensure!(phase == "http" || phase == "sites", "unsupported readiness repair phase");
+                let cursor: String = read(tx, META, "ready-repair-cursor")?.unwrap_or_default();
+                let table = if phase == "http" { HTTP_ORIGINS } else { ORIGINS };
+                let keys = tx.open_table(table)?.range::<&str>((
+                    std::ops::Bound::Excluded(cursor.as_str()), std::ops::Bound::Unbounded,
+                ))?.take(BATCH_SIZE).map(|entry| Ok(entry?.0.value().to_owned())).collect::<Result<Vec<_>>>()?;
+                for key in &keys {
+                    if phase == "http" {
+                        let mut row: HttpOriginRow = read(tx, HTTP_ORIGINS, key)?.context("missing HTTP origin during readiness repair")?;
+                        if row.round != stats.round { continue; }
+                        let remaining = tx.open_table(HTTP_URLS)?.range((key.as_str(), "")..=(key.as_str(), "\u{10ffff}"))?.next().transpose()?.is_some();
+                        if !remaining { continue; }
+                        row.not_before = row.not_before.max(read::<super::retry::OriginState>(tx, RETRIES, key)?.map_or(0, |retry| retry.not_before_ms));
+                        tx.open_table(HTTP_READY)?.insert((row.site.as_str(), row.not_before, row.sequence), key.as_str())?;
+                        put(tx, HTTP_ORIGINS, key, &row)?;
+                    } else {
+                        let mut row: OriginRow = read(tx, ORIGINS, key)?.context("missing site during readiness repair")?;
+                        if row.round != stats.round || row.state != "pending" { continue; }
+                        row.not_before = Self::next_http_origin(tx, key)?.map_or(row.not_before, |(due, _)| due);
+                        tx.open_table(READY)?.insert((row.not_before, row.sequence), key.as_str())?;
+                        put(tx, ORIGINS, key, &row)?;
+                    }
+                }
+                if let Some(last) = keys.last() {
+                    put(tx, META, "ready-repair-cursor", last)?;
+                } else if phase == "http" {
+                    put(tx, META, "ready-repair-phase", &"sites")?;
+                    put(tx, META, "ready-repair-cursor", &String::new())?;
+                } else {
+                    put(tx, META, "ready-index-version", &2u32)?;
+                    tx.open_table(META)?.remove("ready-repair-phase")?;
+                    tx.open_table(META)?.remove("ready-repair-cursor")?;
+                    return Ok(true);
+                }
+                Ok(false)
+            })?;
+            if finished { return Ok(()); }
+        }
     }
 
     fn migrate_http_origins(&self) -> Result<()> {

@@ -180,20 +180,9 @@ impl Webpage {
     }
 }
 
-struct Script {
-    attributes: HashMap<String, String>,
-    content: String,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Link {
-    pub source: Url,
-    pub destination: Url,
-    pub rel: RelFlags,
-    pub text: String,
-}
-
-pub type Meta = HashMap<String, String>;
+mod acquisition;
+use acquisition::Script;
+pub use acquisition::{Link, Meta};
 
 #[cfg(test)]
 mod tests {

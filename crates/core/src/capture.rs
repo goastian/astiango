@@ -51,6 +51,17 @@ pub struct HttpResponse {
 }
 
 impl HttpResponse {
+    fn heap_bytes(&self) -> usize {
+        self.url.capacity()
+            + self.version.capacity()
+            + self.network_policy.capacity()
+            + self.headers.capacity() * std::mem::size_of::<Header>()
+            + self
+                .headers
+                .iter()
+                .map(|header| header.name.capacity() + header.value_hex.capacity())
+                .sum::<usize>()
+    }
     pub fn received(
         response: &reqwest::Response,
         url: &Url,
@@ -233,6 +244,60 @@ pub struct Metadata {
 }
 
 impl Metadata {
+    pub fn memory_bytes(&self) -> usize {
+        let strings = self.fetch_id.capacity()
+            + self.requested_url.capacity()
+            + self.payload_sha256.capacity()
+            + self.charset.capacity()
+            + self.user_agent.capacity();
+        let urls = [&self.discovery_urls, &self.internal_urls]
+            .into_iter()
+            .map(|urls| {
+                urls.capacity() * std::mem::size_of::<Url>()
+                    + urls
+                        .iter()
+                        .map(|url| url.as_str().len().saturating_mul(2))
+                        .sum::<usize>()
+            })
+            .sum::<usize>();
+        let directives = self.robots.directives.capacity() * std::mem::size_of::<Directive>()
+            + self
+                .robots
+                .directives
+                .iter()
+                .map(|directive| {
+                    directive.source.capacity()
+                        + directive.value.capacity()
+                        + directive.agent.as_ref().map_or(0, String::capacity)
+                })
+                .sum::<usize>();
+        let redirects = self.redirects.capacity() * std::mem::size_of::<HttpResponse>()
+            + self
+                .redirects
+                .iter()
+                .map(HttpResponse::heap_bytes)
+                .sum::<usize>();
+        let transformations = self.transformations.capacity() * std::mem::size_of::<String>()
+            + self
+                .transformations
+                .iter()
+                .map(String::capacity)
+                .sum::<usize>();
+        let prior = self.revalidation.as_ref().map_or(0, |reference| {
+            reference.fetch_id.capacity()
+                + reference.segment.capacity()
+                + reference.payload_sha256.capacity()
+                + reference.url.capacity()
+        });
+        std::mem::size_of::<Self>()
+            + strings
+            + urls
+            + directives
+            + redirects
+            + transformations
+            + prior
+            + self.response.heap_bytes()
+    }
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
             self.schema_version == VERSION,
@@ -278,7 +343,13 @@ pub struct Capture {
 }
 
 pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut result = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        result.push(HEX[(byte >> 4) as usize] as char);
+        result.push(HEX[(byte & 15) as usize] as char);
+    }
+    result
 }
 pub fn sha256(bytes: &[u8]) -> String {
     hex(ring::digest::digest(&ring::digest::SHA256, bytes).as_ref())

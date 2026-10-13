@@ -21,6 +21,7 @@ fn main() -> anyhow::Result<()> {
     println!("Indexing...");
     let start = std::time::Instant::now();
     astiango::entrypoint::indexer::run(&IndexerConfig {
+                consumer: Default::default(),
         output_path: path.to_str().unwrap().to_string(),
         limit_warc_files: None,
         skip_warc_files: None,

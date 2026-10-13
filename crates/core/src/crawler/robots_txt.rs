@@ -67,6 +67,7 @@ pub struct Stats {
     pub single_flight_waits: u64,
     pub downloads: u64,
     pub evictions: u64,
+    pub capacity_deferred: u64,
     pub unreachable: u64,
     pub unavailable: u64,
     pub disallowed: u64,
@@ -82,6 +83,7 @@ struct Counters {
     waits: AtomicU64,
     downloads: AtomicU64,
     evictions: AtomicU64,
+    capacity_deferred: AtomicU64,
     unreachable: AtomicU64,
     unavailable: AtomicU64,
     disallowed: AtomicU64,
@@ -120,6 +122,7 @@ struct CacheEntry {
     refreshing: bool,
     touched: Instant,
     continuation: Option<(Url, usize)>,
+    consumed: bool,
 }
 struct InnerRobotsTxtManager {
     cache: Mutex<HashMap<String, CacheEntry>>,
@@ -175,12 +178,19 @@ impl InnerRobotsTxtManager {
             Lookup::Found(rules) if rules.is_allowed(url) => RobotAccess::Allowed,
             Lookup::Found(_) => {
                 self.counters.disallowed.fetch_add(1, Ordering::Relaxed);
+                self.consumed(url);
                 RobotAccess::Disallowed
             }
             Lookup::Unavailable => RobotAccess::Allowed,
-            Lookup::Unreachable => RobotAccess::Unreachable,
+            Lookup::Unreachable => { self.consumed(url); RobotAccess::Unreachable },
             Lookup::Deferred(ms) => RobotAccess::Deferred(*ms),
         }
+    }
+    fn consumed(&self, url: &Url) {
+        if let Some(entry) = self.cache.lock().unwrap().get_mut(&url.origin().ascii_serialization()) {
+            entry.consumed = true;
+        }
+        self.changed.notify_waiters();
     }
     async fn crawl_delay(&self, url: &Url) -> Option<Duration> {
         match &self.get(url).await.robots {
@@ -383,7 +393,8 @@ impl InnerRobotsTxtManager {
                     if cache.len() >= self.config.robots.cache_entries.max(1) {
                         let oldest = cache
                             .iter()
-                            .filter(|(_, entry)| !entry.refreshing)
+                            .filter(|(_, entry)| !entry.refreshing && (self.scheduler.mode() != super::scheduler::Mode::FairTurns || entry.consumed
+                                || entry.value.as_ref().is_some_and(|value| value.is_expired_at(&value.ttl, now))))
                             .min_by_key(|(_, entry)| entry.touched)
                             .map(|(key, _)| key.clone());
                         if let Some(oldest) = oldest {
@@ -399,11 +410,20 @@ impl InnerRobotsTxtManager {
                                 refreshing: true,
                                 touched: now,
                                 continuation: None,
+                                consumed: false,
                             },
                         );
                         true
                     } else {
-                        false
+                        // Preserve rules fetched for a page that is still waiting
+                        // for courtesy. Returning a deferred outcome releases the
+                        // worker so one of those cached origins can make progress.
+                        self.counters.capacity_deferred.fetch_add(1, Ordering::Relaxed);
+                        return Arc::new(CheckedRobotsTxt {
+                            robots: Lookup::Deferred(self.config.min_crawl_delay_ms.max(1000)),
+                            last_check: now,
+                            ttl: Duration::ZERO,
+                        });
                     }
                 }
             };
@@ -421,6 +441,7 @@ impl InnerRobotsTxtManager {
             if !matches!(value.robots, Lookup::Deferred(_)) {
                 if let Some(entry) = self.cache.lock().unwrap().get_mut(&origin) {
                     entry.value = Some(value.clone());
+                    entry.consumed = matches!(value.robots, Lookup::Unreachable);
                 }
             }
             drop(refresh);
@@ -447,6 +468,7 @@ impl InnerRobotsTxtManager {
                     refreshing: false,
                     touched: self.now(),
                     continuation: None,
+                    consumed: false,
                 },
             );
         }
@@ -513,13 +535,13 @@ impl RobotsTxtManager {
         Self::new(&config)
     }
 
-    #[cfg(any(test, feature = "crawler-bench"))]
+    #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
     pub fn with_runtime(config: &CrawlerConfig, runtime: Arc<super::runtime::Runtime>) -> Self {
         let body_reader = BodyReader::new(config.body.clone()).expect("invalid body configuration");
         Self::with_runtime_reader(config, runtime, body_reader)
     }
 
-    #[cfg(any(test, feature = "crawler-bench"))]
+    #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
     pub(crate) fn with_runtime_reader(
         config: &CrawlerConfig,
         runtime: Arc<super::runtime::Runtime>,
@@ -534,7 +556,7 @@ impl RobotsTxtManager {
         )
     }
 
-    #[cfg(any(test, feature = "crawler-bench"))]
+    #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
     pub(crate) fn with_runtime_pipeline_reader(
         config: &CrawlerConfig,
         runtime: Arc<super::runtime::Runtime>,
@@ -564,6 +586,7 @@ impl RobotsTxtManager {
             single_flight_waits: counters.waits.load(Ordering::Relaxed),
             downloads: counters.downloads.load(Ordering::Relaxed),
             evictions: counters.evictions.load(Ordering::Relaxed),
+            capacity_deferred: counters.capacity_deferred.load(Ordering::Relaxed),
             unreachable: counters.unreachable.load(Ordering::Relaxed),
             unavailable: counters.unavailable.load(Ordering::Relaxed),
             disallowed: counters.disallowed.load(Ordering::Relaxed),
@@ -587,6 +610,9 @@ impl RobotsTxtManager {
                     .as_millis()
                     .max(1) as u64
             })
+    }
+    pub(crate) fn page_admitted(&self, url: &Url) {
+        self.inner.consumed(url);
     }
     pub async fn access(&self, url: &Url) -> RobotAccess {
         self.inner.access(url).await

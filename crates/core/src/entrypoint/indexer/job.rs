@@ -16,13 +16,9 @@
 
 use std::path::Path;
 
-use itertools::Itertools;
-
-use tokio::pin;
 use tracing::{info, trace, warn};
 
 use crate::config;
-use crate::entrypoint::download_all_warc_files;
 use crate::index::Index;
 use crate::warc::PayloadType;
 
@@ -48,134 +44,95 @@ pub struct JobSettings {
 
 impl Job {
     pub fn process(&self, worker: &IndexingWorker) -> Index {
-        let name = self.warc_path.split('/').last().unwrap();
+        self.try_process(worker)
+            .expect("index consumer failed; checkpoint and input retained")
+    }
 
+    pub fn try_process(&self, worker: &IndexingWorker) -> crate::Result<Index> {
+        worker.consumer.validate()?;
+        anyhow::ensure!(
+            self.settings.batch_size > 0,
+            "index batch size must be positive"
+        );
+        let name = self
+            .warc_path
+            .split('/')
+            .next_back()
+            .ok_or_else(|| anyhow::anyhow!("empty WARC path"))?;
+        let path = Path::new(&self.base_path).join(name);
+        info!("processing {}", name);
+        let mut index = Index::open(&path)?;
+        index
+            .inverted_index
+            .prepare_writer_with_budget(worker.consumer.batch_bytes)?;
+        let mut exact = crate::crawler::dedup::ExactSet::open(
+            &path.join("exact-versions.redb"),
+            &worker.dedup,
+        )?;
+        let mut consumer = crate::warc::consumer::Consumer::open(
+            &self.source_config,
+            &self.warc_path,
+            &path.join("consumer-checkpoints"),
+            worker.consumer,
+        )?;
+        let recovered =
+            consumer.recover_commit(index.inverted_index.commit_payload()?.as_deref())?;
+        exact.commit(&recovered)?;
         let mut has_host_centrality = false;
         let mut has_page_centrality = false;
         let mut has_backlinks = false;
-
-        info!("processing {}", name);
-
-        let mut index = Index::open(Path::new(&self.base_path).join(name)).unwrap();
-        index.prepare_writer().unwrap();
-
-        let mut exact = crate::crawler::dedup::ExactSet::open(
-            &Path::new(&self.base_path)
-                .join(name)
-                .join("exact-versions.redb"),
-            &worker.dedup,
-        )
-        .expect("open exact index dedup store");
-        let mut committed_keys = std::collections::HashSet::new();
-        let mut key_bytes = 0usize;
-
-        let paths = vec![self.warc_path.clone()];
-        let warc_files = download_all_warc_files(&paths, &self.source_config);
-        pin!(warc_files);
-
-        let mut num_inserts_since_commit = 0;
-
-        for file in warc_files.by_ref() {
-            let mut batch = Vec::with_capacity(self.settings.batch_size);
-
-            for chunk in file
-                .records()
-                .filter_map(|record| match record {
-                    Ok(record) => Some(record),
-                    Err(error) => {
-                        tracing::error!("WARC contract error: {error}");
-                        None
-                    }
-                })
-                .filter(|record| record.indexing_allowed() && !record.is_revalidation())
-                .filter(|record| match &record.response.payload_type {
-                    Some(payload_type) => matches!(payload_type, PayloadType::Html),
-                    None => true,
-                })
-                .chunks(self.settings.batch_size)
-                .into_iter()
-            {
-                batch.clear();
-
-                let mut keys = Vec::new();
-                let mut batch_keys = std::collections::HashSet::new();
-                for record in chunk {
-                    let key = crate::crawler::dedup::ExactSet::version_key(&record)
-                        .expect("capture dedup contract");
-                    if exact.contains(&key).expect("read exact dedup key")
-                        || committed_keys.contains(&key)
-                        || !batch_keys.insert(key.clone())
-                    {
-                        continue;
-                    }
-                    let page = IndexableWebpage::from(record);
-                    keys.push(key);
-                    batch.push(page);
-                }
-
-                let prepared = crate::block_on(worker.prepare_webpages_with_positions(&batch));
-
-                for (position, webpage) in &prepared {
-                    if webpage.host_centrality > 0.0 {
-                        has_host_centrality = true;
-                    }
-
-                    if webpage.page_centrality > 0.0 {
-                        has_page_centrality = true;
-                    }
-
-                    if !webpage.backlinks().is_empty() {
-                        has_backlinks = true;
-                    }
-                    trace!("inserting webpage: {:?}", webpage.html.url());
-                    trace!("title = {:?}", webpage.html.title());
-                    trace!("text = {:?}", webpage.html.clean_text());
-
-                    if let Err(err) = index.insert(webpage) {
-                        warn!("{:?}", err);
-                        panic!();
-                    }
-
-                    let key = keys[*position].clone();
-                    key_bytes += key.len() + 64;
-                    committed_keys.insert(key);
-                    num_inserts_since_commit += 1;
-                }
-
-                if num_inserts_since_commit >= self.settings.autocommit_after_num_inserts
-                    || key_bytes >= worker.dedup.max_memory_bytes
+        while let Some(chunk) = consumer.next_batch(self.settings.batch_size)? {
+            let mut batch = Vec::new();
+            let mut keys = Vec::new();
+            let mut batch_keys = std::collections::HashSet::new();
+            for record in chunk.records {
+                if !record.indexing_allowed()
+                    || record.is_revalidation()
+                    || record
+                        .response
+                        .payload_type
+                        .is_some_and(|kind| !matches!(kind, PayloadType::Html))
                 {
-                    index.commit().unwrap();
-                    exact
-                        .commit(&committed_keys.drain().collect::<Vec<_>>())
-                        .expect("persist exact index dedup after index commit");
-                    key_bytes = 0;
-                    num_inserts_since_commit = 0;
+                    continue;
                 }
+                let key = crate::crawler::dedup::ExactSet::version_key(&record)?;
+                if exact.contains(&key)? || !batch_keys.insert(key.clone()) {
+                    continue;
+                }
+                keys.push(key);
+                batch.push(IndexableWebpage::from(record));
             }
+            let prepared = crate::block_on(worker.prepare_webpages_with_positions(&batch));
+            let mut committed_keys = Vec::new();
+            for (position, webpage) in &prepared {
+                has_host_centrality |= webpage.host_centrality > 0.0;
+                has_page_centrality |= webpage.page_centrality > 0.0;
+                has_backlinks |= !webpage.backlinks().is_empty();
+                trace!("inserting webpage: {:?}", webpage.html.url());
+                index.insert(webpage)?;
+                committed_keys.push(keys[*position].clone());
+            }
+            let payload = consumer.payload(chunk.next_record, false, committed_keys.clone())?;
+            index.commit_with_payload(&payload)?;
+            exact.commit(&committed_keys)?;
+            consumer.confirm(chunk.next_record, false)?;
         }
-        index.commit().unwrap();
-        exact
-            .commit(&committed_keys.drain().collect::<Vec<_>>())
-            .expect("persist exact index dedup after index commit");
-
+        let payload = consumer.payload(consumer.cursor(), true, Vec::new())?;
+        index.commit_with_payload(&payload)?;
+        consumer.finish()?;
         if !has_host_centrality {
             warn!("no host centrality values found in {}", name);
         }
-
         if !has_page_centrality && worker.page_centrality_store().is_some() {
             warn!("no page centrality values found in {}", name);
         }
-
         if !has_backlinks && worker.page_webgraph().is_some() {
             warn!("no backlinks found in {}", name);
         }
-
-        index.inverted_index.merge_into_max_segments(1).unwrap();
-
+        index.inverted_index.merge_into_max_segments(1)?;
+        index.commit_with_payload(&payload)?;
         info!("{} done", name);
-
-        index
+        Ok(index)
     }
 }
 
@@ -281,6 +238,7 @@ mod exact_dedup_contract {
         }
         std::fs::write(warcs.join("fixture.warc.gz"), writer.finish().unwrap()).unwrap();
         let config = super::super::worker::Config {
+            consumer: Default::default(),
             dedup: crate::crawler::dedup::Config {
                 max_memory_bytes: 8,
                 ..Default::default()

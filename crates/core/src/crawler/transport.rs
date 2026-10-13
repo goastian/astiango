@@ -225,7 +225,7 @@ impl Drop for BlockingResolution {
     }
 }
 
-#[cfg(any(test, feature = "crawler-bench"))]
+#[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
 #[derive(Clone)]
 pub struct FixturePolicy {
     pub allowed_hosts: std::collections::BTreeSet<String>,
@@ -300,16 +300,26 @@ struct Inner {
     ip_changed: Notify,
     counters: Counters,
     setup_stage: Mutex<super::pipeline::BlockingStage>,
-    #[cfg(any(test, feature = "crawler-bench"))]
+    #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
     fixture: Option<FixturePolicy>,
 }
 
 #[derive(Clone)]
 pub struct SharedTransport {
     inner: Arc<Inner>,
+    authority: Option<Arc<dyn HttpAuthority>>,
+}
+
+pub trait HttpAuthority: Send + Sync {
+    fn check(&self) -> Result<()>;
+    fn authorize<'a>(&'a self, url: &'a Url) -> IoFuture<'a, Result<()>>;
 }
 
 impl SharedTransport {
+    pub fn with_authority(mut self, authority: Arc<dyn HttpAuthority>) -> Self {
+        self.authority = Some(authority);
+        self
+    }
     pub fn new(config: &CrawlerConfig, options: TransportConfig) -> Result<Self> {
         options.validate().map_err(Error::from)?;
         let resolver = Arc::new(SystemResolver::new(
@@ -335,6 +345,7 @@ impl SharedTransport {
             return Err(Error::from(anyhow!("transport timeout must be positive")));
         }
         Ok(Self {
+            authority: None,
             inner: Arc::new(Inner {
                 config: config.clone(),
                 dns_permits: Semaphore::new(options.dns_max_inflight),
@@ -353,13 +364,13 @@ impl SharedTransport {
                     config.pipeline.network_setup.clone(),
                     Duration::from_millis(config.pipeline.queue_wait_timeout_ms),
                 )),
-                #[cfg(any(test, feature = "crawler-bench"))]
+                #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
                 fixture: None,
             }),
         })
     }
 
-    #[cfg(any(test, feature = "crawler-bench"))]
+    #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
     pub fn with_fixture_resolver(
         config: &CrawlerConfig,
         options: TransportConfig,
@@ -455,7 +466,7 @@ impl SharedTransport {
     }
 
     fn validate_url(&self, url: &Url) -> Result<()> {
-        #[cfg(any(test, feature = "crawler-bench"))]
+        #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
         if let Some(fixture) = &self.inner.fixture {
             if matches!(url.scheme(), "http" | "https")
                 && url.username().is_empty()
@@ -480,6 +491,11 @@ impl SharedTransport {
         started: Instant,
         headers: reqwest::header::HeaderMap,
     ) -> Result<reqwest::Response> {
+        if let Some(authority) = &self.authority {
+            authority.check()?;
+            authority.authorize(&url).await?;
+            authority.check()?;
+        }
         self.validate_url(&url)?;
         let host = url
             .host_str()
@@ -570,6 +586,7 @@ impl SharedTransport {
                 Error::Body(BodyError::TotalTimeout)
             })?;
         let header_timeout = Duration::from_millis(self.inner.config.body.header_timeout_ms);
+        if let Some(authority) = &self.authority { authority.check()?; }
         let result = tokio::time::timeout(
             header_timeout.min(remaining),
             client.get(url).headers(headers).timeout(remaining).send(),
@@ -588,7 +605,7 @@ impl SharedTransport {
                         CrawlNetworkPolicy::PublicOnly => "public_only",
                         CrawlNetworkPolicy::AllowPrivate => "allow_private",
                     };
-                    #[cfg(any(test, feature = "crawler-bench"))]
+                    #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
                     let policy = if self.inner.fixture.is_some() {
                         "fixture_allowlist"
                     } else {
@@ -680,7 +697,7 @@ impl SharedTransport {
             .pool_max_idle_per_host(1)
             .pool_idle_timeout(Duration::from_secs(self.inner.options.idle_timeout_seconds))
             .resolve_to_addrs(host, &addresses);
-        #[cfg(any(test, feature = "crawler-bench"))]
+        #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
         if let Some(pem) = self
             .inner
             .fixture
@@ -1016,7 +1033,7 @@ impl SharedTransport {
                     .addresses
                     .iter()
                     .all(|ip| super::robot_client::is_public_address(*ip)));
-        #[cfg(any(test, feature = "crawler-bench"))]
+        #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
         if self.inner.fixture.is_some() {
             accepted = !answer.addresses.is_empty()
                 && answer.addresses.len() <= 64

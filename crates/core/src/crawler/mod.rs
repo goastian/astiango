@@ -31,15 +31,20 @@ use anyhow::anyhow;
 use robot_client::RobotClient;
 use url::Url;
 
-use crate::{config::CrawlerConfig, warc, webpage::url_ext::UrlExt};
+use crate::{warc, webpage::url_ext::UrlExt};
+#[cfg(not(crawler_standalone))]
+use crate::config::CrawlerConfig;
 
-use self::{warc_writer::WarcWriter, worker::WorkerThread};
+use self::warc_writer::WarcWriter;
+#[cfg(not(crawler_standalone))]
+use self::worker::WorkerThread;
 pub use outcome::{CrawlCounters, FetchOutcome, JobOutcome, JobStatus, UrlOutcome};
 pub use worker::JobExecutor;
 
 pub mod body;
 #[cfg(feature = "crawler-bench")]
 pub mod capture_frontier_benchmark;
+#[cfg(not(crawler_standalone))]
 pub mod coordinator;
 pub mod dedup;
 pub mod discovery;
@@ -52,11 +57,13 @@ pub mod pipeline_benchmark;
 #[cfg(feature = "crawler-bench")]
 pub mod resilience_benchmark;
 pub mod robots_txt;
+#[cfg(not(crawler_standalone))]
 pub mod router;
 pub mod spool;
 #[cfg(feature = "crawler-bench")]
 pub mod spool_benchmark;
 pub mod traps;
+#[cfg(not(crawler_standalone))]
 pub use router::Router;
 #[cfg(feature = "crawler-bench")]
 pub mod benchmark;
@@ -64,14 +71,18 @@ pub mod benchmark;
 pub mod body_benchmark;
 #[cfg(feature = "crawler-bench")]
 pub mod extraction_benchmark;
+#[cfg(not(crawler_standalone))]
 mod file_queue;
 pub mod local;
+pub mod leased;
 mod observer;
 pub mod outcome;
 pub mod plan_signals;
 pub mod plan_store;
+#[cfg(not(crawler_standalone))]
 pub mod planner;
 pub mod recrawl;
+pub mod resources;
 pub mod retry;
 pub mod robot_client;
 pub mod runtime;
@@ -85,6 +96,7 @@ mod wander_prioritiser;
 mod warc_writer;
 mod worker;
 
+#[cfg(not(crawler_standalone))]
 pub use coordinator::CrawlCoordinator;
 
 pub const MAX_URL_LEN_BYTES: usize = 8192;
@@ -338,7 +350,7 @@ pub struct CrawlDatum {
 
 impl CrawlDatum {
     pub fn memory_bytes(&self) -> usize {
-        self.body.len() + self.capture.as_ref().map_or(0, |c| c.payload.len())
+        self.body.capacity() + self.capture.as_ref().map_or(0, |c| c.payload.capacity() + c.metadata.memory_bytes())
     }
     pub fn indexing_allowed(&self) -> bool {
         self.capture
@@ -347,12 +359,14 @@ impl CrawlDatum {
     }
 }
 
+#[cfg(not(crawler_standalone))]
 pub struct Crawler {
     writer: Arc<WarcWriter>,
     handles: tokio::task::JoinSet<Result<()>>,
     pipeline: pipeline::Pipeline,
 }
 
+#[cfg(not(crawler_standalone))]
 impl Crawler {
     pub async fn new(config: CrawlerConfig) -> Result<Self> {
         let mut handles = tokio::task::JoinSet::new();

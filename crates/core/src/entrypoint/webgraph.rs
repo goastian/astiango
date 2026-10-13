@@ -17,7 +17,6 @@
 use crate::{
     canon_index::CanonicalIndex,
     config::{self, WarcSource, WebgraphConstructConfig},
-    entrypoint::download_all_warc_files,
     webgraph::{self, Edge, Node, NodeID},
     webpage::Html,
     Result,
@@ -26,7 +25,6 @@ use itertools::Itertools;
 use url::Url;
 
 use std::{path::Path, sync::Arc};
-use tokio::pin;
 use tracing::{info, trace};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode, Clone)]
@@ -79,29 +77,40 @@ pub struct WebgraphWorker {
 
 impl WebgraphWorker {
     pub fn process_job(&mut self, job: &Job) {
+        self.try_process_job(job, crate::warc::stream::Limits::default())
+            .expect("webgraph consumer failed; input retained");
+    }
+
+    pub fn try_process_job(
+        &mut self,
+        job: &Job,
+        limits: crate::warc::stream::Limits,
+    ) -> Result<()> {
+        limits.validate()?;
+        self.graph.prepare_writer_with_budget(limits.batch_bytes)?;
         let name = job.warc_paths.first().unwrap().split('/').last().unwrap();
 
         info!("processing {}", name);
 
         let source = WarcSource::from(job.config.clone());
 
-        let warc_files = download_all_warc_files(&job.warc_paths, &source);
-        pin!(warc_files);
-
-        for file in warc_files.by_ref() {
-            for record in file.records() {
-                let record = match record {
-                    Ok(record) => record,
-                    Err(error) => {
-                        tracing::error!("WARC contract error: {error}");
+        for path in &job.warc_paths {
+            let mut consumer = crate::warc::consumer::Consumer::open(
+                &source,
+                path,
+                &self.graph.path().join("consumer-checkpoints"),
+                limits,
+            )?;
+            consumer.recover_commit(self.graph.commit_payload()?.as_deref())?;
+            while let Some(batch) = consumer.next_batch(64)? {
+                for record in batch.records {
+                    if !record.links_allowed() || record.is_revalidation() {
                         continue;
                     }
-                };
-                if !record.links_allowed() || record.is_revalidation() {
-                    continue;
-                }
-                let webpage =
-                    match Html::parse_without_text(&record.response.body, &record.request.url) {
+                    let webpage = match Html::parse_without_text(
+                        &record.response.body,
+                        &record.request.url,
+                    ) {
                         Ok(webpage) => webpage,
                         Err(err) => {
                             tracing::error!("error parsing webpage: {}", err);
@@ -109,77 +118,88 @@ impl WebgraphWorker {
                         }
                     };
 
-                if webpage.is_no_follow() {
-                    continue;
-                }
-                let mut source = webpage.url().clone();
-                if let Some(index) = &self.canonical_index {
-                    source = canonical_or_self(index, source);
-                }
-
-                let source = Node::from(source);
-                let source_centrality = self
-                    .host_centrality_store
-                    .as_ref()
-                    .and_then(|store| store.get(&source.clone().into_host().id()).unwrap())
-                    .unwrap_or(0.0);
-                let source_rank = self
-                    .host_rank_store
-                    .as_ref()
-                    .and_then(|store| store.get(&source.clone().into_host().id()).unwrap())
-                    .unwrap_or(u64::MAX);
-
-                let num_outgoing_hosts_from_page = webpage
-                    .anchor_links()
-                    .into_iter()
-                    .filter_map(|l| l.destination.host_str().map(|h| h.to_string()))
-                    .unique()
-                    .count() as u64;
-
-                for mut link in webpage.anchor_links().into_iter() {
-                    let mut destination = link.destination.clone();
-
+                    if webpage.is_no_follow() {
+                        continue;
+                    }
+                    let mut source = webpage.url().clone();
                     if let Some(index) = &self.canonical_index {
-                        destination = canonical_or_self(index, destination);
+                        source = canonical_or_self(index, source);
                     }
 
-                    link.text = link.text.chars().take(128).collect();
-
-                    let destination = Node::from(destination);
-
-                    let destination_centrality = self
+                    let source = Node::from(source);
+                    let source_centrality = self
                         .host_centrality_store
                         .as_ref()
-                        .and_then(|store| store.get(&destination.clone().into_host().id()).unwrap())
+                        .and_then(|store| store.get(&source.clone().into_host().id()).unwrap())
                         .unwrap_or(0.0);
-                    let destination_rank = self
+                    let source_rank = self
                         .host_rank_store
                         .as_ref()
-                        .and_then(|store| store.get(&destination.clone().into_host().id()).unwrap())
+                        .and_then(|store| store.get(&source.clone().into_host().id()).unwrap())
                         .unwrap_or(u64::MAX);
 
-                    trace!("inserting link {:?}", link);
-                    self.graph
-                        .insert(Edge {
-                            from: source.clone(),
-                            to: destination,
-                            rel_flags: link.rel,
-                            label: link.text,
-                            sort_score: source_rank.saturating_add(destination_rank),
-                            from_centrality: source_centrality,
-                            to_centrality: destination_centrality,
-                            from_rank: source_rank,
-                            to_rank: destination_rank,
-                            num_outgoing_hosts_from_page,
-                        })
-                        .unwrap();
-                }
-            }
+                    let num_outgoing_hosts_from_page = webpage
+                        .anchor_links()
+                        .into_iter()
+                        .filter_map(|l| l.destination.host_str().map(|h| h.to_string()))
+                        .unique()
+                        .count() as u64;
 
-            self.graph.commit().unwrap();
+                    for mut link in webpage.anchor_links().into_iter() {
+                        let mut destination = link.destination.clone();
+
+                        if let Some(index) = &self.canonical_index {
+                            destination = canonical_or_self(index, destination);
+                        }
+
+                        link.text = link.text.chars().take(128).collect();
+
+                        let destination = Node::from(destination);
+
+                        let destination_centrality = self
+                            .host_centrality_store
+                            .as_ref()
+                            .and_then(|store| {
+                                store.get(&destination.clone().into_host().id()).unwrap()
+                            })
+                            .unwrap_or(0.0);
+                        let destination_rank = self
+                            .host_rank_store
+                            .as_ref()
+                            .and_then(|store| {
+                                store.get(&destination.clone().into_host().id()).unwrap()
+                            })
+                            .unwrap_or(u64::MAX);
+
+                        trace!("inserting link {:?}", link);
+                        self.graph
+                            .insert(Edge {
+                                from: source.clone(),
+                                to: destination,
+                                rel_flags: link.rel,
+                                label: link.text,
+                                sort_score: source_rank.saturating_add(destination_rank),
+                                from_centrality: source_centrality,
+                                to_centrality: destination_centrality,
+                                from_rank: source_rank,
+                                to_rank: destination_rank,
+                                num_outgoing_hosts_from_page,
+                            })
+                            .unwrap();
+                    }
+                }
+
+                let payload = consumer.payload(batch.next_record, false, Vec::new())?;
+                self.graph.commit_with_payload(&payload)?;
+                consumer.confirm(batch.next_record, false)?;
+            }
+            let payload = consumer.payload(consumer.cursor(), true, Vec::new())?;
+            self.graph.commit_with_payload(&payload)?;
+            consumer.finish()?;
         }
 
         info!("{} done", name);
+        Ok(())
     }
 }
 
@@ -187,91 +207,87 @@ pub struct Webgraph {}
 
 impl Webgraph {
     pub fn run(config: &WebgraphConstructConfig) -> Result<()> {
-        let warc_paths = config.warc_source.paths()?;
-
-        let job_config = JobConfig::from(config.warc_source.clone());
-
-        let jobs: Vec<_> = warc_paths
+        use rayon::prelude::*;
+        config.consumer.validate()?;
+        anyhow::ensure!(
+            config.limit_warc_files != Some(0),
+            "webgraph file limit must be positive"
+        );
+        let workspace =
+            crate::warc::publication::Workspace::open(Path::new(&config.graph_base_path))?;
+        let paths = config
+            .warc_source
+            .paths()?
             .into_iter()
+            .unique()
             .skip(config.skip_warc_files.unwrap_or(0))
             .take(config.limit_warc_files.unwrap_or(usize::MAX))
-            .chunks(config.batch_size.unwrap_or(1))
-            .into_iter()
-            .map(|warc_paths| Job {
-                config: job_config.clone(),
-                warc_paths: warc_paths.collect_vec(),
-            })
-            .collect_vec();
-
-        let canonical_index = if let Some(index_path) = &config.canonical_index_path {
-            Some(Arc::new(CanonicalIndex::open(index_path)?))
-        } else {
-            None
-        };
-
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            !paths.is_empty(),
+            "no WARC inputs selected for webgraph publication"
+        );
+        let canonical_index = config
+            .canonical_index_path
+            .as_ref()
+            .map(|path| CanonicalIndex::open(path).map(Arc::new))
+            .transpose()?;
         let host_centrality_store = Arc::new(speedy_kv::Db::open_or_create(
             &config.host_centrality_store_path,
         )?);
-
         let host_rank_store =
             Arc::new(speedy_kv::Db::open_or_create(&config.host_rank_store_path)?);
-
-        let num_workers = usize::from(std::thread::available_parallelism()?);
-
-        let mut handlers = Vec::new();
-        let graph_path = &config.graph_base_path;
-
-        const MAX_FINALIZE_CONCURRENT: usize = 4;
-        let (s, r) = crossbeam_channel::bounded(MAX_FINALIZE_CONCURRENT);
-
-        for _ in 0..MAX_FINALIZE_CONCURRENT {
-            s.send(())?;
-        }
-
-        for i in 0..num_workers {
-            let graph_path = graph_path.clone();
-            let graph_path = Path::new(&graph_path).join(format!("worker_{i}"));
-
-            let mut worker = WebgraphWorker {
-                graph: webgraph::Webgraph::open(graph_path, config.shard)?,
-                host_centrality_store: Some(host_centrality_store.clone()),
-                host_rank_store: Some(host_rank_store.clone()),
-                canonical_index: canonical_index.clone(),
-            };
-
-            let jobs = jobs.clone();
-            let (s, r) = (s.clone(), r.clone());
-            handlers.push(std::thread::spawn(move || {
-                for job in jobs.iter().skip(i).step_by(num_workers) {
-                    worker.process_job(job);
-                }
-
-                r.recv().unwrap();
-
-                worker.graph.commit().unwrap();
-                worker.graph.optimize_read().unwrap();
-
-                s.send(()).unwrap();
-                worker.graph
-            }));
-        }
-
-        let mut graphs = Vec::new();
-        for handler in handlers {
-            graphs.push(handler.join().unwrap());
-        }
-
-        let mut graph = graphs.pop().unwrap();
-
-        for other in graphs {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(
+                config
+                    .consumer
+                    .workers
+                    .min(crate::crawler::resources::effective_cpus()),
+            )
+            .stack_size(config.consumer.stack_bytes)
+            .build()?;
+        let inputs: Result<Vec<_>> = pool.install(|| {
+            paths
+                .into_par_iter()
+                .map(|path| {
+                    let key = crate::warc::publication::Workspace::key(&config.warc_source, &path)?;
+                    let location = workspace.jobs.join(key);
+                    let mut worker = WebgraphWorker {
+                        graph: webgraph::Webgraph::open(&location, config.shard)?,
+                        host_centrality_store: Some(host_centrality_store.clone()),
+                        host_rank_store: Some(host_rank_store.clone()),
+                        canonical_index: canonical_index.clone(),
+                    };
+                    worker.try_process_job(
+                        &Job {
+                            config: config.warc_source.clone().into(),
+                            warc_paths: vec![path],
+                        },
+                        config.consumer,
+                    )?;
+                    worker.graph.optimize_read()?;
+                    Ok(location)
+                })
+                .collect()
+        });
+        let copies = workspace.copies(&inputs?)?;
+        let mut copies = copies.into_iter();
+        let first = copies
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no completed graph inputs"))?;
+        let mut graph = webgraph::Webgraph::open(&first, config.shard)?;
+        graph.prepare_writer_with_budget(config.consumer.batch_bytes)?;
+        for path in copies {
+            let mut other = webgraph::Webgraph::open(path, config.shard)?;
+            other.prepare_writer_with_budget(config.consumer.batch_bytes)?;
             graph.merge(other)?;
         }
-
         if config.merge_all_segments {
-            graph.optimize_read().unwrap();
+            graph.optimize_read()?;
         }
-        crate::mv(graph.path(), &config.graph_base_path)?;
-
+        let location = graph.path();
+        drop(graph);
+        workspace.publish(&location)?;
         Ok(())
     }
 }

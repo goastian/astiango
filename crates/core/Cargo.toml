@@ -15,6 +15,7 @@ default = ["cors", "dev", "serde"]
 dev = ["cors", "serde"]
 return_body = []
 crawler-bench = []
+integration-fixtures = []
 
 # DOESN'T DO ANYTHING. This is only used to silence a warning from openraft.
 serde = []
@@ -202,3 +203,10 @@ required-features = ["crawler-bench"]
 [[example]]
 name = "crawler_resilience_bench"
 required-features = ["crawler-bench"]
+
+[[example]]
+name = "crawler_operations_bench"
+required-features = ["crawler-bench"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crawler_standalone)'] }

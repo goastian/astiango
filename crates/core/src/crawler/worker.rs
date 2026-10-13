@@ -34,8 +34,6 @@ use crate::{
     config::{CrawlNetworkPolicy, CrawlerConfig},
     crawler::MAX_URL_LEN_BYTES,
     dated_url::DatedUrl,
-    distributed::{retry_strategy::ExponentialBackoff, sonic},
-    entrypoint::crawler::router::{NewJob, RouterService},
     sitemap::SitemapEntry,
     webpage::url_ext::UrlExt,
 };
@@ -50,6 +48,9 @@ use super::{
     WorkerJob,
 };
 
+#[cfg(not(crawler_standalone))]
+use crate::{distributed::{retry_strategy::ExponentialBackoff, sonic}, entrypoint::crawler::router::{NewJob, RouterService}};
+
 const INITIAL_WANDER_STEPS: u64 = 4;
 
 enum UrlVisit {
@@ -62,6 +63,7 @@ struct ProcessedUrl {
     final_url: Url,
 }
 
+#[cfg(not(crawler_standalone))]
 pub struct WorkerThread {
     writer: Arc<WarcWriter>,
     config: Arc<CrawlerConfig>,
@@ -69,6 +71,7 @@ pub struct WorkerThread {
     client: RobotClient,
 }
 
+#[cfg(not(crawler_standalone))]
 impl WorkerThread {
     pub fn new(
         writer: Arc<WarcWriter>,

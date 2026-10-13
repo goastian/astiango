@@ -578,7 +578,11 @@ impl Pipeline {
             })
             .await
     }
-    pub fn new(config: PipelineConfig) -> anyhow::Result<Self> {
+    pub fn new(mut config: PipelineConfig) -> anyhow::Result<Self> {
+        let cpus = super::resources::effective_cpus();
+        for stage in [&mut config.parse, &mut config.storage, &mut config.control, &mut config.network_setup] {
+            stage.workers = stage.workers.min(cpus);
+        }
         config.validate()?;
         let timeout = Duration::from_millis(config.queue_wait_timeout_ms);
         Ok(Self {

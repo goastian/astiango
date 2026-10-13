@@ -279,7 +279,7 @@ impl RobotClient {
         Self::new(config)
     }
 
-    #[cfg(any(test, feature = "crawler-bench"))]
+    #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
     pub fn with_runtime(
         config: &CrawlerConfig,
         runtime: Arc<super::runtime::Runtime>,
@@ -312,7 +312,6 @@ impl RobotClient {
         &self.transport
     }
 
-    #[cfg(any(test, feature = "crawler-bench"))]
     pub fn with_transport(config: &CrawlerConfig, transport: SharedTransport) -> Self {
         let body_reader = BodyReader::new(config.body.clone()).expect("invalid body configuration");
         let pipeline = super::pipeline::Pipeline::new(config.pipeline.clone())
@@ -366,6 +365,11 @@ impl RobotClient {
         &self.pipeline
     }
 
+    /// Stop admission and drain the blocking work shared by this client and its clones.
+    pub async fn shutdown(&self) {
+        self.pipeline.shutdown().await;
+    }
+
     pub(crate) fn page_reservation_bytes(&self) -> usize {
         self.config
             .body
@@ -387,7 +391,7 @@ impl RobotClient {
             .await?)
     }
 
-    #[cfg(any(test, feature = "crawler-bench"))]
+    #[cfg(any(test, feature = "crawler-bench", feature = "integration-fixtures"))]
     pub(crate) fn with_pipeline(mut self, pipeline: super::pipeline::Pipeline) -> Self {
         self.transport
             .set_setup_stage(pipeline.network_setup.clone());
@@ -422,16 +426,19 @@ impl RobotClient {
             }
         }
 
-        if let Some(runtime) = &self.runtime {
-            return RequestBuilder::injected(runtime.clone(), url.clone(), &self.config)
-                .with_scheduler(self.robots_txt_manager.scheduler().clone(), url)
+        let request = if let Some(runtime) = &self.runtime {
+            RequestBuilder::injected(runtime.clone(), url.clone(), &self.config)
+                .with_scheduler(self.robots_txt_manager.scheduler().clone(), url.clone())
                 .prepare()
-                .await;
-        }
-        RequestBuilder::managed(self.transport.clone(), url.clone())
-            .with_scheduler(self.robots_txt_manager.scheduler().clone(), url)
-            .prepare()
-            .await
+                .await?
+        } else {
+            RequestBuilder::managed(self.transport.clone(), url.clone())
+                .with_scheduler(self.robots_txt_manager.scheduler().clone(), url.clone())
+                .prepare()
+                .await?
+        };
+        self.robots_txt_manager.page_admitted(&url);
+        Ok(request)
     }
 }
 

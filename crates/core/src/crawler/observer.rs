@@ -239,6 +239,8 @@ impl Write for CountingWriter<'_> {
 
 #[derive(Serialize)]
 struct Projection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resources: Option<super::resources::Stats>,
     #[serde(flatten)]
     snapshot: Snapshot,
     telemetry: ObserverStats,
@@ -263,6 +265,7 @@ struct Projection {
 type Publisher = dyn Fn(&Path, &Projection, &IoCounters, bool) -> anyhow::Result<()> + Send + Sync;
 
 struct Shared {
+    resources: Mutex<Option<super::resources::Controller>>,
     state: Mutex<State>,
     wake: Condvar,
     io: IoCounters,
@@ -339,6 +342,7 @@ impl Observer {
             .map(|site| (site.host.clone(), site.status == "completed"))
             .collect();
         let shared = Arc::new(Shared {
+            resources: Mutex::new(None),
             state: Mutex::new(State {
                 snapshot,
                 rings,
@@ -423,6 +427,11 @@ impl Observer {
     }
     pub(super) fn observe_spool(&self, spool: super::spool::SpoolMetrics) {
         *self.shared.spool.lock().unwrap() = Some(spool);
+        self.heartbeat();
+    }
+
+    pub(super) fn observe_resources(&self, resources: super::resources::Controller) {
+        *self.shared.resources.lock().unwrap() = Some(resources);
         self.heartbeat();
     }
 
@@ -853,6 +862,7 @@ fn publish(shared: &Shared, legacy: bool) {
         let dirty_since = state.dirty_since.take().unwrap_or_else(Instant::now);
         (
             Projection {
+                resources: None,
                 snapshot,
                 telemetry,
                 transport: None,
@@ -869,6 +879,7 @@ fn publish(shared: &Shared, legacy: bool) {
         )
     };
     let transport = shared.transport.lock().unwrap().clone();
+    projection.resources = shared.resources.lock().unwrap().as_ref().map(|controller| controller.stats());
     projection.transport = transport.as_ref().map(|transport| transport.stats());
     let body = shared.body.lock().unwrap().clone();
     projection.body = body.as_ref().map(|body| body.stats());

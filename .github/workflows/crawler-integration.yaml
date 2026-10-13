@@ -1,0 +1,37 @@
+name: Crawler integration
+permissions:
+  contents: read
+on:
+  pull_request:
+    paths: ['crates/**', 'Cargo.*', 'configs/crawler/**', 'scripts/crawler-*', 'scripts/build-crawler.py', 'rust-toolchain.toml', 'tools/crawler-dashboard/**', 'packages/i18n/**', '.github/workflows/crawler-integration.yaml']
+  push:
+    paths: ['crates/**', 'Cargo.*', 'configs/crawler/**', 'scripts/crawler-*', 'scripts/build-crawler.py', 'rust-toolchain.toml', 'tools/crawler-dashboard/**', 'packages/i18n/**', '.github/workflows/crawler-integration.yaml']
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CFLAGS: -std=gnu17
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.90.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.10.0'
+      - run: sudo apt-get update && sudo apt-get install -y liburing-dev libssl-dev pkg-config clang
+      - run: cargo fetch --locked
+      - run: python3 scripts/build-crawler.py
+      - run: target/release/astiango-crawler validate configs/crawler/local.toml
+      - run: target/release/astiango-crawler validate configs/crawler/small.toml
+      - run: cargo build --locked --offline --release -p astiango-crawler-service --example crawler_frontier_repair
+      - run: target/release/examples/crawler_frontier_repair data/frontier-repair-ci
+      - run: cargo build --locked --offline --release -p astiango-crawler-service --example crawler_robots_cache
+      - run: python3 scripts/crawler-robots-cache-bench.py
+      - run: cargo build --locked --offline --release --no-default-features -p astiango --features crawler-bench --example crawler_operations_bench
+      - run: target/release/examples/crawler_operations_bench create data/crawler-operations-bench
+      - run: target/release/examples/crawler_operations_bench integrations data/crawler-operations-bench
+      - run: npm ci && npm run check && npm run build
+        working-directory: tools/crawler-dashboard
