@@ -5,7 +5,7 @@
   const number = (n: number) => format.format(n);
   const diversity = $derived(report.scenarios.find(s => s.name === "diversity")?.runs[0]?.comparisons as Array<{ tenants: number; urls: number }> | undefined);
 </script>
-<section class="resilience-benchmark" aria-label="Banco C14–C20">
+<section class="resilience-benchmark" aria-label="Resultados de revalidación y planificación">
   <h3>Revalidación, descubrimiento y planificación</h3>
   <p>Tres repeticiones por escenario. Mediana, rango y desviación absoluta mediana (MAD). El tráfico de prueba permanece en loopback.</p>
   <div class="comparison"><strong>{number(report.comparisons.body_bytes)} %</strong><span>menos bytes HTTP en la cohorte local de dos rondas, con 80 % de páginas sin cambios.</span></div>

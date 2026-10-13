@@ -16,10 +16,10 @@
   <span>CPU del corpus: {display(report.corpus_cpu_reduction_pct.median, "%")} menos · objetivo ≥30 %</span>
   <span>Mediana · MAD · rango · tres repeticiones</span>
 </div>
-<p class="benchmark-acceptance-note">Comparación del doble parseo de C05 con una extracción compartida.
+<p class="benchmark-acceptance-note">Comparación del doble parseo anterior con una extracción compartida.
   Mismo HTML, reglas y límites. CPU medida en el hilo; bytes asignados acumulados por página, incluidos realloc,
   no memoria viva ni RSS. Este banco trabaja con archivos locales y no realiza solicitudes de red.</p>
-<div class="benchmark-scroll"><table class="benchmark-table" aria-label="Resultados de extracción C06">
+<div class="benchmark-scroll"><table class="benchmark-table" aria-label="Resultados de extracción">
   <thead><tr><th>Escenario</th><th>Modo</th><th>Repeticiones</th><th>CPU ms/página</th><th>Bytes asignados/página</th><th>Asignaciones/página</th><th>DOM/página</th></tr></thead>
   <tbody>{#each report.summaries as row}<tr>
     <th scope="row">{row.scenario}</th><td>{row.mode === "legacy" ? "Doble parseo" : "Compartida"}</td><td>{row.repetitions}</td>
@@ -31,7 +31,7 @@
 </table></div>
 <div class="benchmark-details-grid">
   <div class="benchmark-detail"><h3>Mejora y equivalencia</h3>
-    <div class="benchmark-scroll"><table class="benchmark-table" aria-label="Comparación de extracción C06">
+    <div class="benchmark-scroll"><table class="benchmark-table" aria-label="Comparación de extracción">
       <thead><tr><th>Escenario</th><th>CPU reducida</th><th>Bytes asignados reducidos</th><th>Enlaces y metadatos</th></tr></thead>
       <tbody>{#each report.comparisons as row}<tr><th scope="row">{row.scenario}</th>
         <td class="benchmark-numeric">{@render metric(row.cpu_reduction_pct, "%")}</td>
@@ -44,7 +44,7 @@
     <label><span class="sr-only">Escenario de extracción para inspeccionar</span><select bind:value={selected}>
       {#each report.comparisons as row}<option value={row.scenario}>{row.scenario}</option>{/each}
     </select></label></div>
-    <div class="benchmark-scroll"><table class="benchmark-table" aria-label="Repeticiones de extracción C06">
+    <div class="benchmark-scroll"><table class="benchmark-table" aria-label="Repeticiones de extracción">
       <thead><tr><th>Repetición</th><th>Modo</th><th>CPU ms/página</th><th>Bytes asignados/página</th><th>Anchors recorridos</th><th>Descubrimiento / internos</th></tr></thead>
       <tbody>{#each runs as run}<tr><th scope="row">{run.repetition}</th><td>{run.mode === "legacy" ? "Doble parseo" : "Compartida"}</td>
         <td>{display(run.cpu_ms_per_page)}</td><td>{display(run.allocated_bytes_per_page, "B")}</td>

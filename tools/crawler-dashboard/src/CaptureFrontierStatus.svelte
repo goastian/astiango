@@ -25,14 +25,14 @@
     <div class="content"><p>La captura conserva el cuerpo recibido y su SHA-256 antes de decodificarlo. Las decisiones de indexación acompañan al archivo.
       Cada reserva, archivo y commit comparte un identificador; la recuperación también publica los enlaces pendientes.</p>
       <div class="groups">
-        {#if spool?.capture_records !== undefined}<section aria-label="Captura C09"><h3>Capturas de esta ejecución</h3><dl>
+        {#if spool?.capture_records !== undefined}<section aria-label="Captura HTTP"><h3>Capturas de esta ejecución</h3><dl>
           <div><dt>Capturas WARC 1.1 durables</dt><dd>{display(spool.capture_records)}</dd></div>
           <div><dt>Representación recibida</dt><dd>{mib(spool.captured_payload_bytes ?? 0)}</dd></div>
           <div><dt>Vista decodificada</dt><dd>{mib(spool.decoded_payload_bytes ?? 0)}</dd></div>
           <div><dt>Archivadas con noindex</dt><dd>{display(spool.noindex_records ?? 0)}</dd></div>
           <div><dt>Archivadas con nofollow</dt><dd>{display(spool.nofollow_records ?? 0)}</dd></div>
         </dl><p>Noindex permite archivar la respuesta y excluye su contenido del índice. Nofollow excluye sus enlaces del descubrimiento y del webgraph.</p></section>{/if}
-        {#if frontier}<section aria-label="Frontera C10"><h3>Frontera durable · redb</h3><dl>
+        {#if frontier}<section aria-label="Frontier durable"><h3>Frontera durable · redb</h3><dl>
           {#each rows as [label, value]}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}
         </dl><p>Estos totales pertenecen al estado conservado entre reinicios. Los jobs procesados en migración incluyen sus relecturas tras una caída; las URLs se conservan una sola vez. Los resultados del banco local aparecen en su propia pestaña.</p></section>{/if}
       </div>

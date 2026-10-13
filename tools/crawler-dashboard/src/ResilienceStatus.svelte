@@ -32,26 +32,26 @@
     <summary>Recuperación, descubrimiento y revalidación</summary>
     <div class="content">
       <div class="groups">
-        <section aria-label="Reintentos C14"><h3>Reintentos durables</h3><dl>
+        <section aria-label="Reintentos durables"><h3>Reintentos durables</h3><dl>
           <div><dt>Aplazados / presupuesto agotado</dt><dd>{number(frontier.retry_deferred)} / {number(frontier.retry_exhausted)}</dd></div>
           <div><dt>Circuitos abiertos / recuperados</dt><dd>{number(frontier.circuits_opened)} / {number(frontier.retry_recovered)}</dd></div>
           <div><dt>Intentos HTTP persistidos</dt><dd>{number(frontier.http_attempts)}</dd></div>
         </dl></section>
-        <section aria-label="Descubrimiento C15"><h3>Sitemaps y feeds</h3><dl>
+        <section aria-label="Descubrimiento incremental"><h3>Sitemaps y feeds</h3><dl>
           <div><dt>Candidatos distintos conservados</dt><dd>{number(frontier.discovery_candidates)}</dd></div>
           <div><dt>Documentos / bytes procesados</dt><dd>{number(frontier.discovery_documents)} / {number(frontier.discovery_bytes)} B</dd></div>
           <div><dt>Cortes por cuota / XML inválido</dt><dd>{number(frontier.discovery_quota_stops)} / {number(frontier.discovery_invalid_xml)}</dd></div>
         </dl></section>
-        <section aria-label="Deduplicación C16"><h3>Versiones exactas</h3><dl>
+        <section aria-label="Deduplicación exacta"><h3>Versiones exactas</h3><dl>
           <div><dt>Payloads distintos / repetidos</dt><dd>{number(frontier.content_versions)} / {number(frontier.duplicate_content)}</dd></div>
           <div><dt>Páginas vacías</dt><dd>{number(frontier.empty_pages)}</dd></div>
         </dl><p>Un positivo Bloom se verifica contra claves exactas en disco.</p></section>
-        <section aria-label="Trampas C17"><h3>Cuarentena reversible</h3><dl>
+        <section aria-label="Cuarentena"><h3>Cuarentena reversible</h3><dl>
           <div><dt>URLs en cuarentena / liberadas</dt><dd>{number(Math.max(0, (frontier.quarantined_urls || 0) - (frontier.quarantine_released || 0)))} / {number(frontier.quarantine_released)}</dd></div>
           <div><dt>Muestras de revisión</dt><dd>{number(frontier.review_samples)}</dd></div>
           {#each Object.entries(frontier.quarantine_reasons || {}) as [reason, count]}<div><dt>{reason}</dt><dd>{number(count)}</dd></div>{/each}
         </dl></section>
-        <section aria-label="Recrawl C18"><h3>Revalidación HTTP</h3><dl>
+        <section aria-label="Revalidación HTTP"><h3>Revalidación HTTP</h3><dl>
           <div><dt>304 con referencia durable</dt><dd>{number(frontier.revalidations)}</dd></div>
           <div><dt>Nuevas versiones por cambios</dt><dd>{number(frontier.recrawl_changes)}</dd></div>
           <div><dt>Payload evitado · bytes</dt><dd>{number(frontier.recrawl_bytes_saved)} B</dd></div>

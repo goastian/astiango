@@ -34,7 +34,7 @@
     <div class="extraction-details">
       <p>Una extracción comparte los enlaces de exploración y descubrimiento. Respeta base URL y robots meta.
         Los límites se aplican durante la extracción; la CPU corresponde al análisis de HTML y enlaces de esta ejecución.
-        Las asignaciones por página y la comparación anterior se publican en el banco local C06.</p>
+        Las asignaciones por página y la comparación anterior se publican en el informe local de extracción.</p>
       {#if readError || stale}<p class="extraction-notice">Se conserva la última lectura disponible de enlaces y metadatos.</p>{/if}
       <div class="extraction-groups">{#each groups as group}<section aria-label={group.title}>
         <h3>{group.title}</h3><dl>{#each group.metrics as metric}<div>

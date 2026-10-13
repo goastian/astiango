@@ -10,7 +10,7 @@
   <p class="result">{report.acceptance.passed ? "Aceptación verificada" : "Perfil pendiente de aceptación"} · {report.configuration.smoke ? "Prueba reducida" : "Perfil completo"} · tres repeticiones por escenario</p>
   <p>Actualización durable de 128 URLs con el mismo corpus y 128 orígenes. La mediana se acompaña de MAD y rango.
     La construcción inicial de redb confirma cada lote; el baseline JSON confirma un snapshot completo.</p>
-  <div class="table-scroll"><table aria-label="Resultados C09 C10"><thead><tr><th>URLs</th><th>Estado</th><th>RSS máximo · MiB</th><th>CPU actualización · ms</th><th>Actualización · ms</th><th>Disco · MiB</th></tr></thead>
+  <div class="table-scroll"><table aria-label="Resultados de captura y frontier"><thead><tr><th>URLs</th><th>Estado</th><th>RSS máximo · MiB</th><th>CPU actualización · ms</th><th>Actualización · ms</th><th>Disco · MiB</th></tr></thead>
     <tbody>{#each report.summaries as row}<tr><td>{value(row.urls)}</td><td>{row.mode === "redb" ? "redb · caché fija" : "JSON · snapshot completo"}</td>
       {#each ["peak_rss_bytes", "update_cpu_ms", "update_ms", "database_bytes"] as key}<td>{key.endsWith("bytes") ? mib(row.metrics[key].median) : value(row.metrics[key].median)}
         <small>MAD {key.endsWith("bytes") ? mib(row.metrics[key].mad) : value(row.metrics[key].mad)} · {key.endsWith("bytes") ? mib(row.metrics[key].min) : value(row.metrics[key].min)}–{key.endsWith("bytes") ? mib(row.metrics[key].max) : value(row.metrics[key].max)}</small></td>{/each}

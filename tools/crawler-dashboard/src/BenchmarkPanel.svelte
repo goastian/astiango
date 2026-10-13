@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { benchmarkNames } from "./navigation";
   import ResilienceBenchmarkPanel from "./ResilienceBenchmarkPanel.svelte";
   import TransportBenchmarkPanel from "./TransportBenchmarkPanel.svelte";
   import BodyBenchmarkPanel from "./BodyBenchmarkPanel.svelte";
@@ -23,7 +24,7 @@
     SchedulerBenchmarkReport,
   } from "./benchmark-types";
 
-  let { onavailability }: { onavailability: (available: boolean, profile?: string) => void } =
+  let { visible = true, onavailability = () => {} }: { visible?: boolean; onavailability?: (available: boolean, profile?: string) => void } =
     $props();
   let resilienceReport = $state<ResilienceBenchmarkReport | null>(null);
   let report = $state<BenchmarkReport | null>(null);
@@ -37,10 +38,12 @@
   let enabled = $state(false);
   let error = $state("");
   let loading = $state(false);
+  let ready = $state(false);
   let selectedIndex = $state(0);
   let controller: AbortController | null = null;
   const selected = $derived(report?.scenarios[selectedIndex]);
   const profile = $derived(resilienceReport ? "C14–C20" : schedulerReport ? "C11–C13" : captureFrontierReport ? "C09–C10" : spoolReport ? "C08" : pipelineReport ? "C07" : extractionReport ? "C06" : bodyReport ? "C05" : transportReport ? "C04" : report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
+  const name = $derived(benchmarkNames[profile] ?? "Capacidad y recursos");
   const formatter = new Intl.NumberFormat("es-CO", {
     maximumFractionDigits: 2,
   });
@@ -213,15 +216,14 @@
       if (selectedIndex >= (report?.scenarios.length ?? 0)) selectedIndex = 0;
       error = "";
     } catch (cause) {
-      // A network failure should not add benchmark UI to an unconfigured server.
-      if (enabled)
-        error =
+      error =
           cause instanceof Error && cause.name !== "AbortError"
             ? cause.message
             : "La consulta del informe del banco agotó el tiempo de espera.";
     } finally {
       window.clearTimeout(timeout);
       loading = false;
+      ready = true;
     }
   }
   function download() {
@@ -232,7 +234,8 @@
     );
     const link = document.createElement("a");
     link.href = url;
-    link.download = `crawler-${profile.toLowerCase()}-${Date.parse(currentReport.generated_at)}.json`;
+    const slug = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    link.download = `crawler-${slug}-${Date.parse(currentReport.generated_at)}.json`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -248,16 +251,16 @@
   });
 </script>
 
-{#if enabled}
+{#if visible}
   <section
-    id="banco-c01"
+    id="capacity-report"
     class="panel benchmark-panel"
     aria-labelledby="benchmark-heading"
   >
     <div class="benchmark-heading">
       <div>
-        <span class="benchmark-eyebrow">BANCO LOCAL · {profile}</span>
-        <h2 id="benchmark-heading">Capacidad y recursos</h2>
+        <span class="benchmark-eyebrow">Mediciones locales</span>
+        <h2 id="benchmark-heading">{enabled ? name : "Pruebas de capacidad"}</h2>
         <p>
           {#if resilienceReport}Revalidación HTTP, cuotas y planificación recuperable con tráfico controlado local.
           {:else if schedulerReport}Turnos por origen y cortesía verificada desde el servidor local. Fixtures separados del estado operativo.
@@ -269,10 +272,10 @@
       </div>
       <div class="benchmark-actions">
         <button class="button" onclick={refresh} disabled={loading}
-          >Actualizar banco</button
+          >Actualizar mediciones</button
         >
         <button class="button" onclick={download} disabled={!resilienceReport && !report && !transportReport && !bodyReport && !extractionReport && !pipelineReport && !spoolReport && !captureFrontierReport && !schedulerReport}
-          >Descargar {profile}</button
+          >Descargar mediciones</button
         >
       </div>
     </div>
@@ -369,8 +372,8 @@
               Diferencia de duración mediana con y sin observador. La comparación
               conserva la equivalencia de peticiones, páginas y decisiones publicada.
             {:else}
-              Diferencia observada de duración mediana. El informe C01 histórico
-              incluye cambios de pausas y presupuestos anteriores a C02; no estima
+              Diferencia observada de duración mediana. El informe histórico de capacidad
+              incluye cambios de pausas y presupuestos anteriores a la unificación de resultados; no estima
               sobrecoste puro. Sólo se compara con peticiones y páginas iguales.
             {/if}
           </p>
@@ -604,7 +607,7 @@
         </div>
       </details>
     {:else}<p class="benchmark-empty">
-        Esperando el informe de la ejecución local C01.
+      {#if !ready}Consultando las mediciones locales…{:else if !enabled && !error}No hay un informe local seleccionado. Selecciona un informe al iniciar el dashboard para comparar capacidad y recursos.{:else}Esperando el informe de la ejecución local.{/if}
       </p>{/if}
   </section>
 {/if}

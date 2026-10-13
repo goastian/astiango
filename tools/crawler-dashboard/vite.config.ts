@@ -3,6 +3,6 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 
 export default defineConfig({
   plugins: [svelte()],
-  server: { proxy: { "/api": "http://127.0.0.1:3100" } },
+  server: { proxy: { "/api": "http://127.0.0.1:3101" } },
   build: { target: "es2022" },
 });

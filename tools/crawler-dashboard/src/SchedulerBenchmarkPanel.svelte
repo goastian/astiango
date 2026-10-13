@@ -5,9 +5,9 @@
   const display = (value: number) => formatter.format(value);
 </script>
 <div class="scheduler-benchmark">
-  <p class="result">{report.acceptance.passed ? "Aceptación verificada" : "Aceptación pendiente"} · C11–C13 · tres repeticiones por escenario</p>
+  <p class="result">{report.acceptance.passed ? "Aceptación verificada" : "Aceptación pendiente"} · identidad, cortesía y robots · tres repeticiones por escenario</p>
   <p>Dos trabajadores, el mismo conjunto de páginas y la misma demora mínima. HTTP y archivo WARC reales, con todos los endpoints en loopback.</p>
-  <div class="table-scroll"><table aria-label="Resultados C11 C12 C13"><thead><tr><th>Orígenes</th><th>Modelo</th><th>Páginas/s</th><th>Duración · ms</th><th>CPU · ms</th><th>RSS · MiB</th><th>Atraso p99 · ms</th></tr></thead>
+  <div class="table-scroll"><table aria-label="Resultados de identidad, cortesía y robots"><thead><tr><th>Orígenes</th><th>Modelo</th><th>Páginas/s</th><th>Duración · ms</th><th>CPU · ms</th><th>RSS · MiB</th><th>Atraso p99 · ms</th></tr></thead>
     <tbody>{#each report.summaries as row}<tr><td>{display(row.origins)}</td><td>{row.mode === "fair_turns" ? "Turnos cortos" : "Jobs largos"}</td>
       {#each ["pages_per_second", "duration_ms", "cpu_ms", "rss_peak_bytes", "ready_lag_p99_ms"] as key}<td>{display(row.metrics[key].median / (key === "rss_peak_bytes" ? 1048576 : 1))}
         <small>MAD {display(row.metrics[key].mad / (key === "rss_peak_bytes" ? 1048576 : 1))}</small></td>{/each}

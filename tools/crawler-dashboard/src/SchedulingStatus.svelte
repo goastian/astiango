@@ -17,13 +17,13 @@
     <div class="content"><p>Cada blog o tenant de un sufijo privado conserva su presupuesto. Las URLs mantienen sus parámetros y rutas.
       Robots, páginas y sitemaps comparten la cortesía del origen: esquema, host y puerto.</p>
       <div class="groups">
-        <section aria-label="Identidad C11"><h3>Identidad y migración</h3><dl>
+        <section aria-label="Identidad y migración"><h3>Identidad y migración</h3><dl>
           <div><dt>Versión de URL / sitio</dt><dd>{number(frontier?.identity_version)} / {number(frontier?.site_identity_version)}</dd></div>
           <div><dt>Sitios independientes conservados</dt><dd>{number(frontier?.known_sites)}</dd></div>
           <div><dt>Correspondencias de claves migradas</dt><dd>{number(frontier?.identity_mapped_urls)}</dd></div>
           <div><dt>Migración de identidad</dt><dd>{frontier?.identity_migration_complete ? "Completada" : "Pendiente"}</dd></div>
         </dl></section>
-        <section aria-label="Scheduler C12"><h3>Admisión y cortesía</h3><dl>
+        <section aria-label="Admisión y cortesía"><h3>Admisión y cortesía</h3><dl>
           <div><dt>Solicitudes admitidas</dt><dd>{number(scheduler?.requests_admitted)}</dd></div>
           <div><dt>Admisiones aplazadas</dt><dd>{number(scheduler?.requests_deferred)}</dd></div>
           <div><dt>Solicitudes activas / pico</dt><dd>{number(scheduler?.active_requests)} / {number(scheduler?.active_peak)}</dd></div>
@@ -32,7 +32,7 @@
           <div><dt>Reservas de IP / esperas</dt><dd>{number(snapshot?.transport?.active_ip_reservations)} / {number(snapshot?.transport?.ip_waits)}</dd></div>
           <div><dt>Desbordes de admisión</dt><dd>{number(scheduler?.origin_overflows)}</dd></div>
         </dl></section>
-        <section aria-label="Robots C13"><h3>Robots por origen</h3><dl>
+        <section aria-label="Robots por origen"><h3>Robots por origen</h3><dl>
           <div><dt>Aciertos de caché / descargas</dt><dd>{number(robots?.hits)} / {number(robots?.downloads)}</dd></div>
           <div><dt>Consultas simultáneas agrupadas</dt><dd>{number(robots?.single_flight_waits)}</dd></div>
           <div><dt>Entradas / cota</dt><dd>{number(robots?.entries)} / {number(robots?.capacity)}</dd></div>

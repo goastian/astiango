@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Icon from "./Icon.svelte";
+  import Sidebar from "./Sidebar.svelte";
+  import SystemOverview from "./SystemOverview.svelte";
+  import Pagination from "./Pagination.svelte";
+  import { resolveView, views } from "./navigation";
   import BenchmarkPanel from "./BenchmarkPanel.svelte";
   import RequestOutcomes from "./RequestOutcomes.svelte";
   import TelemetryStatus from "./TelemetryStatus.svelte";
@@ -30,9 +34,21 @@
   let eventFilter = $state("all");
   let selectedHost = $state("");
   let windowMinutes = $state(15);
-  let showConfig = $state(false);
-  let benchmarkAvailable = $state(false);
-  let benchmarkProfile = $state("C01");
+  let view = $state(resolveView(window.location.hash));
+  let mobileMenu: HTMLDialogElement;
+  let menuOpen = $state(false);
+  let sitePage = $state(1);
+  let sitePageSize = $state(25);
+  let eventPage = $state(1);
+  const currentView = $derived(views.find(item => item.id === view));
+  $effect(() => { query; filter; sitePageSize; sitePage = 1; });
+  $effect(() => { eventFilter; selectedHost; eventPage = 1; });
+  function openSite(host: string) {
+    selectedHost = host;
+    query = host;
+    filter = "all";
+    window.location.hash = "/crawler/sites";
+  }
   let lastRead = $state<string | null>(null);
   let abortController: AbortController | null = null;
 
@@ -133,6 +149,12 @@
         (eventFilter === "site" && event.host === selected?.host),
     ),
   );
+  const sitePages = $derived(Math.max(1, Math.ceil(filteredSites.length / sitePageSize)));
+  const currentSitePage = $derived(Math.min(sitePage, sitePages));
+  const visibleSites = $derived(filteredSites.slice((currentSitePage - 1) * sitePageSize, currentSitePage * sitePageSize));
+  const eventPages = $derived(Math.max(1, Math.ceil(events.length / 50)));
+  const currentEventPage = $derived(Math.min(eventPage, eventPages));
+  const visibleEvents = $derived(events.slice((currentEventPage - 1) * 50, currentEventPage * 50));
   const statusText = $derived(
     error
       ? "Sin lectura del crawler"
@@ -327,6 +349,17 @@
     if (!paused) void refresh();
   }
   onMount(() => {
+    const navigate = () => {
+      view = resolveView(window.location.hash);
+      if (mobileMenu?.open) mobileMenu.close();
+      const destination = views.find(item => item.id === view);
+      if (destination && window.location.hash !== `#${destination.path}`)
+        window.history.replaceState(null, "", `#${destination.path}`);
+      window.scrollTo(0, 0);
+      window.setTimeout(() => document.getElementById("view-title")?.focus({ preventScroll: true }), 0);
+    };
+    navigate();
+    window.addEventListener("hashchange", navigate);
     void refresh();
     const polling = window.setInterval(() => {
       if (!paused && !document.hidden) void refresh();
@@ -342,140 +375,48 @@
       window.clearInterval(polling);
       window.clearInterval(ticking);
       abortController?.abort();
+      window.removeEventListener("hashchange", navigate);
       document.removeEventListener("visibilitychange", onVisible);
     };
   });
 </script>
 
-<svelte:head><title>Crawler · Astian</title></svelte:head>
+<svelte:head><title>{currentView?.label ?? "Vista no encontrada"} · AstianGO</title></svelte:head>
 
-<a class="skip-link" href="#resumen">Ir al resumen</a>
-<div class="workspace">
-  <header class="page-header">
-    <div class="header-main">
-      <div class="page-title">
-        <span class="app-symbol"><Icon name="globe" size={25} /></span>
-        <h1>Resumen <span>/ Crawler</span></h1>
+<a class="skip-link" href="#view-title" onclick={(event) => { event.preventDefault(); document.getElementById("view-title")?.focus(); }}>Ir al contenido</a>
+<dialog bind:this={mobileMenu} class="mobile-navigation" onclose={() => (menuOpen = false)}>
+  <button class="drawer-close" aria-label="Cerrar navegación" onclick={() => mobileMenu.close()}><Icon name="close" /></button>
+  <Sidebar current={view} status={statusText} connected={live} />
+</dialog>
+<div class="control-shell" inert={menuOpen}>
+  <aside class="desktop-sidebar"><Sidebar current={view} status={statusText} connected={live} /></aside>
+  <div class="workspace">
+    <header class="page-header">
+      <div class="context-bar">
+        <div class="context-location"><button class="menu-button" aria-label="Abrir navegación" aria-expanded={menuOpen} onclick={() => { mobileMenu.showModal(); menuOpen = true; }}><Icon name="menu" /></button><span>Centro de control</span><span class="context-divider">/</span><strong>{currentView?.group ?? "Navegación"}</strong></div>
+        <span class="instance-label">Instancia local</span>
       </div>
-      <div class="header-actions">
-        <button
-          class="button primary"
-          onclick={refresh}
-          disabled={loading}
-          aria-label="Actualizar estado ahora"
-          ><Icon name="refresh" />Actualizar</button
-        >
-        <button class="button" onclick={togglePolling} aria-pressed={paused}
-          ><Icon name={paused ? "play" : "pause"} />{paused
-            ? "Reanudar lectura"
-            : "Pausar lectura"}</button
-        >
-        <button class="button" onclick={exportReport} disabled={!snapshot}
-          ><Icon name="download" />Descargar informe</button
-        >
-        <button
-          class="button"
-          onclick={() => (showConfig = !showConfig)}
-          aria-expanded={showConfig}
-          aria-controls="config-panel"
-          ><Icon name="settings" /><span>Configuración</span></button
-        >
-      </div>
-    </div>
-    <div class="report-controls">
-      <div class="report-field">
-        <span class="control-label">Ejecución actual</span>
-        <div class="run-date">
-          <Icon name="calendar" /><span>{date(snapshot?.started_at)}</span><span
-            class="run-tag">Local</span
-          >
+      <div class="header-main">
+        <div class="view-heading"><h1 id="view-title" tabindex="-1">{currentView?.label ?? "Vista no encontrada"}</h1><p>{currentView?.description ?? "La dirección no corresponde a una vista disponible."}</p></div>
+        <div class="header-actions">
+          <button class="button primary" onclick={refresh} disabled={loading} aria-label="Actualizar estado ahora"><Icon name="refresh" />Actualizar</button>
+          <button class="button" onclick={togglePolling} aria-pressed={paused}><Icon name={paused ? "play" : "pause"} />{paused ? "Reanudar lectura" : "Pausar lectura"}</button>
+          <button class="button" onclick={exportReport} disabled={!snapshot}><Icon name="download" />Descargar informe</button>
         </div>
       </div>
-      <label class="report-field"
-        ><span class="control-label">Intervalo de los gráficos</span><span
-          class="select-wrap"
-          ><Icon name="clock" /><select bind:value={windowMinutes}
-            ><option value={5}>Últimos 5 minutos</option><option value={15}
-              >Últimos 15 minutos</option
-            ><option value={60}>Última hora</option></select
-          ></span
-        ></label
-      >
-      <div class="run-health">
-        <span
-          class="connection"
-          class:live
-          class:warning={!!error || offline || (stale && activeProcess)}
-          role="status"><span class="status-dot"></span>{statusText}</span
-        ><span>Última lectura {time(lastRead)} · cada 2 s</span>
+      <div class="report-controls">
+        <div class="execution-context"><Icon name="calendar" size={16} /><span>Ejecución desde {date(snapshot?.started_at)}</span></div>
+        {#if view === "crawler-overview"}<label class="history-window"><span>Gráficos</span><select bind:value={windowMinutes} aria-label="Intervalo de los gráficos"><option value={5}>Últimos 5 minutos</option><option value={15}>Últimos 15 minutos</option><option value={60}>Última hora</option></select></label>{/if}
+        <div class="run-health"><span class="connection" class:live class:warning={!!error || offline || (stale && activeProcess)} role="status"><span class="status-dot"></span>{statusText}</span><span>Última lectura {time(lastRead)} · cada 2 s</span></div>
       </div>
-    </div>
-    {#if showConfig}
-      <section
-        class="config-panel"
-        id="config-panel"
-        aria-label="Configuración activa"
-      >
-        <div>
-          <strong>Configuración activa</strong><span
-            >Proceso {snapshot?.pid ?? "—"} · {snapshot
-              ? duration(elapsed)
-              : "—"} en ejecución</span
-          >
-        </div>
-        <dl>
-          <div>
-            <dt>Trabajadores</dt>
-            <dd>{snapshot?.workers ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>Pausa mínima por sitio</dt>
-            <dd>
-              {snapshot ? `${snapshot.min_crawl_delay_ms / 1000} s` : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt>Intentos por sitio</dt>
-            <dd>{snapshot?.pages_per_domain ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>Descubrimiento</dt>
-            <dd>{snapshot?.continuous ? "Continuo" : "Por ejecución"}</dd>
-          </div>
-        </dl>
-        <p>
-          Se inicia en dominios aleatorios y continúa a través de sus enlaces.
-          Respeta las reglas de robots.txt.
-        </p>
-      </section>
-    {/if}
-    <nav class="section-nav" aria-label="Secciones del dashboard">
-      <a href="#resumen" class="current">Vista general</a><a href="#sitios"
-        >Sitios</a
-      ><a href="#actividad">Actividad</a><a href="#almacenamiento"
-        >Archivos WARC</a
-      >{#if benchmarkAvailable}<a href="#banco-c01">Banco {benchmarkProfile} · local</a
-        >{/if}<span>ASTIAN CRAWLER</span>
-    </nav>
-  </header>
-  <main>
-    {#if error || offline || (stale && activeProcess) || paused}
-      <div class="notice" role="status">
-        <strong
-          >{paused && !error && !offline
-            ? "Actualización pausada."
-            : "Lectura no actualizada."}</strong
-        >
-        {error ||
-          (offline
-            ? "El proceso del crawler ya no está activo."
-            : paused
-              ? "El crawler continúa de forma independiente."
-              : "El estado visible no se ha actualizado. Esta lectura no permite concluir que el crawler esté detenido.")}
-        {#if snapshot}Se conserva el último estado recibido.{/if}
-      </div>
-    {/if}
-    <TelemetryStatus {snapshot} {now} readError={!!error} stale={stale && activeProcess} {paused} />
+    </header>
+    <main id="main-content" data-view={view}>
+      {#if error || offline || (stale && activeProcess) || paused}
+        <div class="notice" role="status"><strong>{paused && !error && !offline ? "Actualización pausada." : "Lectura no actualizada."}</strong> {error || (offline ? "El proceso del crawler ya no está activo." : paused ? "El crawler continúa de forma independiente." : "El estado visible no se ha actualizado. Esta lectura no permite concluir que el crawler esté detenido.")} {#if snapshot}Se conserva el último estado recibido.{/if}</div>
+      {/if}
+      {#if view === "overview" || view === "components"}
+        <SystemOverview {snapshot} connected={live} status={statusText} inventory={view === "components"} />
+      {:else if view === "crawler-overview"}
     <section
       class="overview-grid"
       id="resumen"
@@ -685,19 +626,11 @@
       </article>
     </section>
     <RequestOutcomes counters={snapshot?.counters} />
-    <TransportStatus stats={snapshot?.transport} readError={!!error} stale={stale && activeProcess} />
-    <BodyStatus stats={snapshot?.body} readError={!!error} stale={stale && activeProcess} />
-    <ExtractionStatus stats={snapshot?.extraction} readError={!!error} stale={stale && activeProcess} />
-    <PipelineStatus stats={snapshot?.pipeline} readError={!!error} stale={stale && activeProcess} />
-    <CaptureFrontierStatus frontier={snapshot?.frontier_db} spool={snapshot?.spool} />
-    <SchedulingStatus {snapshot} />
-    <ResilienceStatus {snapshot} />
-    <SpoolStatus stats={snapshot?.spool} readError={!!error} stale={stale && activeProcess} />
     <div class="analysis-grid">
       <section class="panel issues-panel" aria-labelledby="issues-heading">
         <div class="card-heading">
           <h2 id="issues-heading">Sitios con incidencias</h2>
-          <a href="#actividad" onclick={() => (eventFilter = "errors")}
+          <a href="#/crawler/activity" onclick={() => (eventFilter = "errors")}
             >Ver actividad <span aria-hidden="true">↗</span></a
           >
         </div>
@@ -708,10 +641,7 @@
           {#each issues.slice(0, 5) as site}<button
               class="issue-row"
               onclick={() => {
-                selectedHost = site.host;
-                document
-                  .getElementById("sitios")
-                  ?.scrollIntoView({ behavior: "smooth" });
+                openSite(site.host);
               }}
               ><span class="issue-icon" aria-hidden="true">!</span><span
                 class="issue-description"
@@ -781,10 +711,7 @@
                   class="column-label"
                   title={`Inspeccionar ${site.host}`}
                   onclick={() => {
-                    selectedHost = site.host;
-                    document
-                      .getElementById("sitios")
-                      ?.scrollIntoView({ behavior: "smooth" });
+                    openSite(site.host);
                   }}>{site.host}</button
                 >
               </div>{:else}<div class="empty-chart">
@@ -797,6 +724,8 @@
         </p>
       </section>
     </div>
+
+      {:else if view === "sites"}
     <section
       id="sitios"
       class="sites-section panel"
@@ -818,6 +747,7 @@
       <div class="work-area">
         <div class="sites-main">
           <div class="table-toolbar">
+            <label class="page-size">Filas <select bind:value={sitePageSize}><option value={25}>25</option><option value={50}>50</option><option value={100}>100</option></select></label>
             <div
               class="filters"
               role="group"
@@ -882,7 +812,7 @@
                   ></tr
                 ></thead
               ><tbody>
-                {#each filteredSites as site (site.host)}
+                {#each visibleSites as site (site.host)}
                   <tr class:row-selected={selected?.host === site.host}
                     ><td
                       ><button
@@ -955,6 +885,7 @@
               </tbody>
             </table>
           </div>
+          <Pagination page={currentSitePage} pages={sitePages} total={filteredSites.length} pageSize={sitePageSize} onpage={(page) => (sitePage = page)} />
           <div class="table-footer">
             <span
               >{filteredSites.length} de {snapshot?.sites.length ?? 0} sitios recientes</span
@@ -1051,12 +982,12 @@
         </aside>
       </div>
       <p class="section-note">
-        El detalle conserva hasta 500 sitios recientes. Los contadores acumulan
-        toda la ejecución.
+        Se muestran los sitios incluidos en el snapshot, con paginación. Los contadores acumulan toda la ejecución.
       </p>
     </section>
 
-    <div class="lower-grid">
+
+      {:else if view === "activity"}
       <section
         id="actividad"
         class="activity-section panel"
@@ -1077,7 +1008,7 @@
           >
         </div>
         <div class="event-list">
-          {#each events as event}<div
+          {#each visibleEvents as event}<div
               class="event-row"
               class:event-error={event.level === "error"}
             >
@@ -1112,11 +1043,28 @@
                 : "Aún no hay actividad disponible."}
             </div>{/each}
         </div>
+        <Pagination page={currentEventPage} pages={eventPages} total={events.length} pageSize={50} onpage={(page) => (eventPage = page)} />
         <div class="section-note">
           Últimos {snapshot?.recent_events.length ?? 0} eventos registrados · más
           recientes primero{#if snapshot?.telemetry} · {number.format(snapshot.telemetry.events_dropped)} fuera del buffer{/if}
         </div>
       </section>
+
+      {:else if view === "policies"}
+        <SchedulingStatus {snapshot} />
+        <CaptureFrontierStatus frontier={snapshot?.frontier_db} />
+        <ResilienceStatus {snapshot} />
+        {#if !snapshot?.scheduler && !snapshot?.frontier_db}<div class="empty-view panel"><h2>Sin métricas de cola disponibles</h2><p>Esta ejecución todavía no publica el estado de sus políticas. Puedes consultar los sitios y la actividad registrados.</p><a href="#/crawler/sites">Consultar sitios</a></div>{/if}
+      {:else if view === "performance"}
+        <TelemetryStatus {snapshot} {now} readError={!!error} stale={stale && activeProcess} {paused} />
+        <TransportStatus stats={snapshot?.transport} readError={!!error} stale={stale && activeProcess} />
+        <BodyStatus stats={snapshot?.body} readError={!!error} stale={stale && activeProcess} />
+        <ExtractionStatus stats={snapshot?.extraction} readError={!!error} stale={stale && activeProcess} />
+        <PipelineStatus stats={snapshot?.pipeline} readError={!!error} stale={stale && activeProcess} />
+        {#if !snapshot?.transport && !snapshot?.telemetry && !snapshot?.body && !snapshot?.extraction && !snapshot?.pipeline}<div class="empty-view panel"><h2>Sin métricas de recursos disponibles</h2><p>Esta ejecución no incluye métricas detalladas de rendimiento. Los campos ausentes no se convierten en ceros.</p></div>{/if}
+      {:else if view === "storage"}
+        <CaptureFrontierStatus spool={snapshot?.spool} />
+        <SpoolStatus stats={snapshot?.spool} readError={!!error} stale={stale && activeProcess} />
       <section
         id="almacenamiento"
         class="storage-section panel"
@@ -1153,18 +1101,53 @@
           <span class="square-dot"></span> Descargas guardadas por el proceso crawler
         </div>
       </section>
-    </div>
-    <BenchmarkPanel
-      onavailability={(available, profile) => {
-        benchmarkAvailable = available;
-        if (profile) benchmarkProfile = profile;
-      }}
-    />
-    <footer class="page-footer">
-      <span
-        >Astian crawler <span class="slash">/</span>
-        {snapshot?.run_id ?? "Sin ejecución"}</span
-      ><span>Hora de Bogotá · Estado: {time(snapshot?.updated_at)}</span>
-    </footer>
-  </main>
+
+      {:else if view === "configuration"}
+      <section
+        class="config-panel panel"
+        id="config-panel"
+        aria-label="Configuración activa"
+      >
+        <div>
+          <strong>Configuración activa</strong><span
+            >Proceso {snapshot?.pid ?? "—"} · {snapshot
+              ? duration(elapsed)
+              : "—"} en ejecución</span
+          >
+        </div>
+        <dl>
+          <div>
+            <dt>Trabajadores</dt>
+            <dd>{snapshot?.workers ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>Pausa mínima por sitio</dt>
+            <dd>
+              {snapshot ? `${snapshot.min_crawl_delay_ms / 1000} s` : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt>Intentos por sitio</dt>
+            <dd>{snapshot?.pages_per_domain ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>Descubrimiento</dt>
+            <dd>{snapshot?.continuous ? "Continuo" : "Por ejecución"}</dd>
+          </div>
+          <div><dt>User-Agent</dt><dd>{snapshot?.user_agent ?? "—"}</dd></div>
+          <div><dt>Proceso</dt><dd>{snapshot?.pid ?? "—"}</dd></div>
+        </dl>
+        <p>
+          Se inicia en dominios aleatorios y continúa a través de sus enlaces.
+          Respeta las reglas de robots.txt.
+        </p>
+      </section>
+
+      {:else if view === "not-found"}
+        <section class="empty-view panel"><Icon name="components" size={30} /><h2>Esta vista no está disponible</h2><p>Usa la navegación para abrir una función del centro de control.</p><a class="button primary" href="#/overview">Volver a la vista general</a></section>
+      {/if}
+      <BenchmarkPanel visible={view === "benchmarks"} />
+      <footer class="page-footer"><span>AstianGO <span class="slash">/</span> {snapshot?.run_id ?? "Sin ejecución"}</span><span>Hora de Bogotá · Estado: {time(snapshot?.updated_at)}</span></footer>
+    </main>
+  </div>
 </div>

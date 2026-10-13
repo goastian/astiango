@@ -10,7 +10,7 @@
     "check": "svelte-check --fail-on-warnings --tsconfig ./tsconfig.json",
     "start": "node server.mjs",
     "test": "node --test test/*.test.mjs",
-    "test:browser": "npm run build && node test/browser-smoke.mjs"
+    "test:browser": "npm run build && node test/browser-smoke.mjs && node test/browser-navigation.mjs"
   },
   "engines": {
     "node": ">=20.10.0"

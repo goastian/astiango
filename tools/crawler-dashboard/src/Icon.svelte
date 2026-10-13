@@ -13,6 +13,16 @@
     close: "m6 6 12 12M6 18 18 6",
     clock: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM12 7v5l3 2",
     chevron: "m8 10 4 4 4-4",
+    overview: "M3 3h7v7H3ZM14 3h7v7h-7ZM3 14h7v7H3ZM14 14h7v7h-7Z",
+    components: "M4 4h6v6H4ZM14 4h6v6h-6ZM4 14h6v6H4ZM14 14h6v6h-6Z",
+    sites: "M3 7h18v14H3ZM7 3h10v4M7 11h3M14 11h3M7 16h3M14 16h3",
+    activity: "M3 12h4l3-7 4 14 3-7h4",
+    queue: "M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1",
+    chart: "M4 3v17h17M8 15V9M13 15V5M18 15v-4",
+    storage: "M3 5h18v6H3ZM3 14h18v6H3ZM17 8h1M17 17h1",
+    experiment: "M9 3h6M10 3v7L4 19c-.7 1 .1 2 1 2h14c.9 0 1.7-1 1-2l-6-9V3M7 16h10",
+    menu: "M4 6h16M4 12h16M4 18h16",
+    arrow: "M4 12h16m-6-6 6 6-6 6",
   };
 </script>
 

@@ -41,7 +41,7 @@
   Sus resultados están separados del rastreo operativo.
 </p>
 <div class="benchmark-scroll">
-  <table class="benchmark-table" aria-label="Resultados del transporte C04">
+  <table class="benchmark-table" aria-label="Resultados del transporte">
     <thead><tr><th>Protocolo</th><th>Orígenes</th><th>Transporte</th><th>Repeticiones</th>
       {#each resources as resource}<th>{resource.title}</th>{/each}
     </tr></thead>
@@ -56,7 +56,7 @@
     <h3>Comparación del transporte</h3>
     <p>Reducción medida frente al cliente por petición. Un porcentaje positivo indica menos recursos por página; se conservan las diferencias de carga.</p>
     <div class="benchmark-scroll">
-      <table class="benchmark-table" aria-label="Comparación del transporte C04">
+      <table class="benchmark-table" aria-label="Comparación del transporte">
         <thead><tr><th>Protocolo</th><th>Orígenes</th><th>Reducción de conexiones por página</th><th>Reducción de DNS por página</th><th>Misma carga</th></tr></thead>
         <tbody>{#each report.comparisons ?? [] as row}<tr>
           <th scope="row">{row.scheme.toUpperCase()}</th><td>{row.origins}</td>

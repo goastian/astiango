@@ -46,8 +46,8 @@
         </dl>
       </section>{/each}</div>
       <p>La ventana conserva las últimas 1.024 muestras del temporizador. El objetivo &lt;100 ms se verifica en el banco
-        dimensionado C07. Batch limita cada segmento en memoria a {display(stats.batch_segment_bytes)} B y
-        {display(stats.batch_segment_items)} registros; el spool durable corresponde a C08.</p>
+        dimensionado. Batch limita cada segmento en memoria a {display(stats.batch_segment_bytes)} B y
+        {display(stats.batch_segment_items)} registros; el spool conserva los datos durables.</p>
     </div>
   </details>
 {/if}

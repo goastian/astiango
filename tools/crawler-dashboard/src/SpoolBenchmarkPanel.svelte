@@ -18,7 +18,7 @@
     · {report.acceptance.full_profile ? "Perfil completo" : "Muestra reducida"} · Mediana, MAD y rango · 3 repeticiones</p>
   <p>El corpus real conservado permite comparar escritura y compresión. Los porcentajes pertenecen a esta etapa y a estos perfiles;
     la cortesía y la red del crawl real tienen sus propios límites. Los casos adversariales verifican rotación y memoria al aumentar el archivo.</p>
-  <div class="spool-table"><table aria-label="Resultados del spool C08"><thead><tr>
+  <div class="spool-table"><table aria-label="Resultados del archivo durable"><thead><tr>
     <th>Escenario</th><th>Modo</th><th>Gzip / segmento</th><th>Páginas/s</th><th>CPU-ms/página</th>
     <th>Bytes/página</th><th>Sync/página</th><th>WARC/página</th><th>RSS · MiB</th>
   </tr></thead><tbody>{#each report.summaries as row}<tr>
@@ -29,19 +29,19 @@
     {/each}
   </tr>{/each}</tbody></table></div>
   <h3>Comparación con la escritura anterior</h3>
-  <div class="spool-table"><table aria-label="Mejoras de almacenamiento C08"><thead><tr>
+  <div class="spool-table"><table aria-label="Mejoras de almacenamiento"><thead><tr>
     <th>Escenario</th><th>Nivel gzip</th><th>Variación de páginas/s</th><th>Reducción de sync</th><th>Reducción de archivos WARC</th>
   </tr></thead><tbody>{#each report.comparisons as row}<tr><th scope="row">{row.scenario}</th><td>{row.gzip_level}</td>
     {#each [row.throughput_gain_pct, row.sync_reduction_pct, row.files_reduction_pct] as value}
       <td><strong>{display(value.median)} %</strong><small>{distribution(value)}</small></td>
     {/each}</tr>{/each}</tbody></table></div>
   <h3>Recuperación y publicación controlada</h3>
-  <div class="spool-table"><table aria-label="Matriz de recuperación C08"><thead><tr><th>Caso</th><th>Repeticiones</th><th>Resultado</th></tr></thead>
+  <div class="spool-table"><table aria-label="Matriz de recuperación"><thead><tr><th>Caso</th><th>Repeticiones</th><th>Resultado</th></tr></thead>
     <tbody>{#each checks as row}<tr><th scope="row">{row.name}</th><td>{row.repetitions}</td><td>{row.passed ? "Verificado" : "Pendiente"}</td></tr>{/each}</tbody>
   </table></div>
   <label>Escenario para inspeccionar <select aria-label="Escenario del spool para inspeccionar" bind:value={selected}>
     {#each scenarios as scenario}<option value={scenario}>{scenario}</option>{/each}</select></label>
-  <div class="spool-table"><table aria-label="Repeticiones del spool C08"><thead><tr><th>Modo</th><th>Gzip</th><th>Rep.</th><th>Páginas</th><th>Páginas/s</th><th>Sync</th><th>Archivos</th><th>RSS · MiB</th></tr></thead>
+  <div class="spool-table"><table aria-label="Repeticiones del archivo durable"><thead><tr><th>Modo</th><th>Gzip</th><th>Rep.</th><th>Páginas</th><th>Páginas/s</th><th>Sync</th><th>Archivos</th><th>RSS · MiB</th></tr></thead>
     <tbody>{#each rows as row}<tr><th scope="row">{mode(row.mode)}</th><td>{row.gzip_level}</td><td>{row.repetition}</td><td>{row.pages}</td><td>{display(row.pages_per_second)}</td>
       <td>{row.sync_calls}</td><td>{row.files}</td><td>{display(row.rss_peak_bytes / 1048576)}</td></tr>{/each}</tbody></table></div>
   <p>El ACK es local y durable; un upload interrumpido conserva el segmento y su outbox. La descarga del informe contiene

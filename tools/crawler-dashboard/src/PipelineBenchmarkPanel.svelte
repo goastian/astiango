@@ -18,9 +18,9 @@
 <p class="benchmark-acceptance-note">Mismos cuerpos, límites y demoras; HTTP loopback, parser y WARC/fsync reales.
   La referencia ejecuta el trabajo bloqueante en Tokio. El fixture usa 1–2 hilos de runtime por escenario;
   el porcentaje de rendimiento corresponde a ese perfil. Las cuotas cuentan entradas, mientras RSS incluye DOM y buffers.</p>
-<div class="benchmark-scroll"><table class="benchmark-table" aria-label="Resultados del pipeline C07">
+<div class="benchmark-scroll"><table class="benchmark-table" aria-label="Resultados del pipeline">
   <thead><tr><th>Escenario</th><th>Modo</th><th>Orígenes permitidos</th><th>Páginas/s</th><th>CPU ms/página</th><th>Lag p99 ms</th><th>Control ms</th><th>RSS MiB</th><th>Esperas de admisión</th></tr></thead>
-  <tbody>{#each report.summaries as row}<tr><th scope="row">{row.scenario}</th><td>{row.mode === "legacy" ? "Antes · inline" : "C07 · acotado"}</td><td>{row.origins}</td>
+  <tbody>{#each report.summaries as row}<tr><th scope="row">{row.scenario}</th><td>{row.mode === "legacy" ? "Antes · inline" : "Pipeline acotado"}</td><td>{row.origins}</td>
     <td class="benchmark-numeric">{@render metric(row.metrics.pages_per_second)}</td>
     <td class="benchmark-numeric">{@render metric(row.metrics.cpu_ms_per_page)}</td>
     <td class="benchmark-numeric">{@render metric(row.metrics.runtime_lag_p99_ms)}</td>
@@ -31,7 +31,7 @@
 </table></div>
 <div class="benchmark-details-grid">
   <div class="benchmark-detail"><h3>Rendimiento y equivalencia</h3>
-    <div class="benchmark-scroll"><table class="benchmark-table" aria-label="Comparación del pipeline C07">
+    <div class="benchmark-scroll"><table class="benchmark-table" aria-label="Comparación del pipeline">
       <thead><tr><th>Escenario</th><th>Cambio de páginas/s</th><th>Reducción de lag</th><th>Cuerpos WARC</th></tr></thead>
       <tbody>{#each report.comparisons as row}<tr><th scope="row">{row.scenario}</th>
         <td class="benchmark-numeric">{@render metric(row.throughput_gain_pct)} %</td>
@@ -44,9 +44,9 @@
     <label><span class="sr-only">Escenario del pipeline para inspeccionar</span><select bind:value={selected}>
       {#each report.comparisons as row}<option value={row.scenario}>{row.scenario}</option>{/each}
     </select></label></div>
-    <div class="benchmark-scroll"><table class="benchmark-table" aria-label="Repeticiones del pipeline C07">
+    <div class="benchmark-scroll"><table class="benchmark-table" aria-label="Repeticiones del pipeline">
       <thead><tr><th>Repetición</th><th>Modo</th><th>Lag p99 ms</th><th>Pico documentos / cuota</th><th>Pico parseo / cuota bytes</th><th>HTTP / guardadas</th></tr></thead>
-      <tbody>{#each runs as run}<tr><th scope="row">{run.repetition}</th><td>{run.mode === "legacy" ? "Antes" : "C07"}</td>
+      <tbody>{#each runs as run}<tr><th scope="row">{run.repetition}</th><td>{run.mode === "legacy" ? "Antes" : "Acotado"}</td>
         <td>{display(run.runtime_lag_p99_ms)}</td><td>{run.pipeline.admission.peak_items} / {run.pipeline.admission.max_items}</td>
         <td>{run.pipeline.parse.peak_bytes} / {run.pipeline.parse.max_bytes}</td><td>{run.server.requests} / {run.pages}</td>
       </tr>{/each}</tbody>

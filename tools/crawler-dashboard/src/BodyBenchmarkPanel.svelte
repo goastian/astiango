@@ -37,7 +37,7 @@
   del corte. Este banco no mide persistencia WARC.
 </p>
 <div class="benchmark-scroll">
-  <table class="benchmark-table" aria-label="Resultados de admisión y cuerpos C05">
+  <table class="benchmark-table" aria-label="Resultados de admisión y cuerpos">
     <thead><tr><th>Escenario</th><th>Resultado esperado</th><th>Repeticiones</th><th>Verificación</th>
       {#each resources as resource}<th>{resource.title}</th>{/each}
     </tr></thead>
