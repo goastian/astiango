@@ -170,3 +170,25 @@ test("body admission and memory observations do not become WARC failures", async
   assert.equal(result.snapshot.counters.storage_failed, 0);
   assert.equal(result.snapshot.counters.downloaded, 91);
 });
+
+test("quarantine control persists an explicit command and rejects cross-origin writes", async (t) => {
+  const { base, statePath } = await setup(t);
+  const { readdir, readFile } = await import("node:fs/promises");
+  const { dirname } = await import("node:path");
+  const endpoint = `${base}/api/quarantine/release`;
+  const rejected = await fetch(endpoint, { method: "POST", headers: { Origin: "https://foreign.example", "Content-Type": "application/json" }, body: JSON.stringify({url:"https://example.org/page"}) });
+  assert.equal(rejected.status, 403);
+  assert.equal((await fetch(endpoint)).status, 405);
+  assert.equal((await fetch(endpoint, {method:"POST",body:JSON.stringify({url:"file:///tmp/example"})})).status, 400);
+  const response = await fetch(endpoint, { method:"POST", headers:{Origin:base,"Content-Type":"application/json"},body:JSON.stringify({url:"https://example.org/page?signature=keep#fragment"}) });
+  assert.equal(response.status,202);
+  const result=await response.json();
+  const files=await readdir(join(dirname(statePath),"control")); assert.equal(files.length,1);
+  const command=JSON.parse(await readFile(join(dirname(statePath),"control",files[0]),"utf8"));
+  assert.equal(command.url,"https://example.org/page?signature=keep"); assert.equal(command.action,"release_quarantine"); assert.equal(command.id,result.id);
+  const lookup = `${base}/api/control/${result.id}`;
+  assert.equal((await (await fetch(lookup)).json()).state, "queued");
+  await writeFile(join(dirname(statePath),"control",`${result.id}.result`),JSON.stringify({id:result.id,state:"not_found"}));
+  assert.equal((await (await fetch(lookup)).json()).state,"not_found");
+  assert.equal((await fetch(`${base}/api/control/invalid`)).status,400);
+});

@@ -82,6 +82,7 @@ fn site_identity_migration_splits_tenants_and_preserves_leases_and_commits() {
             URLS,
             url,
             &UrlRow {
+                weight: 1.0,
                 url: url.into(),
                 origin: Url::parse(url).unwrap().origin().ascii_serialization(),
                 site: "github.io".into(),
@@ -91,6 +92,8 @@ fn site_identity_migration_splits_tenants_and_preserves_leases_and_commits() {
                 reason: None,
                 not_before: 0,
                 sitemap: false,
+                retry: Default::default(),
+                sitemap_depth: 0,
                 continuation: None,
             },
         )
@@ -215,6 +218,68 @@ fn receipt(capture: &crate::capture::Capture) -> Receipt {
         end: 500,
         sha256: "checksum".into(),
     }
+}
+
+#[test]
+fn recrawl_from_an_older_round_preserves_payload_and_reserves_a_new_fetch() {
+    let directory = tempfile::tempdir().unwrap();
+    let frontier = open(directory.path());
+    frontier
+        .configure_recrawl(&super::super::recrawl::Config {
+            min_interval_ms: 1,
+            initial_interval_ms: 1,
+            max_interval_ms: 1,
+            ..Default::default()
+        })
+        .unwrap();
+    let url: Url = "https://example.org/unchanged?signature=keep"
+        .parse()
+        .unwrap();
+    frontier.admit_urls([url.clone()]).unwrap();
+    let job = frontier.claim_turn_at(chrono::Utc::now()).unwrap().unwrap();
+    let id = frontier.begin_url(&url).unwrap().unwrap();
+    let capture = crate::capture::fixture(&url, id.clone(), b"body".to_vec(), Vec::new());
+    frontier
+        .commit_capture(&capture.metadata, &receipt(&capture), false)
+        .unwrap();
+    frontier.drain_outbox().unwrap();
+    let mut outcome = JobOutcome::default();
+    outcome.record(
+        url.clone(),
+        FetchOutcome::DurableSuccess {
+            final_url: url.clone(),
+        },
+    );
+    frontier
+        .resolve_turn(&job.domain, &outcome, 0, chrono::Utc::now())
+        .unwrap();
+    assert!(frontier.is_empty());
+    frontier.restart_round(Vec::new()).unwrap();
+    drop(frontier);
+    let frontier = open(directory.path());
+    let now = chrono::Utc::now() + chrono::Duration::seconds(1);
+    assert_eq!(frontier.requeue_recrawls(now).unwrap(), 1);
+    let job = frontier.claim_turn_at(now).unwrap().unwrap();
+    assert_eq!(job.urls[0].url, url);
+    assert_ne!(frontier.begin_url(&url).unwrap().unwrap(), id);
+    assert_eq!(
+        frontier
+            .revalidation_state(&url)
+            .unwrap()
+            .unwrap()
+            .reference
+            .fetch_id,
+        id
+    );
+    assert_eq!(
+        frontier
+            .revalidation_state(&url)
+            .unwrap()
+            .unwrap()
+            .reference
+            .record_offset,
+        100
+    );
 }
 
 #[test]
@@ -436,4 +501,247 @@ fn a_deferred_origin_does_not_block_a_ready_origin_of_the_same_site() {
         Frontier::open_database(directory.path().join("frontier.json"), 256, 10000).unwrap();
     assert!(restored.claim_turn_at(now).unwrap().is_none());
     assert_eq!(restored.begin_url(&first.urls[0].url).unwrap().unwrap(), id);
+}
+
+#[test]
+fn retry_after_is_durable_and_exhaustion_is_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = chrono::Utc::now();
+    let url: Url = "https://retry.example.org/page".parse().unwrap();
+    let domain = Domain::from(&url);
+    let frontier = open(dir.path());
+    frontier.discover([url.clone()]).unwrap();
+    frontier.claim_turn_at(now).unwrap().unwrap();
+    frontier.begin_url(&url).unwrap().unwrap();
+    frontier
+        .authorize_request(&url, &url, now)
+        .unwrap()
+        .unwrap();
+    let mut outcome = JobOutcome::default();
+    outcome.record(
+        url.clone(),
+        FetchOutcome::Deferred {
+            reason: "http_503".into(),
+            retry_after_ms: Some(3_600_000),
+        },
+    );
+    frontier.resolve_turn(&domain, &outcome, 10, now).unwrap();
+    drop(frontier);
+    let frontier = open(dir.path());
+    assert!(frontier
+        .claim_turn_at(now + chrono::Duration::minutes(59))
+        .unwrap()
+        .is_none());
+    assert!(frontier
+        .claim_turn_at(now + chrono::Duration::hours(1))
+        .unwrap()
+        .is_some());
+    assert_eq!(frontier.metrics.snapshot().retry_deferred, 1);
+    let mut config = super::super::retry::Config::default();
+    config.max_attempts = 2;
+    frontier.configure_retry(&config).unwrap();
+    frontier.begin_url(&url).unwrap().unwrap();
+    frontier
+        .resolve_turn(&domain, &outcome, 10, now + chrono::Duration::hours(1))
+        .unwrap();
+    let tx = frontier.db.begin_read().unwrap();
+    let table = tx.open_table(URLS).unwrap();
+    let row: UrlRow =
+        serde_json::from_slice(table.get(url.as_str()).unwrap().unwrap().value()).unwrap();
+    assert_eq!(row.state, State::Terminal);
+    assert!(row.reason.unwrap().starts_with("retry_budget_exhausted"));
+    assert_eq!(frontier.metrics.snapshot().retry_exhausted, 1);
+    assert!(frontier.is_empty());
+}
+
+#[test]
+fn not_found_is_slow_gone_is_retired_and_status_digits_are_not_guessed() {
+    let dir = tempfile::tempdir().unwrap();
+    let frontier = open(dir.path());
+    let now = chrono::Utc::now();
+    let urls: Vec<Url> = ["404", "410", "certificate410"]
+        .into_iter()
+        .map(|path| format!("https://example.org/{path}").parse().unwrap())
+        .collect();
+    frontier.admit_urls(urls.clone()).unwrap();
+    while let Some(job) = frontier.claim_turn_at(now).unwrap() {
+        let url = job.urls[0].url.clone();
+        frontier.begin_url(&url).unwrap().unwrap();
+        let reason = match url.path() {
+            "/404" => "http_404",
+            "/410" => "http_410",
+            _ => "certificate validation failed for host410",
+        };
+        let mut outcome = JobOutcome::default();
+        outcome.record(
+            url,
+            FetchOutcome::PermanentFailure {
+                reason: reason.into(),
+            },
+        );
+        frontier
+            .resolve_turn(&job.domain, &outcome, 0, now)
+            .unwrap();
+    }
+    assert!(frontier.is_empty());
+    frontier.restart_round(Vec::new()).unwrap();
+    frontier.admit_urls(urls.clone()).unwrap();
+    let tx = frontier.db.begin_read().unwrap();
+    let table = tx.open_table(URLS).unwrap();
+    let row = |index: usize| {
+        serde_json::from_slice::<UrlRow>(table.get(urls[index].as_str()).unwrap().unwrap().value())
+            .unwrap()
+    };
+    let missing = row(0);
+    let gone = row(1);
+    let other = row(2);
+    assert!(missing.not_before >= millis(now) + 604_800_000);
+    assert_eq!((gone.state, gone.round), (State::Terminal, 1));
+    assert_eq!((other.state, other.round), (State::Pending, 2));
+}
+
+#[test]
+fn incremental_sitemap_feed_quotas_malformed_xml_and_reversible_traps() {
+    let dir = tempfile::tempdir().unwrap();
+    let frontier = Frontier::open_database(dir.path().join("frontier.redb"), 128, 50).unwrap();
+    let source: Url = "https://example.org/sitemap.xml".parse().unwrap();
+    let mut xml = String::from("<urlset>");
+    for i in 0..50_000 {
+        xml.push_str(&format!("<url><loc>https://example.org/article/{i}?signed={i}</loc><lastmod>2026-10-10</lastmod></url>"));
+    }
+    xml.push_str("</urlset>");
+    assert_eq!(
+        frontier.ingest_sitemap(&source, &xml).unwrap().candidates,
+        50_000
+    );
+    assert_eq!(frontier.candidate_count().unwrap(), 50_000);
+    assert_eq!(frontier.metrics.snapshot().urls, 50);
+    assert_eq!(
+        frontier.ingest_sitemap(&source, &xml).unwrap().reason,
+        "already_processed"
+    );
+    assert_eq!(frontier.metrics.snapshot().quarantined_urls, 0);
+    assert_eq!(
+        frontier
+            .ingest_sitemap(
+                &"https://example.org/bad.xml".parse().unwrap(),
+                "<urlset><url><loc>&broken;</loc>"
+            )
+            .unwrap()
+            .reason,
+        "invalid_discovery_xml"
+    );
+    let feed =
+        "<rss><channel><item><link>https://example.org/news/new</link></item></channel></rss>";
+    let feed_url = "https://example.org/feed.xml".parse().unwrap();
+    frontier
+        .ingest_feed(&feed_url, feed, crate::feed::FeedKind::Rss)
+        .unwrap();
+    let count = frontier.candidate_count().unwrap();
+    frontier
+        .ingest_feed(&feed_url, feed, crate::feed::FeedKind::Rss)
+        .unwrap();
+    assert_eq!(frontier.candidate_count().unwrap(), count);
+    let traps = super::super::traps::Config {
+        calendar_family_budget: 3,
+        ..Default::default()
+    };
+    frontier
+        .configure_discovery(&Default::default(), &traps)
+        .unwrap();
+    for day in 1..=10 {
+        frontier
+            .admit_urls([format!("https://calendar.example/calendar/2026/10/{day}")
+                .parse()
+                .unwrap()])
+            .unwrap();
+    }
+    assert_eq!(frontier.metrics.snapshot().quarantined_urls, 7);
+    let url: Url = "https://calendar.example/calendar/2026/10/10"
+        .parse()
+        .unwrap();
+    frontier.release_quarantine(&url).unwrap();
+    assert_eq!(frontier.metrics.snapshot().quarantine_released, 1);
+    let tx = frontier.db.begin_read().unwrap();
+    assert!(tx
+        .open_table(URLS)
+        .unwrap()
+        .get(url.as_str())
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn courtesy_is_not_a_failed_http_attempt_and_invalid_control_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let frontier = open(dir.path());
+    let url: Url = "https://example.org/a".parse().unwrap();
+    frontier.discover([url.clone()]).unwrap();
+    let now = chrono::Utc::now();
+    frontier.claim_turn_at(now).unwrap().unwrap();
+    let mut outcome = JobOutcome::default();
+    outcome.record(
+        url.clone(),
+        FetchOutcome::Deferred {
+            reason: "origin_not_eligible".into(),
+            retry_after_ms: Some(10),
+        },
+    );
+    frontier
+        .resolve_turn(&Domain::from(&url), &outcome, 10, now)
+        .unwrap();
+    assert_eq!(frontier.metrics.snapshot().retry_exhausted, 0);
+    assert_eq!(frontier.metrics.snapshot().terminal_urls, 0);
+    let control = dir.path().join("control");
+    fs::create_dir(&control).unwrap();
+    for index in 0..200 {
+        fs::write(control.join(format!("{index}.result")), b"{}").unwrap();
+    }
+    fs::write(control.join("bad.request"), b"broken json").unwrap();
+    frontier.process_controls(&control).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(control.join("bad.result")).unwrap())
+            .unwrap()["state"],
+        "rejected"
+    );
+}
+
+#[test]
+fn discovery_quota_sources_cycles_and_promotion_do_not_starve_other_tenants() {
+    let dir = tempfile::tempdir().unwrap();
+    let frontier = Frontier::open_database(dir.path().join("frontier.redb"), 128, 2).unwrap();
+    let config = super::super::discovery::Config {
+        max_urls: 2000,
+        ..Default::default()
+    };
+    frontier
+        .configure_discovery(&config, &Default::default())
+        .unwrap();
+    let source: Url = "https://aaa.example/sitemap.xml".parse().unwrap();
+    let mut xml = String::from("<urlset>");
+    for i in 0..2001 {
+        xml.push_str(&format!("<url><loc>https://aaa.example/{i:06}</loc></url>"));
+    }
+    xml.push_str("</urlset>");
+    assert_eq!(
+        frontier.ingest_sitemap(&source, &xml).unwrap().reason,
+        "discovery_aggregate_quota"
+    );
+    assert_eq!(frontier.candidate_urls(&source, 512).unwrap().len(), 512);
+    let other: Url = "https://zzz.example/sitemap.xml".parse().unwrap();
+    frontier
+        .ingest_sitemap(
+            &other,
+            "<urlset><url><loc>https://zzz.example/ready</loc></url></urlset>",
+        )
+        .unwrap();
+    frontier.promote_candidates().unwrap();
+    assert_eq!(frontier.metrics.snapshot().known_sites, 2);
+    let cycle: Url = "https://cycle.example/index.xml".parse().unwrap();
+    let xml="<sitemapindex><sitemap><loc>https://cycle.example/index.xml</loc></sitemap></sitemapindex>";
+    assert_eq!(frontier.ingest_sitemap(&cycle, xml).unwrap().candidates, 1);
+    assert_eq!(
+        frontier.ingest_sitemap(&cycle, xml).unwrap().reason,
+        "already_processed"
+    );
 }

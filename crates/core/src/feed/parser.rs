@@ -23,37 +23,70 @@ use crate::dated_url::DatedUrl;
 
 use super::{FeedKind, ParsedFeed};
 
-fn parse_rss(feed: &str) -> Result<ParsedFeed> {
+fn visit_rss(feed: &str, emit: &mut impl FnMut(DatedUrl) -> Result<()>) -> Result<usize> {
     let mut reader = quick_xml::Reader::from_str(feed);
 
     let mut buf = Vec::new();
-    let mut links = Vec::new();
+    let mut count = 0;
+    let mut depth = 0usize;
+    let mut root = false;
     let mut inside_link = false;
     let mut inside_item = false;
     let mut current_link: Option<Url> = None;
     let mut current_date: Option<DateTime<Utc>> = None;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) if e.name().as_ref() == b"link" => {
+        buf.clear();
+        let event = reader.read_event_into(&mut buf);
+        match &event {
+            Ok(Event::Start(e)) => {
+                if depth == 0 {
+                    anyhow::ensure!(
+                        !root && matches!(e.local_name().as_ref(), b"rss" | b"feed" | b"RDF"),
+                        "invalid feed root"
+                    );
+                    root = true;
+                }
+                depth += 1;
+                anyhow::ensure!(depth <= 64, "feed XML depth quota exceeded");
+            }
+            Ok(Event::End(_)) => {
+                anyhow::ensure!(depth > 0, "unbalanced feed XML");
+                depth -= 1;
+            }
+            Ok(Event::Empty(e)) if depth == 0 => {
+                anyhow::ensure!(
+                    !root && matches!(e.local_name().as_ref(), b"rss" | b"feed" | b"RDF"),
+                    "invalid feed root"
+                );
+                root = true;
+            }
+            _ => {}
+        }
+        match event {
+            Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"link" => {
                 inside_link = true;
             }
-            Ok(Event::End(ref e)) if e.name().as_ref() == b"link" => {
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"link" => {
                 inside_link = false;
             }
-            Ok(Event::Start(ref e)) if e.name().as_ref() == b"item" => {
+            Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"item" => {
                 inside_item = true;
                 current_link = None;
                 current_date = None;
             }
-            Ok(Event::End(ref e)) if e.name().as_ref() == b"item" => {
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"item" => {
                 inside_item = false;
                 if let Some(link) = current_link.take() {
-                    links.push(DatedUrl {
+                    emit(DatedUrl {
                         url: link,
                         last_modified: current_date,
-                    });
+                    })?;
+                    count += 1;
                 }
+            }
+            Ok(Event::CData(e)) if inside_item && inside_link => {
+                current_link = Url::parse(std::str::from_utf8(e.as_ref())?.trim()).ok();
             }
             Ok(Event::Text(e)) if inside_item && inside_link => {
                 let link = e.unescape()?;
@@ -62,7 +95,8 @@ fn parse_rss(feed: &str) -> Result<ParsedFeed> {
                 }
             }
             Ok(Event::Start(ref e))
-                if e.name().as_ref() == b"pubDate" || e.name().as_ref() == b"lastBuildDate" =>
+                if e.local_name().as_ref() == b"pubDate"
+                    || e.local_name().as_ref() == b"lastBuildDate" =>
             {
                 if inside_item {
                     if let Ok(Event::Text(e)) = reader.read_event_into(&mut buf) {
@@ -73,49 +107,81 @@ fn parse_rss(feed: &str) -> Result<ParsedFeed> {
                 }
             }
             Err(e) => {
-                tracing::warn!("Error parsing feed: {}", e);
-                break;
+                return Err(e.into());
             }
+            Ok(Event::DocType(_)) => anyhow::bail!("feed DTD not admitted"),
             Ok(Event::Eof) => break,
             _ => {}
         }
+        anyhow::ensure!(buf.len() <= 64 * 1024, "feed XML token quota exceeded");
     }
 
-    Ok(ParsedFeed { links })
+    anyhow::ensure!(root && depth == 0 && !inside_item, "incomplete RSS item");
+    Ok(count)
 }
 
-fn parse_atom(feed: &str) -> Result<ParsedFeed> {
+fn visit_atom(feed: &str, emit: &mut impl FnMut(DatedUrl) -> Result<()>) -> Result<usize> {
     let mut reader = quick_xml::Reader::from_str(feed);
 
     let mut buf = Vec::new();
-    let mut links = Vec::new();
+    let mut count = 0;
+    let mut depth = 0usize;
+    let mut root = false;
 
     let mut inside_entry = false;
     let mut current_link: Option<Url> = None;
     let mut current_date: Option<DateTime<Utc>> = None;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) if e.name().as_ref() == b"entry" => {
+        buf.clear();
+        let event = reader.read_event_into(&mut buf);
+        match &event {
+            Ok(Event::Start(e)) => {
+                if depth == 0 {
+                    anyhow::ensure!(
+                        !root && matches!(e.local_name().as_ref(), b"rss" | b"feed" | b"RDF"),
+                        "invalid feed root"
+                    );
+                    root = true;
+                }
+                depth += 1;
+                anyhow::ensure!(depth <= 64, "feed XML depth quota exceeded");
+            }
+            Ok(Event::End(_)) => {
+                anyhow::ensure!(depth > 0, "unbalanced feed XML");
+                depth -= 1;
+            }
+            Ok(Event::Empty(e)) if depth == 0 => {
+                anyhow::ensure!(
+                    !root && matches!(e.local_name().as_ref(), b"rss" | b"feed" | b"RDF"),
+                    "invalid feed root"
+                );
+                root = true;
+            }
+            _ => {}
+        }
+        match event {
+            Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"entry" => {
                 inside_entry = true;
                 current_link = None;
                 current_date = None;
             }
-            Ok(Event::End(ref e)) if e.name().as_ref() == b"entry" => {
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"entry" => {
                 inside_entry = false;
                 if let Some(link) = current_link.take() {
-                    links.push(DatedUrl {
+                    emit(DatedUrl {
                         url: link,
                         last_modified: current_date,
-                    });
+                    })?;
+                    count += 1;
                 }
             }
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                if inside_entry && e.name().as_ref() == b"link" {
-                    if let Some(Ok(href)) = e
+                if inside_entry && e.local_name().as_ref() == b"link" {
+                    if let Some(href) = e
                         .attributes()
-                        .filter(std::result::Result::is_ok)
-                        .find(|attr| attr.as_ref().unwrap().key.as_ref() == b"href")
+                        .flatten()
+                        .find(|attr| attr.key.as_ref() == b"href")
                     {
                         if let Ok(href) = href
                             .unescape_value()
@@ -126,7 +192,8 @@ fn parse_atom(feed: &str) -> Result<ParsedFeed> {
                         }
                     }
                 } else if inside_entry
-                    && (e.name().as_ref() == b"updated" || e.name().as_ref() == b"published")
+                    && (e.local_name().as_ref() == b"updated"
+                        || e.local_name().as_ref() == b"published")
                 {
                     if let Ok(Event::Text(e)) = reader.read_event_into(&mut buf) {
                         if let Ok(date) = DateTime::parse_from_rfc3339(&e.unescape()?) {
@@ -136,24 +203,43 @@ fn parse_atom(feed: &str) -> Result<ParsedFeed> {
                 }
             }
             Err(e) => {
-                tracing::warn!("Error parsing feed: {}", e);
-                break;
+                return Err(e.into());
             }
+            Ok(Event::DocType(_)) => anyhow::bail!("feed DTD not admitted"),
             Ok(Event::Eof) => break,
             _ => {}
         }
+        anyhow::ensure!(buf.len() <= 64 * 1024, "feed XML token quota exceeded");
     }
 
-    Ok(ParsedFeed { links })
+    anyhow::ensure!(root && depth == 0 && !inside_entry, "incomplete Atom entry");
+    Ok(count)
 }
 
-pub fn parse(feed: &str, kind: FeedKind) -> Result<ParsedFeed> {
-    // remember to only crawl urls that are not already in the index
-    // and on the same root_domain as the feed.
+pub fn visit(
+    feed: &str,
+    kind: FeedKind,
+    mut emit: impl FnMut(DatedUrl) -> Result<()>,
+) -> Result<usize> {
     match kind {
-        FeedKind::Atom => parse_atom(feed),
-        FeedKind::Rss => parse_rss(feed),
+        FeedKind::Atom => visit_atom(feed, &mut emit),
+        FeedKind::Rss => visit_rss(feed, &mut emit),
     }
+}
+fn parse_rss(feed: &str) -> Result<ParsedFeed> {
+    parse(feed, FeedKind::Rss)
+}
+fn parse_atom(feed: &str) -> Result<ParsedFeed> {
+    parse(feed, FeedKind::Atom)
+}
+pub fn parse(feed: &str, kind: FeedKind) -> Result<ParsedFeed> {
+    let mut links = Vec::new();
+    visit(feed, kind, |link| {
+        anyhow::ensure!(links.len() < 50_000, "feed URL quota exceeded");
+        links.push(link);
+        Ok(())
+    })?;
+    Ok(ParsedFeed { links })
 }
 
 #[cfg(test)]
@@ -221,5 +307,26 @@ mod tests {
                 ),
             }]
         );
+    }
+}
+
+#[cfg(test)]
+mod incremental_tests {
+    use super::*;
+    #[test]
+    fn prefixed_atom_cdata_rss_and_malformed_inputs_are_explicit() {
+        let mut urls = Vec::new();
+        visit("<atom:feed xmlns:atom='urn:atom'><atom:entry><atom:link href='https://example.org/a'/></atom:entry></atom:feed>",FeedKind::Atom,|u|{urls.push(u.url);Ok(())}).unwrap();
+        assert_eq!(urls.len(), 1);
+        visit("<rss><channel><item><link><![CDATA[https://example.org/b?sig=a&b=c]]></link></item></channel></rss>",FeedKind::Rss,|u|{urls.push(u.url);Ok(())}).unwrap();
+        assert_eq!(urls[1].as_str(), "https://example.org/b?sig=a&b=c");
+        for body in [
+            "<rss><channel>",
+            "<rss><item></rss>",
+            "<!DOCTYPE rss><rss/>",
+            "garbage",
+        ] {
+            assert!(visit(body, FeedKind::Rss, |_| Ok(())).is_err(), "{body}");
+        }
     }
 }

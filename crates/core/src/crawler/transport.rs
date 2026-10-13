@@ -411,6 +411,15 @@ impl SharedTransport {
     }
 
     pub async fn send(&self, url: Url, timeout: Option<Duration>) -> Result<reqwest::Response> {
+        self.send_with_headers(url, timeout, reqwest::header::HeaderMap::new())
+            .await
+    }
+    pub async fn send_with_headers(
+        &self,
+        url: Url,
+        timeout: Option<Duration>,
+        headers: reqwest::header::HeaderMap,
+    ) -> Result<reqwest::Response> {
         self.inner
             .counters
             .requests_started
@@ -422,7 +431,7 @@ impl SharedTransport {
                 self.inner.config.body.total_timeout_ms,
             ));
         let started = Instant::now();
-        let result = tokio::time::timeout(timeout, self.send_inner(url, timeout, started))
+        let result = tokio::time::timeout(timeout, self.send_inner(url, timeout, started, headers))
             .await
             .map_err(|_| {
                 self.inner
@@ -469,6 +478,7 @@ impl SharedTransport {
         url: Url,
         timeout: Duration,
         started: Instant,
+        headers: reqwest::header::HeaderMap,
     ) -> Result<reqwest::Response> {
         self.validate_url(&url)?;
         let host = url
@@ -562,7 +572,7 @@ impl SharedTransport {
         let header_timeout = Duration::from_millis(self.inner.config.body.header_timeout_ms);
         let result = tokio::time::timeout(
             header_timeout.min(remaining),
-            client.get(url).timeout(remaining).send(),
+            client.get(url).headers(headers).timeout(remaining).send(),
         )
         .await;
         match result {

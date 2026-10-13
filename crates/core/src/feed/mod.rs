@@ -20,7 +20,7 @@ use url::Url;
 
 mod parser;
 
-pub use parser::parse;
+pub use parser::{parse, visit};
 
 use crate::dated_url::DatedUrl;
 

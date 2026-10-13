@@ -441,6 +441,7 @@ async fn test_meta_segments() -> Result<()> {
     let dir = gen_temp_dir()?;
     let config = config(&dir);
     let indexer_config = crate::entrypoint::indexer::worker::Config {
+        dedup: Default::default(),
         host_centrality_store_path: config.host_centrality_store_path.clone(),
         page_centrality_store_path: config.page_centrality_store_path.clone(),
         page_webgraph: None,
@@ -482,6 +483,7 @@ async fn test_segment_compaction() -> Result<()> {
     let dir = gen_temp_dir()?;
     let config = config(&dir);
     let indexer_config = crate::entrypoint::indexer::worker::Config {
+        dedup: Default::default(),
         host_centrality_store_path: config.host_centrality_store_path.clone(),
         page_centrality_store_path: config.page_centrality_store_path.clone(),
         page_webgraph: None,

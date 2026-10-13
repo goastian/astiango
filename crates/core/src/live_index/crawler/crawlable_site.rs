@@ -35,7 +35,6 @@ use crate::{
         site_stats::{self, FinalSiteStats},
     },
     live_index::crawler::checker::{Feeds, Frontpage, Sitemap},
-    webpage::url_ext::UrlExt,
     Result,
 };
 
@@ -135,6 +134,31 @@ impl CrawlableSite {
         &self.site
     }
 
+    pub async fn next_eligible(&self, interval: &CheckIntervals) -> Instant {
+        let inner = self.inner.lock().await;
+        let now = Instant::now();
+        let checker = inner
+            .frontpage
+            .next_check(interval)
+            .min(inner.feeds.next_check(interval))
+            .min(inner.sitemap.next_check(interval));
+        let work = if inner.retry_urls.is_empty() {
+            checker
+        } else {
+            now
+        };
+        let budget = if inner.budget > 0 {
+            now
+        } else {
+            inner.last_drip + inner.drip_rate
+        };
+        let retry = inner
+            .retry_not_before
+            .map_or(now, |(started, delay)| started + delay);
+        work.max(budget)
+            .max(retry)
+            .max(now + Duration::from_millis(1))
+    }
     pub async fn should_crawl(&self, interval: &CheckIntervals) -> bool {
         !self.currently_crawling() && self.inner.lock().await.should_crawl(interval)
     }
@@ -161,6 +185,8 @@ impl IndexBackend for Client {
 struct LiveIndexSink<'a, B: IndexBackend> {
     backend: &'a B,
     pending: Mutex<Vec<crawler::CrawlDatum>>,
+    outbox: Option<Arc<super::outbox::Outbox>>,
+    marker_db: Option<Arc<ShardedCrawledDb>>,
 }
 
 impl<'a, B: IndexBackend> LiveIndexSink<'a, B> {
@@ -168,6 +194,8 @@ impl<'a, B: IndexBackend> LiveIndexSink<'a, B> {
         Self {
             backend,
             pending: Mutex::new(Vec::new()),
+            outbox: None,
+            marker_db: None,
         }
     }
 }
@@ -186,6 +214,13 @@ impl<B: IndexBackend> crawler::DatumSink for LiveIndexSink<'_, B> {
         result
     }
     async fn write(&self, crawl_datum: crawler::CrawlDatum) -> Result<(), crawler::Error> {
+        if let Some(outbox) = &self.outbox {
+            let disk = outbox.clone();
+            let datum = crawl_datum.clone();
+            tokio::task::spawn_blocking(move || disk.enqueue(datum))
+                .await
+                .map_err(anyhow::Error::from)??;
+        }
         self.pending.lock().await.push(crawl_datum);
         Ok(())
     }
@@ -195,7 +230,8 @@ impl<B: IndexBackend> crawler::DatumSink for LiveIndexSink<'_, B> {
         if pending.is_empty() {
             return Ok(());
         }
-        self.backend
+        let result = self
+            .backend
             .index(
                 pending
                     .iter()
@@ -204,7 +240,46 @@ impl<B: IndexBackend> crawler::DatumSink for LiveIndexSink<'_, B> {
                     .map(IndexableWebpage::from)
                     .collect(),
             )
-            .await?;
+            .await;
+        if let Err(error) = result {
+            if let Some(outbox) = &self.outbox {
+                for datum in pending.iter() {
+                    if let Some(capture) = &datum.capture {
+                        let disk = outbox.clone();
+                        let id = capture.metadata.fetch_id.clone();
+                        let message = error.to_string();
+                        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                        tokio::task::spawn_blocking(move || disk.defer(&id, now, message))
+                            .await
+                            .map_err(anyhow::Error::from)??;
+                    }
+                }
+            }
+            return Err(error.into());
+        }
+        if let Some(outbox) = &self.outbox {
+            for datum in pending.iter() {
+                if let Some(capture) = &datum.capture {
+                    if let Some(db) = &self.marker_db {
+                        let db = db.clone();
+                        let original = Url::parse(&capture.metadata.requested_url)
+                            .map_err(anyhow::Error::from)?;
+                        let final_url = datum.url.clone();
+                        tokio::task::spawn_blocking(move || {
+                            db.insert(&original)?;
+                            db.insert(&final_url)
+                        })
+                        .await
+                        .map_err(anyhow::Error::from)??;
+                    }
+                    let disk = outbox.clone();
+                    let id = capture.metadata.fetch_id.clone();
+                    tokio::task::spawn_blocking(move || disk.acknowledge(&id))
+                        .await
+                        .map_err(anyhow::Error::from)??;
+                }
+            }
+        }
         pending.clear();
         Ok(())
     }
@@ -229,9 +304,7 @@ fn settle_job(outcome: &crawler::JobOutcome, db: &ShardedCrawledDb) -> Settlemen
     for entry in &outcome.urls {
         match &entry.outcome {
             crawler::FetchOutcome::DurableSuccess { final_url } => {
-                let stored = db
-                    .insert(&final_url.clone().normalize())
-                    .and_then(|()| db.insert(&entry.url.clone().normalize()));
+                let stored = db.insert(final_url).and_then(|()| db.insert(&entry.url));
                 if let Err(error) = stored {
                     settlement.retry_urls.push(entry.url.clone().into());
                     settlement.marker_error = Some(error);
@@ -302,46 +375,74 @@ impl CrawlableSiteGuard {
         let mut urls = std::mem::take(&mut site.retry_urls);
         site.retry_not_before = None;
 
-        if site.feeds.should_check(interval) {
+        let frontier = client.client.discovery_frontier();
+        let tenant = crawler::Domain::from(&site.site.url()?);
+        if let Some(frontier) = &frontier {
             urls.extend(
-                site.feeds
-                    .get_urls_and_update_last_check()
-                    .await
-                    .unwrap_or_default(),
+                frontier
+                    .pending_live_candidates(
+                        &tenant,
+                        chrono::Utc::now().timestamp_millis().max(0) as u64,
+                        512,
+                    )?
+                    .into_iter()
+                    .map(|c| CrawlableUrl {
+                        url: c.url,
+                        last_modified: c.lastmod,
+                    }),
             );
+        }
+        let mut checker_errors = Vec::new();
+        if site.feeds.should_check(interval) {
+            match site.feeds.get_urls_and_update_last_check().await {
+                Ok(found) => urls.extend(found),
+                Err(error) => checker_errors.push(error.to_string()),
+            }
         }
 
         if site.sitemap.should_check(interval) {
-            urls.extend(
-                site.sitemap
-                    .get_urls_and_update_last_check()
-                    .await
-                    .unwrap_or_default(),
-            );
+            match site.sitemap.get_urls_and_update_last_check().await {
+                Ok(found) => urls.extend(found),
+                Err(error) => checker_errors.push(error.to_string()),
+            }
         }
 
         if site.frontpage.should_check(interval) {
-            urls.extend(
-                site.frontpage
-                    .get_urls_and_update_last_check()
-                    .await
-                    .unwrap_or_default(),
-            );
+            match site.frontpage.get_urls_and_update_last_check().await {
+                Ok(found) => urls.extend(found),
+                Err(error) => checker_errors.push(error.to_string()),
+            }
         }
 
         let url = site.site.url()?;
-        let icann_domain = url.icann_domain();
+        let tenant = crawler::Domain::from(&url);
         urls = urls
             .into_iter()
-            .filter(|u| u.url.icann_domain() == icann_domain)
+            .filter(|u| crawler::Domain::from(&u.url) == tenant)
             .unique_by(|u| u.url.clone())
             .map(|mut u| {
-                u.url.normalize_in_place();
+                u.url.set_fragment(None);
                 u
             })
             .collect();
 
-        urls.retain(|url| !self.crawled_db.has_crawled(&url.url).unwrap_or(false));
+        let mut eligible = Vec::new();
+        for url in urls {
+            if self.crawled_db.has_crawled(&url.url)? {
+                if let Some(frontier) = &frontier {
+                    frontier.settle_live_candidate(&url.url, None)?;
+                }
+            } else if !client
+                .outbox
+                .as_ref()
+                .map(|o| o.contains_url(&url.url))
+                .transpose()?
+                .unwrap_or(false)
+            {
+                eligible.push(url);
+            }
+        }
+        let mut urls = eligible;
 
         order_urls(&mut urls);
 
@@ -351,6 +452,10 @@ impl CrawlableSiteGuard {
         site.retry_urls.extend(urls.split_off(budget as usize));
 
         if urls.is_empty() {
+            if !checker_errors.is_empty() {
+                site.retry_not_before = Some((Instant::now(), Duration::from_secs(60)));
+                anyhow::bail!("discovery incomplete: {}", checker_errors.join("; "));
+            }
             tracing::debug!("No new urls to crawl for site {}", site.site.as_str());
             return Ok(());
         }
@@ -361,7 +466,10 @@ impl CrawlableSiteGuard {
             site.site.as_str()
         );
 
-        let sink = Arc::new(LiveIndexSink::new(client));
+        let mut sink = LiveIndexSink::new(client);
+        sink.outbox = client.outbox.clone();
+        sink.marker_db = Some(self.crawled_db.clone());
+        let sink = Arc::new(sink);
 
         let executor = crawler::JobExecutor::new(
             crawler::WorkerJob {
@@ -387,6 +495,32 @@ impl CrawlableSiteGuard {
 
         let outcome = executor.run().await;
         let settlement = settle_job(&outcome, &self.crawled_db);
+        if let Some(frontier) = &frontier {
+            let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+            for entry in &outcome.urls {
+                let due = match &entry.outcome {
+                    crawler::FetchOutcome::Deferred { retry_after_ms, .. } => {
+                        Some(now.saturating_add(retry_after_ms.unwrap_or(60_000)))
+                    }
+                    crawler::FetchOutcome::Cancelled
+                    | crawler::FetchOutcome::StorageFailure { .. } => {
+                        Some(now.saturating_add(60_000))
+                    }
+                    _ => None,
+                };
+                frontier.settle_live_candidate(&entry.url, due)?;
+            }
+            // Keep only one small working batch; remaining candidates stay on disk.
+            if site.retry_urls.len() < 512 {
+                let available =
+                    frontier.pending_live_candidates(&tenant, now, 512 - site.retry_urls.len())?;
+                site.retry_urls
+                    .extend(available.into_iter().map(|c| CrawlableUrl {
+                        url: c.url,
+                        last_modified: c.lastmod,
+                    }));
+            }
+        }
         site.budget = site
             .budget
             .saturating_add(settlement.retry_urls.len() as u64)

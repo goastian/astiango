@@ -49,6 +49,8 @@ pub struct FrontierState {
 
 #[derive(Clone, Default, Serialize)]
 pub struct Counters {
+    #[serde(default)]
+    pub revalidations: u64,
     pub downloaded: u64,
     pub failed: u64,
     pub skipped: u64,
@@ -725,19 +727,29 @@ impl Observer {
     ) {
         self.update(|s, rings, _| {
             let now = Utc::now().to_rfc3339();
+            let revalidation = datum
+                .capture
+                .as_ref()
+                .is_some_and(|c| c.metadata.revalidation.is_some());
             let bytes = datum.body.len() as u64;
             let site = s.sites.iter_mut().find(|site| site.host == domain.as_str());
             let http_status = site.as_ref().and_then(|site| site.last_http_status);
             if let Some(site) = site {
-                site.pages_downloaded += 1;
-                site.useful_pages += 1;
+                if !revalidation {
+                    site.pages_downloaded += 1;
+                    site.useful_pages += 1;
+                }
                 site.bytes += bytes;
                 site.last_fetch_ms = Some(datum.fetch_time_ms);
                 site.last_activity_at = now.clone();
                 site.last_error = None;
             }
-            s.counters.downloaded += 1;
-            s.counters.useful_pages += 1;
+            if revalidation {
+                s.counters.revalidations += 1;
+            } else {
+                s.counters.downloaded += 1;
+                s.counters.useful_pages += 1;
+            }
             s.counters.bytes += bytes;
             if s.warc.current_file.as_deref() != Some(&file) {
                 s.warc.files += 1;

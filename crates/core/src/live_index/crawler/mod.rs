@@ -1,3 +1,4 @@
+use anyhow::Context;
 // Stract is an open source web search engine.
 // Copyright (C) 2024 Stract ApS
 //
@@ -18,6 +19,7 @@ mod budgets;
 mod checker;
 mod crawlable_site;
 mod crawled_db;
+mod outbox;
 mod site_url_stream;
 use std::fs::File;
 use std::path::PathBuf;
@@ -42,7 +44,6 @@ use crate::{
 use crawlable_site::{CrawlableSite, CrawlableSiteGuard};
 use crawled_db::ShardedCrawledDb;
 use futures::StreamExt;
-use rand::seq::SliceRandom;
 use site_url_stream::SiteUrlStream;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -81,6 +82,7 @@ struct Client {
     live_index: Mutex<ReusableShardedClient<live_index::LiveIndexService>>,
     search: Mutex<ReusableShardedClient<search_server::SearchService>>,
     client: RobotClient,
+    outbox: Option<Arc<outbox::Outbox>>,
 }
 
 impl Client {
@@ -93,6 +95,7 @@ impl Client {
             client,
             live_index,
             search,
+            outbox: None,
         })
     }
 
@@ -132,16 +135,16 @@ impl Client {
         .map_err(|_| anyhow::anyhow!("index acknowledgement timed out"))?
     }
 
-    pub async fn get_site_urls(&self, site: &str) -> Vec<Url> {
+    pub async fn get_site_urls(&self, site: &str) -> Result<Vec<Url>> {
         let mut res = Vec::new();
         let mut stream =
             SiteUrlStream::new(site.to_string(), self.search.lock().await.clone()).stream();
 
         while let Some(url) = stream.next().await {
-            res.push(url);
+            res.push(url?);
         }
 
-        res
+        Ok(res)
     }
 }
 
@@ -149,6 +152,9 @@ impl From<LiveCrawlerConfig> for CrawlerConfig {
     fn from(config: LiveCrawlerConfig) -> Self {
         Self {
             num_worker_threads: 1,
+            discovery: config.discovery,
+            retry: config.retry,
+            recrawl: crate::crawler::recrawl::Config::default(),
             scheduler: crate::crawler::scheduler::Config::default(),
             robots: crate::crawler::robots_txt::Config::default(),
             user_agent: config.user_agent,
@@ -227,7 +233,20 @@ impl Crawler {
             .await?,
         );
 
-        let client = Arc::new(Client::new(cluster, &crawler_config).await?);
+        let mut client = Client::new(cluster, &crawler_config).await?;
+        std::fs::create_dir_all(&config.crawled_db_path)?;
+        let discovery = Arc::new(crate::crawler::frontier::Frontier::open_database(
+            config.crawled_db_path.join("discovery.redb"),
+            10_000,
+            32,
+        )?);
+        discovery.configure_discovery(&crawler_config.discovery, &Default::default())?;
+        discovery.configure_retry(&crawler_config.retry)?;
+        client.client = client.client.with_discovery_frontier(discovery);
+        client.outbox = Some(Arc::new(outbox::Outbox::open(
+            &config.crawled_db_path.join("index-outbox.redb"),
+        )?));
+        let client = Arc::new(client);
         let db = Arc::new(ShardedCrawledDb::open(config.crawled_db_path)?);
 
         let site_stats = SiteStats::open(config.site_stats_path)?;
@@ -243,7 +262,7 @@ impl Crawler {
         if config.init_crawl_db {
             tracing::debug!("Initializing crawler db with previously crawled urls");
             for site in &sites {
-                for url in client.get_site_urls(site.site().as_str()).await {
+                for url in client.get_site_urls(site.site().as_str()).await? {
                     if !db.has_crawled(&url)? {
                         db.insert(&url)?;
                     }
@@ -267,49 +286,74 @@ impl Crawler {
         })
     }
 
-    pub async fn run(mut self) -> Result<()> {
-        let mut interval = tokio::time::interval(TICK_INTERVAL);
-        let semaphore = Arc::new(Semaphore::new(self.num_worker_threads));
-
-        tracing::info!("Crawler running with {} threads", self.num_worker_threads);
-
+    pub async fn run(self) -> Result<()> {
+        let semaphore = Arc::new(Semaphore::new(self.num_worker_threads.max(1)));
+        let mut ready = std::collections::BinaryHeap::new();
+        for (index, site) in self.sites.iter().enumerate() {
+            ready.push(std::cmp::Reverse((
+                site.next_eligible(&self.check_intervals).await,
+                index,
+            )));
+        }
+        let mut tasks: tokio::task::JoinSet<(usize, Result<()>)> = tokio::task::JoinSet::new();
+        let mut maintenance = tokio::time::interval(TICK_INTERVAL);
+        let mut publications = tokio::task::JoinSet::<Result<()>>::new();
         loop {
-            interval.tick().await;
-            tracing::debug!("Tick");
-
-            self.sites.shuffle(&mut rand::thread_rng());
-            for site in &mut self.sites {
-                if site.currently_crawling() {
-                    tracing::debug!("Site {} is currently crawling", site.site().as_str());
-                    continue;
+            let due = ready
+                .peek()
+                .map(|v| v.0 .0)
+                .unwrap_or_else(|| std::time::Instant::now() + TICK_INTERVAL);
+            tokio::select! {
+                result = tasks.join_next(), if !tasks.is_empty() => {
+                    let (index, outcome) = result.ok_or_else(|| anyhow::anyhow!("live worker result missing"))??;
+                    if let Err(error) = outcome { tracing::error!("Live crawl incomplete: {error}"); }
+                    ready.push(std::cmp::Reverse((self.sites[index].next_eligible(&self.check_intervals).await, index)));
                 }
-
-                site.drip().await;
-
-                if site.should_crawl(&self.check_intervals).await {
-                    tracing::debug!("Site {} should crawl", site.site().as_str());
-                    let client = self.client.clone();
-                    let intervals = self.check_intervals.clone();
-                    let guard = CrawlableSiteGuard::new(
-                        site.clone(),
-                        self.db.clone(),
-                        self.crawler_config.clone(),
-                    )
-                    .await;
-                    let semaphore = semaphore.clone();
-
-                    tokio::task::spawn(async move {
-                        let _permit = semaphore.acquire().await.unwrap();
-                        let url = guard.url();
-
-                        if let Err(e) = guard.crawl(&client, &intervals).await {
-                            if let Ok(url) = url {
-                                tracing::error!("Failed to crawl site {}: {:?}", url, e);
-                            } else {
-                                tracing::error!("Failed to crawl site: {:?}", e);
+                _ = tokio::time::sleep_until(due.into()), if !ready.is_empty() && semaphore.available_permits() > 0 => {
+                    let permit = semaphore.clone().try_acquire_owned()?;
+                    let std::cmp::Reverse((_, index)) = ready.pop().unwrap();
+                    let site = self.sites[index].clone();
+                    site.drip().await;
+                    if !site.should_crawl(&self.check_intervals).await {
+                        ready.push(std::cmp::Reverse((site.next_eligible(&self.check_intervals).await, index)));
+                        continue;
+                    }
+                    let guard = CrawlableSiteGuard::new(site, self.db.clone(), self.crawler_config.clone()).await;
+                    let client = self.client.clone(); let intervals = self.check_intervals.clone();
+                    tasks.spawn(async move { let _permit = permit; (index, guard.crawl(&client, &intervals).await) });
+                }
+                result = publications.join_next(), if !publications.is_empty() => {
+                    result.context("live outbox result missing")??.inspect_err(|e| tracing::error!("live outbox publication failed: {e}"))?;
+                }
+                _ = maintenance.tick(), if publications.is_empty() => {
+                    if let Some(outbox) = &self.client.outbox {
+                        let disk = outbox.clone(); let client = self.client.clone(); let db = self.db.clone();
+                        publications.spawn(async move {
+                            let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                            let read_disk = disk.clone();
+                            let entry = client.client.pipeline().control.run(0, move || read_disk.ready(now)).await??;
+                            if let Some(entry) = entry {
+                                let result = client.index(if entry.datum.indexing_allowed() { vec![IndexableWebpage::from(entry.datum.clone())] } else { Vec::new() }).await;
+                                let frontier = client.client.discovery_frontier();
+                                client.client.pipeline().control.run_durable(entry.datum.memory_bytes(), move || -> Result<()> {
+                                    match result {
+                                        Ok(()) => {
+                                            db.insert(&entry.datum.url)?;
+                                            if let Some(capture) = &entry.datum.capture {
+                                                let original = Url::parse(&capture.metadata.requested_url)?;
+                                                db.insert(&original)?;
+                                                if let Some(frontier) = &frontier { frontier.settle_live_candidate(&original, None)?; }
+                                            }
+                                            disk.acknowledge(&entry.id)?;
+                                        }
+                                        Err(error) => disk.defer(&entry.id, now, error.to_string())?,
+                                    }
+                                    Ok(())
+                                }).await??;
                             }
-                        }
-                    });
+                            Ok(())
+                        });
+                    }
                 }
             }
         }

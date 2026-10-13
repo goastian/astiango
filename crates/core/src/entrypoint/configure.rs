@@ -180,6 +180,7 @@ fn create_inverted_index() -> Result<()> {
 
     let worker = crate::block_on(indexer::IndexingWorker::new(
         IndexerConfig {
+            dedup: Default::default(),
             host_centrality_store_path: centrality_path.to_str().unwrap().to_string(),
             page_centrality_store_path: Some(page_centrality_path.to_str().unwrap().to_string()),
             page_webgraph: Some(IndexerGraphConfig::Local {

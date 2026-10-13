@@ -355,7 +355,7 @@ impl RemoteWebgraph {
         }
     }
 
-    pub async fn stream_page_node_ids(&self) -> impl futures::Stream<Item = NodeID> {
+    pub async fn stream_page_node_ids(&self) -> impl futures::Stream<Item = Result<NodeID>> {
         StreamNodeIDs::new(self.conn().await).stream()
     }
 }

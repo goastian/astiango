@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import ResilienceBenchmarkPanel from "./ResilienceBenchmarkPanel.svelte";
   import TransportBenchmarkPanel from "./TransportBenchmarkPanel.svelte";
   import BodyBenchmarkPanel from "./BodyBenchmarkPanel.svelte";
   import PipelineBenchmarkPanel from "./PipelineBenchmarkPanel.svelte";
@@ -8,6 +9,7 @@
   import SpoolBenchmarkPanel from "./SpoolBenchmarkPanel.svelte";
   import ExtractionBenchmarkPanel from "./ExtractionBenchmarkPanel.svelte";
   import type {
+    ResilienceBenchmarkReport,
     BenchmarkReport,
     Distribution,
     BenchmarkScenario,
@@ -23,6 +25,7 @@
 
   let { onavailability }: { onavailability: (available: boolean, profile?: string) => void } =
     $props();
+  let resilienceReport = $state<ResilienceBenchmarkReport | null>(null);
   let report = $state<BenchmarkReport | null>(null);
   let transportReport = $state<TransportBenchmarkReport | null>(null);
   let bodyReport = $state<BodyBenchmarkReport | null>(null);
@@ -37,7 +40,7 @@
   let selectedIndex = $state(0);
   let controller: AbortController | null = null;
   const selected = $derived(report?.scenarios[selectedIndex]);
-  const profile = $derived(schedulerReport ? "C11–C13" : captureFrontierReport ? "C09–C10" : spoolReport ? "C08" : pipelineReport ? "C07" : extractionReport ? "C06" : bodyReport ? "C05" : transportReport ? "C04" : report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
+  const profile = $derived(resilienceReport ? "C14–C20" : schedulerReport ? "C11–C13" : captureFrontierReport ? "C09–C10" : spoolReport ? "C08" : pipelineReport ? "C07" : extractionReport ? "C06" : bodyReport ? "C05" : transportReport ? "C04" : report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
   const formatter = new Intl.NumberFormat("es-CO", {
     maximumFractionDigits: 2,
   });
@@ -150,6 +153,7 @@
       onavailability(enabled);
       if (!enabled) {
         report = null;
+        resilienceReport = null;
         transportReport = null;
         bodyReport = null;
         extractionReport = null;
@@ -167,7 +171,10 @@
       spoolReport = null;
       captureFrontierReport = null;
       schedulerReport = null;
-      if (data.report.kind === "crawler_scheduler_benchmark") {
+      resilienceReport = null;
+      if (data.report.kind === "crawler_resilience_benchmark") {
+        resilienceReport = data.report; bodyReport = null; transportReport = null; report = null;
+      } else if (data.report.kind === "crawler_scheduler_benchmark") {
         schedulerReport = data.report; bodyReport = null; transportReport = null; report = null;
       } else if (data.report.kind === "crawler_capture_frontier_benchmark") {
         captureFrontierReport = data.report;
@@ -218,7 +225,7 @@
     }
   }
   function download() {
-    const currentReport = schedulerReport ?? captureFrontierReport ?? spoolReport ?? pipelineReport ?? extractionReport ?? bodyReport ?? transportReport ?? report;
+    const currentReport = resilienceReport ?? schedulerReport ?? captureFrontierReport ?? spoolReport ?? pipelineReport ?? extractionReport ?? bodyReport ?? transportReport ?? report;
     if (!currentReport) return;
     const url = URL.createObjectURL(
       new Blob([JSON.stringify(currentReport, null, 2)], { type: "application/json" }),
@@ -252,7 +259,8 @@
         <span class="benchmark-eyebrow">BANCO LOCAL · {profile}</span>
         <h2 id="benchmark-heading">Capacidad y recursos</h2>
         <p>
-          {#if schedulerReport}Turnos por origen y cortesía verificada desde el servidor local. Fixtures separados del estado operativo.
+          {#if resilienceReport}Revalidación HTTP, cuotas y planificación recuperable con tráfico controlado local.
+          {:else if schedulerReport}Turnos por origen y cortesía verificada desde el servidor local. Fixtures separados del estado operativo.
           {:else if captureFrontierReport}Captura HTTP, recuperación y frontera con caché fija. Las pruebas permanecen fuera del estado operativo.
           {:else if spoolReport}Archivo de corpus local y publicación S3 controlada en loopback. Los documentos de prueba pertenecen exclusivamente a este informe.
           {:else if extractionReport}Pruebas de extracción con archivos locales, sin solicitudes de red.
@@ -263,16 +271,18 @@
         <button class="button" onclick={refresh} disabled={loading}
           >Actualizar banco</button
         >
-        <button class="button" onclick={download} disabled={!report && !transportReport && !bodyReport && !extractionReport && !pipelineReport && !spoolReport && !captureFrontierReport && !schedulerReport}
+        <button class="button" onclick={download} disabled={!resilienceReport && !report && !transportReport && !bodyReport && !extractionReport && !pipelineReport && !spoolReport && !captureFrontierReport && !schedulerReport}
           >Descargar {profile}</button
         >
       </div>
     </div>
     {#if error}<p class="benchmark-error" role="status">
         {error}
-        {report || transportReport || bodyReport || extractionReport || pipelineReport || spoolReport || captureFrontierReport || schedulerReport ? "Se conserva el último informe leído." : ""}
+        {resilienceReport || report || transportReport || bodyReport || extractionReport || pipelineReport || spoolReport || captureFrontierReport || schedulerReport ? "Se conserva el último informe leído." : ""}
       </p>{/if}
-    {#if schedulerReport}
+    {#if resilienceReport}
+      <ResilienceBenchmarkPanel report={resilienceReport} />
+    {:else if schedulerReport}
       <SchedulerBenchmarkPanel report={schedulerReport} />
     {:else if captureFrontierReport}
       <CaptureFrontierBenchmarkPanel report={captureFrontierReport} />

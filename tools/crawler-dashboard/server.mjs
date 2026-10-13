@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
-import { readFile, stat } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { readFile, stat, mkdir, open, rename } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isBenchmarkReport } from "./benchmark-report.mjs";
@@ -46,7 +46,7 @@ export function createDashboardServer({
       "Content-Security-Policy",
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     );
-    if (request.method !== "GET" && request.method !== "HEAD") {
+    if (request.method !== "GET" && request.method !== "HEAD" && !(request.method === "POST" && request.url === "/api/quarantine/release")) {
       response.setHeader("Allow", "GET, HEAD");
       respondJson(response, 405, { error: "Método no permitido." });
       return;
@@ -71,6 +71,53 @@ export function createDashboardServer({
         status: "ok",
         service: "crawler-dashboard",
       });
+      return;
+    }
+    if (pathname === "/api/quarantine/release") {
+      if (request.method !== "POST") { respondJson(response, 405, { error: "Usa POST para solicitar una revisión." }); return; }
+      const address = request.socket.remoteAddress;
+      if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address) ||
+          (request.headers.origin && request.headers.origin !== `http://${request.headers.host}`)) {
+        respondJson(response, 403, { error: "Control disponible desde el dashboard local." }); return;
+      }
+      try {
+        let body = "";
+        for await (const chunk of request) {
+          body += chunk.toString("utf8");
+          if (Buffer.byteLength(body) > 16384) { respondJson(response, 413, { error: "Solicitud demasiado grande." }); return; }
+        }
+        const value = JSON.parse(body);
+        const url = new URL(value.url);
+        if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.href.length > 8192) throw new Error("URL inválida");
+        url.hash = "";
+        const id = randomUUID();
+        const directory = resolve(dirname(statePath), "control");
+        await mkdir(directory, { recursive: true });
+        const temporary = resolve(directory, `${id}.tmp`);
+        const file = await open(temporary, "wx", 0o600);
+        try { await file.writeFile(JSON.stringify({ id, action: "release_quarantine", url: url.href })); await file.sync(); }
+        finally { await file.close(); }
+        await rename(temporary, resolve(directory, `${id}.request`));
+        const folder = await open(directory, "r");
+        try { await folder.sync(); } finally { await folder.close(); }
+        respondJson(response, 202, { id, state: "queued", message: "Revisión en cola; el crawler la aplica sin reiniciar." });
+      } catch { respondJson(response, 400, { error: "No se pudo guardar la solicitud de revisión." }); }
+      return;
+    }
+    if (pathname.startsWith("/api/control/")) {
+      const id = pathname.slice("/api/control/".length);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) {
+        respondJson(response, 400, { error: "Identificador de revisión inválido." }); return;
+      }
+      const directory = resolve(dirname(statePath), "control");
+      try {
+        const result = JSON.parse(await readFile(resolve(directory, `${id}.result`), "utf8"));
+        respondJson(response, 200, result);
+      } catch (error) {
+        if (error.code !== "ENOENT") { respondJson(response, 503, { error: "Resultado de revisión no disponible." }); return; }
+        try { await stat(resolve(directory, `${id}.request`)); respondJson(response, 200, { id, state: "queued" }); }
+        catch { respondJson(response, 404, { error: "Revisión desconocida." }); }
+      }
       return;
     }
     if (pathname === "/api/status") {

@@ -37,7 +37,7 @@ impl Frontpage {
 
         Ok(Self {
             url,
-            last_check: std::time::Instant::now(),
+            last_check: client.now(),
             client,
         })
     }
@@ -51,7 +51,7 @@ impl Checker for Frontpage {
         let url = self.url.clone();
         self.client
             .parse_body(body, move |text| {
-                let page = Html::parse(text, url.as_str())?;
+                let page = Html::parse_without_text(text, url.as_str())?;
                 Ok(page
                     .anchor_links()
                     .into_iter()
@@ -62,11 +62,15 @@ impl Checker for Frontpage {
             .await?
     }
 
+    fn next_check(&self, interval: &CheckIntervals) -> std::time::Instant {
+        self.last_check + interval.frontpage
+    }
+
     fn update_last_check(&mut self) {
-        self.last_check = std::time::Instant::now();
+        self.last_check = self.client.now();
     }
 
     fn should_check(&self, interval: &CheckIntervals) -> bool {
-        self.last_check.elapsed() > interval.frontpage
+        self.client.now().saturating_duration_since(self.last_check) >= interval.frontpage
     }
 }

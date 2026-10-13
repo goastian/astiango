@@ -900,6 +900,7 @@ impl Spool {
     }
 
     pub fn reference(&mut self, id: &str, owner: &str, kind: &str, retained: bool) -> Result<()> {
+        let id = id.strip_suffix(".warc.gz").unwrap_or(id);
         anyhow::ensure!(
             ["revisit", "304", "consumer", "outbox", "backup"].contains(&kind)
                 && !owner.is_empty()
@@ -912,6 +913,9 @@ impl Spool {
             "segment deletion already committed"
         );
         let key = format!("{kind}:{owner}");
+        if segment.references.contains_key(&key) == retained {
+            return Ok(());
+        }
         if retained {
             segment.references.insert(key, kind.into());
         } else {

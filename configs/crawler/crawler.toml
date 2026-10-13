@@ -109,3 +109,30 @@ max_active_per_ip = 8
 [robots]
 cache_entries = 1024
 failure_ttl_seconds = 60
+
+# C14: durable retry deadlines; Retry-After remains a minimum.
+[retry]
+max_attempts = 6
+max_elapsed_ms = 86400000
+initial_backoff_ms = 1000
+max_backoff_ms = 900000
+circuit_failures = 3
+circuit_open_ms = 60000
+origin_attempts_per_minute = 32
+global_attempts_per_minute = 1024
+
+# C15: aggregate discovery budgets per origin and cycle.
+[discovery]
+cycle_ms = 3600000
+max_depth = 8
+max_documents = 64
+max_urls = 100000
+max_total_bytes = 67108864
+
+# C18: conditional GET plus periodic full validation.
+[recrawl]
+enabled = true
+min_interval_ms = 60000
+initial_interval_ms = 3600000
+max_interval_ms = 604800000
+full_check_every = 20

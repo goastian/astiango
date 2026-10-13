@@ -14,21 +14,14 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::time::Duration;
-
 use url::Url;
 
 use crate::crawler::body::BodyKind;
 use crate::crawler::robot_client::RobotClient;
-use crate::dated_url::DatedUrl;
-use crate::sitemap::{parse_sitemap, SitemapEntry};
 use crate::Result;
 use crate::{entrypoint::site_stats, webpage::url_ext::UrlExt};
 
 use super::{CheckIntervals, Checker, CrawlableUrl};
-
-const MAX_SITEMAP_DEPTH: usize = 10;
-const SITEMAP_DELAY: Duration = Duration::from_secs(60);
 
 pub struct Sitemap {
     robots_url: Url,
@@ -42,8 +35,8 @@ impl Sitemap {
 
         Ok(Self {
             robots_url,
+            last_check: client.now(),
             client,
-            last_check: std::time::Instant::now(),
         })
     }
 
@@ -54,67 +47,71 @@ impl Sitemap {
             .await
     }
 
-    async fn urls_from_sitemap(&self, sitemap: Url) -> Vec<DatedUrl> {
-        let mut stack = vec![(sitemap, 0)];
-        let mut urls = vec![];
-
-        while let Some((url, depth)) = stack.pop() {
-            if depth >= MAX_SITEMAP_DEPTH {
+    async fn cycle_urls(&self, sitemaps: Vec<Url>) -> Result<Vec<CrawlableUrl>> {
+        let config = self.client.discovery_config();
+        let mut stack = sitemaps
+            .into_iter()
+            .take(config.max_documents as usize)
+            .map(|url| (url, 0u32))
+            .collect::<std::collections::VecDeque<_>>();
+        let mut visited = std::collections::HashSet::new();
+        let mut urls = Vec::new();
+        let mut bytes = 0u64;
+        while let Some((url, depth)) = stack.pop_front() {
+            if depth >= config.max_depth || visited.contains(&url) {
                 continue;
             }
-
-            let Ok(req) = self.client.get(url).await else {
-                continue;
-            };
-            let body = async {
-                let response = req.send().await?;
-                let body = self.client.body(response, BodyKind::Sitemap).await?;
-                self.client
-                    .parse_body(body, |text| parse_sitemap(text))
-                    .await
-            }
-            .await;
-            self.client.sleep(SITEMAP_DELAY).await;
-            let Ok(entries) = body else { continue };
-
-            for entry in entries {
-                match entry {
-                    SitemapEntry::Url(url) => {
-                        urls.push(url);
+            anyhow::ensure!(
+                visited.len() < config.max_documents as usize,
+                "sitemap aggregate document quota exceeded"
+            );
+            visited.insert(url.clone());
+            let response = self.client.get(url.clone()).await?.send().await?;
+            let body = self.client.body(response, BodyKind::Sitemap).await?;
+            bytes = bytes.saturating_add(body.len() as u64);
+            anyhow::ensure!(
+                bytes <= config.max_total_bytes,
+                "sitemap aggregate byte quota exceeded"
+            );
+            for candidate in self.client.discover_document(url, body, None).await? {
+                if candidate.sitemap {
+                    if !visited.contains(&candidate.url) {
+                        anyhow::ensure!(
+                            stack.len() + visited.len() < config.max_documents as usize,
+                            "sitemap branching quota exceeded"
+                        );
+                        stack.push_back((candidate.url, depth + 1));
                     }
-                    SitemapEntry::Sitemap(url) => {
-                        stack.push((url, depth + 1));
-                    }
+                } else {
+                    anyhow::ensure!(
+                        urls.len() < config.max_urls.min(512) as usize,
+                        "live sitemap candidate quota exceeded; candidates retained in frontier"
+                    );
+                    urls.push(CrawlableUrl {
+                        url: candidate.url,
+                        last_modified: candidate.lastmod,
+                    });
                 }
             }
         }
-
-        urls
+        Ok(urls)
     }
 }
 
 impl Checker for Sitemap {
     async fn get_urls(&self) -> Result<Vec<CrawlableUrl>> {
-        let sitemap_urls = self.sitemap_urls().await;
-        let mut urls = vec![];
+        self.cycle_urls(self.sitemap_urls().await).await
+    }
 
-        for sitemap_url in sitemap_urls {
-            urls.extend(
-                self.urls_from_sitemap(sitemap_url)
-                    .await
-                    .into_iter()
-                    .map(CrawlableUrl::from),
-            );
-        }
-
-        Ok(urls)
+    fn next_check(&self, interval: &CheckIntervals) -> std::time::Instant {
+        self.last_check + interval.sitemap
     }
 
     fn update_last_check(&mut self) {
-        self.last_check = std::time::Instant::now();
+        self.last_check = self.client.now();
     }
 
     fn should_check(&self, interval: &CheckIntervals) -> bool {
-        self.last_check.elapsed() > interval.sitemap
+        self.client.now().saturating_duration_since(self.last_check) >= interval.sitemap
     }
 }

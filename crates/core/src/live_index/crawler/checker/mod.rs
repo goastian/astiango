@@ -58,10 +58,12 @@ pub trait Checker {
     async fn get_urls(&self) -> Result<Vec<CrawlableUrl>>;
     fn should_check(&self, interval: &CheckIntervals) -> bool;
     fn update_last_check(&mut self);
+    fn next_check(&self, interval: &CheckIntervals) -> std::time::Instant;
 
     async fn get_urls_and_update_last_check(&mut self) -> Result<Vec<CrawlableUrl>> {
+        let urls = self.get_urls().await?;
         self.update_last_check();
-        self.get_urls().await
+        Ok(urls)
     }
 }
 

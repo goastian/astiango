@@ -20,7 +20,7 @@ use std::{
     cmp::Reverse,
     collections::BinaryHeap,
     fs::File,
-    io::{BufReader, BufWriter, Read, Seek, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Seek, Write},
 };
 
 struct Chunk<T> {
@@ -104,16 +104,38 @@ impl<T> StoredChunk<T> {
         self.buf.clear();
         self.buf.resize(u64::BITS as usize / 8, 0);
 
-        self.data.read_exact(&mut self.buf).ok()?;
+        if self
+            .data
+            .fill_buf()
+            .expect("external sort read failed")
+            .is_empty()
+        {
+            return None;
+        }
+        self.data
+            .read_exact(&mut self.buf)
+            .expect("external sort truncated record");
 
-        let next_size: u64 = u64::from_le_bytes(self.buf.as_slice().try_into().ok()?);
+        let next_size: u64 = u64::from_le_bytes(
+            self.buf
+                .as_slice()
+                .try_into()
+                .expect("external sort size field"),
+        );
 
         self.buf.clear();
+        assert!(
+            next_size <= 64 * 1024 * 1024,
+            "external sort record exceeds bound"
+        );
         self.buf.resize(next_size as usize, 0);
 
-        self.data.read_exact(&mut self.buf).ok()?;
+        self.data
+            .read_exact(&mut self.buf)
+            .expect("external sort truncated payload");
 
-        let (next, _) = bincode::decode_from_slice(&self.buf, common::bincode_config()).ok()?;
+        let (next, _) = bincode::decode_from_slice(&self.buf, common::bincode_config())
+            .expect("external sort invalid payload");
 
         Some(next)
     }
@@ -149,8 +171,10 @@ impl<T> ExternalSorter<T> {
         T: bincode::Encode + bincode::Decode + Ord,
     {
         let dir = TempDir::new()?;
-        let mut stored_chunks = Vec::new();
-        let mut chunk = Chunk::new();
+        let mut levels: Vec<Vec<StoredChunk<T>>> = vec![Vec::new()];
+        let mut chunk = Chunk {
+            data: Vec::with_capacity(self.chunk_size.max(1)),
+        };
 
         for item in iter {
             chunk.push(item);
@@ -158,15 +182,23 @@ impl<T> ExternalSorter<T> {
             if chunk.len() >= self.chunk_size {
                 let file = TempFile::new(&dir)?;
                 let stored_chunk = chunk.store(file)?;
-                stored_chunks.push(stored_chunk);
-                chunk = Chunk::new();
+                push_chunk(&dir, &mut levels, stored_chunk)?;
+                chunk = Chunk {
+                    data: Vec::with_capacity(self.chunk_size.max(1)),
+                };
             }
         }
 
         if !chunk.is_empty() {
             let file = TempFile::new(&dir)?;
             let stored_chunk = chunk.store(file)?;
-            stored_chunks.push(stored_chunk);
+            push_chunk(&dir, &mut levels, stored_chunk)?;
+        }
+
+        let mut stored_chunks: Vec<_> = levels.into_iter().flatten().collect();
+        while stored_chunks.len() > 64 {
+            let merge = stored_chunks.split_off(stored_chunks.len() - 64);
+            stored_chunks.push(merge_chunks(&dir, merge)?);
         }
 
         let heads = stored_chunks
@@ -180,6 +212,50 @@ impl<T> ExternalSorter<T> {
             chunks: heads,
         })
     }
+}
+
+fn push_chunk<T: bincode::Encode + bincode::Decode + Ord>(
+    dir: &TempDir,
+    levels: &mut Vec<Vec<StoredChunk<T>>>,
+    mut chunk: StoredChunk<T>,
+) -> Result<()> {
+    let mut level = 0;
+    loop {
+        if levels.len() <= level {
+            levels.push(Vec::new());
+        }
+        levels[level].push(chunk);
+        if levels[level].len() < 64 {
+            return Ok(());
+        }
+        chunk = merge_chunks(dir, std::mem::take(&mut levels[level]))?;
+        level += 1;
+    }
+}
+fn merge_chunks<T: bincode::Encode + bincode::Decode + Ord>(
+    dir: &TempDir,
+    chunks: Vec<StoredChunk<T>>,
+) -> Result<StoredChunk<T>> {
+    let mut heads: BinaryHeap<_> = chunks
+        .into_iter()
+        .filter_map(Head::new)
+        .map(Reverse)
+        .collect();
+    let mut file = TempFile::new(dir)?;
+    {
+        let mut writer = BufWriter::new(file.inner_mut());
+        while let Some(Reverse(mut head)) = heads.pop() {
+            let bytes = bincode::encode_to_vec(&head.item, common::bincode_config())?;
+            writer.write_all(&(bytes.len() as u64).to_le_bytes())?;
+            writer.write_all(&bytes)?;
+            if let Some(item) = head.rest.next() {
+                head.item = item;
+                heads.push(Reverse(head));
+            }
+        }
+        writer.flush()?;
+    }
+    StoredChunk::new(file)
 }
 
 struct Head<T> {

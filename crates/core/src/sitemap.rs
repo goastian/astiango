@@ -26,74 +26,128 @@ pub enum SitemapEntry {
     Sitemap(Url),
 }
 
-pub fn parse_sitemap(s: &str) -> Vec<SitemapEntry> {
-    let mut reader = quick_xml::Reader::from_str(s);
-
-    let mut res = vec![];
-
-    let mut in_sitemap = false;
-    let mut in_url = false;
-    let mut in_loc = false;
-    let mut in_lastmod = false;
-
-    let mut current_url: Option<Url> = None;
-    let mut current_lastmod: Option<DateTime<Utc>> = None;
-
+pub fn visit_sitemap<R: std::io::BufRead>(
+    input: R,
+    mut emit: impl FnMut(SitemapEntry) -> crate::Result<()>,
+) -> crate::Result<usize> {
+    let mut reader = quick_xml::Reader::from_reader(input);
+    let mut buffer = Vec::with_capacity(8192);
+    let mut stack: Vec<Vec<u8>> = Vec::new();
+    let mut root = false;
+    let mut current_url = None;
+    let mut current_lastmod = None;
+    let mut count = 0;
     loop {
-        match reader.read_event() {
-            Ok(Event::Start(ref e)) => {
-                if e.name().as_ref() == b"sitemap" {
-                    in_sitemap = true;
-                } else if e.name().as_ref() == b"url" {
-                    in_url = true;
-                } else if e.name().as_ref() == b"loc" {
-                    in_loc = true;
-                } else if e.name().as_ref() == b"lastmod" {
-                    in_lastmod = true;
+        buffer.clear();
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(e) => {
+                let name = e.local_name().as_ref().to_vec();
+                if stack.is_empty() {
+                    anyhow::ensure!(
+                        !root && matches!(name.as_slice(), b"urlset" | b"sitemapindex"),
+                        "invalid sitemap root"
+                    );
+                    root = true;
+                }
+                anyhow::ensure!(stack.len() < 64, "sitemap XML depth quota exceeded");
+                if matches!(name.as_slice(), b"url" | b"sitemap") {
+                    current_url = None;
+                    current_lastmod = None;
+                }
+                stack.push(name);
+            }
+            Event::Empty(e) if stack.is_empty() => {
+                anyhow::ensure!(
+                    !root && matches!(e.local_name().as_ref(), b"urlset" | b"sitemapindex"),
+                    "invalid sitemap root"
+                );
+                root = true;
+            }
+            Event::CData(e) => {
+                if stack.last().map(Vec::as_slice) == Some(b"loc") {
+                    current_url = Url::parse(std::str::from_utf8(e.as_ref())?.trim())
+                        .ok()
+                        .filter(|u| {
+                            matches!(u.scheme(), "http" | "https")
+                                && u.as_str().len() <= crate::crawler::MAX_URL_LEN_BYTES
+                        });
                 }
             }
-            Ok(Event::End(ref e)) => {
-                if e.name().as_ref() == b"sitemap" {
-                    in_sitemap = false;
-                } else if e.name().as_ref() == b"url" {
-                    in_url = false;
+            Event::Text(e) => {
+                let value = e.unescape()?;
+                let value = value.trim();
+                match stack.last().map(Vec::as_slice) {
+                    Some(b"loc") => {
+                        current_url = Url::parse(value).ok().filter(|url| {
+                            matches!(url.scheme(), "http" | "https")
+                                && url.as_str().len() <= crate::crawler::MAX_URL_LEN_BYTES
+                        });
+                    }
+                    Some(b"lastmod") => {
+                        current_lastmod = DateTime::parse_from_rfc3339(value)
+                            .ok()
+                            .map(|d| d.with_timezone(&Utc))
+                            .or_else(|| {
+                                chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                                    .ok()
+                                    .and_then(|d| d.and_hms_opt(0, 0, 0))
+                                    .map(|d| d.and_utc())
+                            });
+                    }
+                    None => anyhow::ensure!(value.is_empty(), "text outside sitemap root"),
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let name = stack
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("unbalanced sitemap XML"))?;
+                anyhow::ensure!(
+                    name.as_slice() == e.local_name().as_ref(),
+                    "mismatched sitemap XML"
+                );
+                if matches!(name.as_slice(), b"url" | b"sitemap") {
                     if let Some(url) = current_url.take() {
-                        res.push(SitemapEntry::Url(DatedUrl {
-                            url,
-                            last_modified: current_lastmod.take(),
-                        }));
-                    }
-                } else if e.name().as_ref() == b"loc" {
-                    in_loc = false;
-                } else if e.name().as_ref() == b"lastmod" {
-                    in_lastmod = false;
-                }
-            }
-            Ok(Event::Text(e)) => {
-                if in_sitemap && in_loc {
-                    if let Ok(url) = Url::parse(&e.unescape().unwrap()) {
-                        res.push(SitemapEntry::Sitemap(url));
-                    }
-                } else if in_url && in_loc {
-                    if let Ok(url) = Url::parse(&e.unescape().unwrap()) {
-                        current_url = Some(url);
-                    }
-                } else if in_url && in_lastmod {
-                    if let Ok(date) = DateTime::parse_from_rfc3339(&e.unescape().unwrap()) {
-                        current_lastmod = Some(date.with_timezone(&Utc));
+                        let entry = if name == b"url" {
+                            SitemapEntry::Url(DatedUrl {
+                                url,
+                                last_modified: current_lastmod.take(),
+                            })
+                        } else {
+                            SitemapEntry::Sitemap(url)
+                        };
+                        emit(entry)?;
+                        count += 1;
                     }
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => {
-                tracing::debug!("failed to parse sitemap: {}", e);
-                break;
+            Event::Eof => {
+                anyhow::ensure!(root && stack.is_empty(), "incomplete sitemap XML");
+                return Ok(count);
             }
-            _ => (),
+            Event::DocType(_) => anyhow::bail!("sitemap DTD not admitted"),
+            _ => {}
         }
+        anyhow::ensure!(
+            buffer.len() <= 64 * 1024,
+            "sitemap XML token quota exceeded"
+        );
     }
+}
 
-    res
+pub fn parse_sitemap(s: &str) -> Vec<SitemapEntry> {
+    let mut entries = Vec::new();
+    if let Err(error) = visit_sitemap(s.as_bytes(), |entry| {
+        anyhow::ensure!(
+            entries.len() < 50_000,
+            "sitemap document URL quota exceeded"
+        );
+        entries.push(entry);
+        Ok(())
+    }) {
+        tracing::debug!("failed to parse sitemap: {error}");
+    }
+    entries
 }
 
 #[cfg(test)]
@@ -209,5 +263,37 @@ mod tests {
                 }),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod incremental_tests {
+    use super::*;
+    #[test]
+    fn empty_cdata_and_callback_quota_are_supported_without_materializing_a_tree() {
+        assert_eq!(
+            visit_sitemap("<urlset/>".as_bytes(), |_| Ok(())).unwrap(),
+            0
+        );
+        let mut url = None;
+        visit_sitemap(
+            "<urlset><url><loc><![CDATA[https://example.org/a?sig=x&b=y]]></loc></url></urlset>"
+                .as_bytes(),
+            |entry| {
+                url = Some(entry);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(matches!(url, Some(SitemapEntry::Url(_))));
+        let xml="<urlset><url><loc>https://example.org/a</loc></url><url><loc>https://example.org/b</loc></url></urlset>";
+        let mut count = 0;
+        assert!(visit_sitemap(xml.as_bytes(), |_| {
+            count += 1;
+            anyhow::ensure!(count <= 1, "fixture quota");
+            Ok(())
+        })
+        .is_err());
+        assert_eq!(count, 2);
     }
 }

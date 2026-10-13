@@ -70,12 +70,15 @@ struct Origin {
     next: Instant,
     active: bool,
     floor: Duration,
+    retry: super::retry::OriginState,
 }
 #[derive(Default)]
 struct State {
     origins: HashMap<String, Origin>,
     sites: HashMap<String, usize>,
     stats: Stats,
+    request_window: u64,
+    window_attempts: u32,
 }
 struct Inner {
     config: Config,
@@ -83,6 +86,7 @@ struct Inner {
     minimum: Duration,
     maximum: Duration,
     factor: f64,
+    retry: super::retry::Config,
     state: Mutex<State>,
 }
 #[derive(Clone)]
@@ -97,6 +101,7 @@ impl Scheduler {
             minimum: Duration::from_millis(config.min_crawl_delay_ms),
             maximum: Duration::from_millis(config.max_crawl_delay_ms),
             factor,
+            retry: config.retry.clone(),
             state: Mutex::new(State::default()),
         }))
     }
@@ -141,6 +146,18 @@ impl Scheduler {
                 return Err(Duration::from_millis(100));
             }
         }
+        let utc = self.0.clock.utc_now().timestamp_millis().max(0) as u64;
+        if utc.saturating_sub(state.request_window) >= 60_000 {
+            state.request_window = utc;
+            state.window_attempts = 0;
+        }
+        if state.window_attempts >= self.0.retry.global_attempts_per_minute {
+            return Err(Duration::from_millis(
+                60_000u64
+                    .saturating_sub(utc.saturating_sub(state.request_window))
+                    .max(1),
+            ));
+        }
         let origin = state
             .origins
             .entry(identity.origin.clone())
@@ -148,7 +165,19 @@ impl Scheduler {
                 next: now,
                 active: false,
                 floor: Duration::ZERO,
+                retry: Default::default(),
             });
+        if utc.saturating_sub(origin.retry.window_start_ms) >= 60_000 {
+            origin.retry.window_start_ms = utc;
+            origin.retry.window_attempts = 0;
+        }
+        if origin.retry.window_attempts >= self.0.retry.origin_attempts_per_minute {
+            return Err(Duration::from_millis(
+                60_000u64
+                    .saturating_sub(utc.saturating_sub(origin.retry.window_start_ms))
+                    .max(1),
+            ));
+        }
         if origin.active || origin.next > now {
             let wait = origin
                 .next
@@ -163,7 +192,10 @@ impl Scheduler {
             state.stats.requests_deferred += 1;
             return Err(Duration::from_millis(10));
         }
-        state.origins.get_mut(&identity.origin).unwrap().active = true;
+        let origin = state.origins.get_mut(&identity.origin).unwrap();
+        origin.active = true;
+        origin.retry.window_attempts += 1;
+        state.window_attempts += 1;
         *state.sites.entry(identity.tenant.clone()).or_default() += 1;
         state.stats.requests_admitted += 1;
         state.stats.active_requests += 1;
@@ -179,7 +211,7 @@ impl Scheduler {
         loop {
             match self.try_acquire(url) {
                 Ok(permit) => return Ok(permit),
-                Err(wait) if self.mode() == Mode::FairTurns => {
+                Err(wait) if self.mode() == Mode::FairTurns || wait > self.0.maximum => {
                     return Err(super::Error::CrawlDeferred {
                         retry_after_ms: wait.as_millis().max(1).min(u64::MAX as u128) as u64,
                     })
@@ -200,6 +232,45 @@ pub struct Permit {
     started: Instant,
 }
 
+impl Permit {
+    pub(super) fn feedback(&self, result: &super::Result<reqwest::Response>) {
+        let now = self.scheduler.0.clock.utc_now();
+        let utc = now.timestamp_millis().max(0) as u64;
+        let mut state = self.scheduler.0.state.lock().unwrap();
+        let Some(origin) = state.origins.get_mut(&self.origin) else {
+            return;
+        };
+        let failed = match result {
+            Ok(response) => matches!(response.status().as_u16(), 408 | 425 | 429 | 500..=599),
+            Err(_) => true,
+        };
+        if failed {
+            let remote = result
+                .as_ref()
+                .ok()
+                .and_then(|r| super::retry::retry_after(r.headers(), now))
+                .unwrap_or(0);
+            let delay = self.scheduler.0.retry.delay(
+                origin.retry.consecutive_failures + 1,
+                remote,
+                &self.origin,
+            );
+            origin.retry.failure(&self.scheduler.0.retry, utc, delay);
+            origin.next = origin.next.max(
+                self.scheduler.0.clock.now()
+                    + Duration::from_millis(origin.retry.not_before_ms.saturating_sub(utc)),
+            );
+        } else if result
+            .as_ref()
+            .is_ok_and(|r| r.status().is_success() || r.status().as_u16() == 304)
+        {
+            origin.retry.success(utc);
+            origin.next = origin
+                .next
+                .max(self.scheduler.0.clock.now() + Duration::from_millis(origin.retry.penalty_ms));
+        }
+    }
+}
 pub fn guard_response(
     mut response: reqwest::Response,
     permit: Arc<Permit>,
@@ -250,7 +321,9 @@ impl Drop for Permit {
                 .max(inner.minimum)
                 .mul_f64(inner.factor)
                 .min(inner.maximum);
-            origin.next = now + adaptive.max(origin.floor).max(inner.minimum);
+            origin.next = origin
+                .next
+                .max(now + adaptive.max(origin.floor).max(inner.minimum));
         }
         if let Some(count) = state.sites.get_mut(&self.site) {
             *count -= 1;

@@ -61,6 +61,8 @@ pub fn parse_duration<'de, D: serde::de::Deserializer<'de>>(
 
 #[derive(Debug, serde::Deserialize, Clone)]
 pub struct IndexerConfig {
+    #[serde(default)]
+    pub dedup: crate::crawler::dedup::Config,
     pub output_path: String,
     pub limit_warc_files: Option<usize>,
     pub skip_warc_files: Option<usize>,
@@ -405,6 +407,12 @@ pub fn default_max_redirect_hops() -> u8 {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct CrawlerConfig {
+    #[serde(default)]
+    pub discovery: crate::crawler::discovery::Config,
+    #[serde(default)]
+    pub retry: crate::crawler::retry::Config,
+    #[serde(default)]
+    pub recrawl: crate::crawler::recrawl::Config,
     pub num_worker_threads: usize,
     pub user_agent: UserAgent,
 
@@ -468,6 +476,9 @@ impl CrawlerConfig {
                 token: "test".to_string(),
             },
             network_policy: CrawlNetworkPolicy::default(),
+            discovery: crate::crawler::discovery::Config::default(),
+            retry: crate::crawler::retry::Config::default(),
+            recrawl: crate::crawler::recrawl::Config::default(),
             scheduler: crate::crawler::scheduler::Config::default(),
             robots: crate::crawler::robots_txt::Config::default(),
             transport: crate::crawler::transport::TransportConfig::default(),
@@ -546,6 +557,10 @@ impl Default for DailyLiveIndexCrawlerBudget {
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct LiveCrawlerConfig {
+    #[serde(default)]
+    pub discovery: crate::crawler::discovery::Config,
+    #[serde(default)]
+    pub retry: crate::crawler::retry::Config,
     pub crawled_db_path: PathBuf,
     pub gossip: GossipConfig,
     pub site_stats_path: PathBuf,
@@ -653,6 +668,16 @@ pub struct CrawlPlannerDomainBoost {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct CrawlPlannerConfig {
+    #[serde(default)]
+    pub signals: crate::crawler::plan_signals::Config,
+    #[serde(default = "default_planner_memory")]
+    pub sort_memory_bytes: usize,
+    #[serde(default = "default_planner_job_bytes")]
+    pub job_bytes: usize,
+    #[serde(default = "default_planner_job_urls")]
+    pub max_urls_per_job: usize,
+    #[serde(default = "default_planner_exploration")]
+    pub exploration_fraction: f64,
     pub host_harmonic_path: String,
     pub page_harmonic_path: String,
     pub host_centrality_rank_store_path: String,
@@ -787,4 +812,17 @@ pub struct HarmonicNearestSeedConfig {
     pub output_path: PathBuf,
     #[serde(default = "defaults::HarmonicNearestSeed::discount_factor")]
     pub discount_factor: f64,
+}
+
+fn default_planner_memory() -> usize {
+    16 * 1024 * 1024
+}
+fn default_planner_job_bytes() -> usize {
+    512 * 1024
+}
+fn default_planner_job_urls() -> usize {
+    128
+}
+fn default_planner_exploration() -> f64 {
+    0.2
 }

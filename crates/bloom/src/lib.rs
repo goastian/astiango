@@ -38,13 +38,14 @@ const LARGE_PRIME: u64 = 11400714819323198549;
 /// Calculate the number of bits needed for a Bloom filter.
 #[inline]
 fn num_bits(estimated_items: u64, fp: f64) -> u64 {
-    ((estimated_items as f64) * fp.ln() / (-8.0 * 2.0_f64.ln().powi(2))).ceil() as u64
+    assert!(fp.is_finite() && fp > 0.0 && fp < 1.0);
+    ((estimated_items.max(1) as f64) * -fp.ln() / 2.0_f64.ln().powi(2)).ceil() as u64
 }
 
 /// Calculate the number of hash functions needed for a Bloom filter.
 #[inline]
 fn num_hashes(num_bits: u64, estimated_items: u64) -> u64 {
-    (((num_bits as f64) / estimated_items as f64 * 2.0_f64.ln()).ceil() as u64).max(1)
+    (((num_bits as f64) / estimated_items as f64 * 2.0_f64.ln()).round() as u64).max(1)
 }
 
 #[derive(
@@ -64,9 +65,15 @@ pub struct U64BloomFilter {
 
 impl U64BloomFilter {
     pub fn new(estimated_items: u64, fp: f64) -> Self {
-        let num_bits = num_bits(estimated_items, fp);
+        Self::with_memory_limit(estimated_items, fp, 128 * 1024 * 1024)
+    }
+    pub fn with_memory_limit(estimated_items: u64, fp: f64, max_bytes: usize) -> Self {
+        assert!(fp.is_finite() && fp > 0.0 && fp < 1.0 && max_bytes >= 8);
+        let num_bits = ((-(estimated_items.max(1) as f64) / (-fp).ln_1p()).ceil() as usize)
+            .min(max_bytes.saturating_mul(8))
+            .max(1);
         Self {
-            bit_vec: BitVec::repeat(false, num_bits as usize),
+            bit_vec: BitVec::repeat(false, num_bits),
         }
     }
 
@@ -116,10 +123,8 @@ impl U64BloomFilter {
             return u64::MAX;
         }
 
-        (-(self.bit_vec.len() as i64)
-            * (1.0 - (num_ones as f64) / (self.bit_vec.len() as f64)).ln() as i64)
-            .try_into()
-            .unwrap_or_default()
+        (-(self.bit_vec.len() as f64) * (1.0 - num_ones as f64 / self.bit_vec.len() as f64).ln())
+            .round() as u64
     }
 
     pub fn union(&mut self, other: Self) {
@@ -140,12 +145,86 @@ pub struct BytesBloomFilter<T> {
 impl<T> BytesBloomFilter<T> {
     pub fn new(estimated_items: u64, fp: f64) -> Self {
         let num_bits = num_bits(estimated_items, fp);
-        let num_hashes = num_hashes(num_bits, estimated_items);
+        let num_hashes = num_hashes(num_bits, estimated_items.max(1));
         Self {
             bit_vec: BitVec::repeat(false, num_bits as usize),
             num_hashes,
             _marker: std::marker::PhantomData,
         }
+    }
+
+    pub fn with_memory_limit(estimated_items: u64, fp: f64, max_bytes: usize) -> Self {
+        assert!(max_bytes >= std::mem::size_of::<usize>());
+        let bits = num_bits(estimated_items.max(1), fp)
+            .min((max_bytes as u64) * 8)
+            .max(8);
+        Self {
+            bit_vec: BitVec::repeat(false, bits as usize),
+            num_hashes: num_hashes(bits, estimated_items.max(1)),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn bits(&self) -> usize {
+        self.bit_vec.len()
+    }
+    pub fn allocated_bytes(&self) -> usize {
+        self.bit_vec.as_raw_slice().len() * std::mem::size_of::<usize>()
+    }
+    pub fn hashes(&self) -> u64 {
+        self.num_hashes
+    }
+    pub fn fill(&mut self) {
+        self.bit_vec.fill(true);
+    }
+
+    pub fn save(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()>
+    where
+        T: bincode::Encode,
+    {
+        use std::io::Write;
+        let bytes = bincode::encode_to_vec(self, bincode::config::standard())
+            .map_err(std::io::Error::other)?;
+        let path = path.as_ref();
+        let temp = path.with_extension("bloom.tmp");
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(b"ASTIAN-BLOOM\x02")?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        std::fs::rename(temp, path)?;
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    }
+
+    pub fn load(path: impl AsRef<std::path::Path>, max_bytes: usize) -> std::io::Result<Self>
+    where
+        T: bincode::Decode,
+    {
+        let path = path.as_ref();
+        if path.metadata()?.len() > (max_bytes as u64).saturating_add(4096) {
+            return Err(std::io::Error::other("Bloom exceeds configured memory"));
+        }
+        let data = std::fs::read(path)?;
+        let prefix = b"ASTIAN-BLOOM\x02";
+        if !data.starts_with(prefix) {
+            return Err(std::io::Error::other(
+                "unsupported Bloom version; rebuild from exact keys",
+            ));
+        }
+        let (filter, consumed): (Self, usize) =
+            bincode::decode_from_slice(&data[prefix.len()..], bincode::config::standard())
+                .map_err(std::io::Error::other)?;
+        if consumed + prefix.len() != data.len()
+            || filter.bits() == 0
+            || filter.hashes() == 0
+            || filter.hashes() > 64
+            || filter.allocated_bytes() > max_bytes
+        {
+            return Err(std::io::Error::other("invalid Bloom dimensions"));
+        }
+        Ok(filter)
     }
 
     fn hash_raw(item: &[u8]) -> [u64; 2] {
@@ -241,5 +320,47 @@ mod tests {
         for num in 0..10000_u128 {
             assert_eq!(combine_u64s(split_u128(num)), num);
         }
+    }
+}
+
+#[cfg(test)]
+mod sizing_tests {
+    use super::*;
+    #[test]
+    fn independent_false_positives_and_allocated_memory() {
+        for n in [1000u64, 10_000, 100_000] {
+            let mut filter = BytesBloomFilter::<String>::new(n, 0.01);
+            for i in 0..n {
+                filter.insert_raw(&i.to_le_bytes());
+            }
+            assert_eq!(filter.bits(), num_bits(n, 0.01) as usize);
+            assert_eq!(
+                filter.allocated_bytes(),
+                filter.bits().div_ceil(usize::BITS as usize) * std::mem::size_of::<usize>()
+            );
+            let samples = 100_000u64;
+            let false_positives = (n..n + samples)
+                .filter(|i| filter.contains_raw(&i.to_le_bytes()))
+                .count();
+            assert!(
+                false_positives <= 1400,
+                "capacity {n}: {false_positives}/100000"
+            );
+            assert!((0..n).all(|i| filter.contains_raw(&i.to_le_bytes())));
+        }
+    }
+    #[test]
+    fn memory_cap_and_versioned_roundtrip() {
+        let mut filter = BytesBloomFilter::<String>::with_memory_limit(10_000_000_000, 0.01, 8192);
+        assert_eq!(filter.allocated_bytes(), 8192);
+        filter.insert_raw(b"known");
+        let path = std::env::temp_dir().join(format!("bloom-{}.v2", std::process::id()));
+        filter.save(&path).unwrap();
+        let loaded = BytesBloomFilter::<String>::load(&path, 8192).unwrap();
+        assert!(loaded.contains_raw(b"known"));
+        assert!(BytesBloomFilter::<String>::load(&path, 1024).is_err());
+        std::fs::write(&path, b"ASTIAN-BLOOM\x01").unwrap();
+        assert!(BytesBloomFilter::<String>::load(&path, 8192).is_err());
+        std::fs::remove_file(path).unwrap();
     }
 }

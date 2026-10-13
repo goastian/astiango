@@ -133,29 +133,34 @@ async fn live_frontpage_feeds_and_sitemaps_use_admission_before_body() {
             client.clone(),
         )
         .get_urls()
-        .await
-        .unwrap();
+        .await;
         let sitemaps = Sitemap::new(&site, client.clone())
             .unwrap()
             .get_urls()
-            .await
-            .unwrap();
+            .await;
         let stats = client.body_reader().stats();
         if reject {
             assert!(front
                 .unwrap_err()
                 .to_string()
                 .contains("wire_limit_exceeded"));
-            assert!(feeds.is_empty() && sitemaps.is_empty());
+            assert!(feeds
+                .unwrap_err()
+                .to_string()
+                .contains("wire_limit_exceeded"));
+            assert!(sitemaps
+                .unwrap_err()
+                .to_string()
+                .contains("wire_limit_exceeded"));
             assert_eq!(polls.load(Ordering::Relaxed), 0);
             assert_eq!(stats.rejected_content_length, 3);
         } else {
             assert_eq!(front.unwrap().len(), 1);
-            assert_eq!(feeds.len(), 1);
-            assert_eq!(sitemaps.len(), 1);
+            assert_eq!(feeds.unwrap().len(), 1);
+            assert_eq!(sitemaps.unwrap().len(), 1);
             assert_eq!(polls.load(Ordering::Relaxed), 3);
             assert_eq!(stats.bodies_completed, 3);
-            assert_eq!(sleeps.load(Ordering::Relaxed), 4);
+            assert_eq!(sleeps.load(Ordering::Relaxed), 2);
         }
         assert_eq!(stats.reserved_bytes, 0);
         assert_eq!(stats.active_bodies, 0);

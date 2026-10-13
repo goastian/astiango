@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use redb::{Database, ReadableTable, TableDefinition, WriteTransaction};
+use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition, WriteTransaction};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -32,6 +32,26 @@ const HTTP_READY: TableDefinition<(&str, u64, u64), &str> =
     TableDefinition::new("http_origin_eligibility.v1");
 const HTTP_URLS: TableDefinition<(&str, &str), u64> = TableDefinition::new("http_origin_urls.v1");
 const HTTP_ACTIVE: TableDefinition<&str, &str> = TableDefinition::new("active_http_origins.v1");
+const CANDIDATE_SOURCE: TableDefinition<(&str, &str), ()> =
+    TableDefinition::new("discovery_sources.v1");
+const CANDIDATE_READY: TableDefinition<(&str, &str), ()> =
+    TableDefinition::new("discovery_pending.v1");
+const CANDIDATES: TableDefinition<&str, &[u8]> = TableDefinition::new("discovery_candidates.v1");
+const DISCOVERY_CYCLES: TableDefinition<&str, &[u8]> = TableDefinition::new("discovery_cycles.v1");
+const DOCUMENTS: TableDefinition<&str, u64> = TableDefinition::new("discovery_documents.v1");
+const FAMILIES: TableDefinition<&str, &[u8]> = TableDefinition::new("trap_families.v1");
+const QUARANTINE: TableDefinition<&str, &[u8]> = TableDefinition::new("quarantine.v1");
+const RELEASES: TableDefinition<&str, ()> = TableDefinition::new("quarantine_releases.v1");
+const RECRAWL: TableDefinition<&str, &[u8]> = TableDefinition::new("resource_versions.v1");
+const RECRAWL_READY: TableDefinition<(u64, &str), ()> =
+    TableDefinition::new("recrawl_eligibility.v1");
+const CONTENT: TableDefinition<&str, &str> = TableDefinition::new("content_versions.v1");
+const LIVE_PENDING: TableDefinition<(&str, &str), u64> =
+    TableDefinition::new("live_discovery_pending.v1");
+const METADATA_VERSIONS: TableDefinition<&str, ()> =
+    TableDefinition::new("capture_metadata_versions.v1");
+const RETRIES: TableDefinition<&str, &[u8]> = TableDefinition::new("origin_retries.v1");
+
 fn legacy_site_version() -> u32 {
     1
 }
@@ -40,6 +60,48 @@ pub const BATCH_SIZE: usize = 128;
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Stats {
+    #[serde(default)]
+    pub retry_deferred: u64,
+    #[serde(default)]
+    pub discovery_candidates: u64,
+    #[serde(default)]
+    pub discovery_documents: u64,
+    #[serde(default)]
+    pub discovery_bytes: u64,
+    #[serde(default)]
+    pub discovery_quota_stops: u64,
+    #[serde(default)]
+    pub discovery_invalid_xml: u64,
+    #[serde(default)]
+    pub quarantined_urls: u64,
+    #[serde(default)]
+    pub quarantine_reasons: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    pub quarantine_released: u64,
+    #[serde(default)]
+    pub quarantine_recent: Vec<super::traps::Quarantine>,
+    #[serde(default)]
+    pub review_samples: u64,
+    #[serde(default)]
+    pub duplicate_content: u64,
+    #[serde(default)]
+    pub content_versions: u64,
+    #[serde(default)]
+    pub empty_pages: u64,
+    #[serde(default)]
+    pub retry_exhausted: u64,
+    #[serde(default)]
+    pub circuits_opened: u64,
+    #[serde(default)]
+    pub retry_recovered: u64,
+    #[serde(default)]
+    pub revalidations: u64,
+    #[serde(default)]
+    pub recrawl_changes: u64,
+    #[serde(default)]
+    pub recrawl_bytes_saved: u64,
+    #[serde(default)]
+    pub http_attempts: u64,
     pub schema_version: u32,
     pub identity_version: u32,
     #[serde(default = "legacy_site_version")]
@@ -91,6 +153,8 @@ enum State {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UrlRow {
+    #[serde(default = "default_url_weight")]
+    weight: f64,
     url: String,
     origin: String,
     site: String,
@@ -101,6 +165,10 @@ struct UrlRow {
     not_before: u64,
     #[serde(default)]
     sitemap: bool,
+    #[serde(default)]
+    retry: super::retry::UrlState,
+    #[serde(default)]
+    sitemap_depth: u32,
     #[serde(default)]
     continuation: Option<super::RedirectContinuation>,
 }
@@ -144,6 +212,10 @@ pub struct Frontier {
     observer: Option<Arc<Observer>>,
     pub metrics: Metrics,
     writes: Mutex<()>,
+    retry_config: Mutex<super::retry::Config>,
+    discovery_config: Mutex<super::discovery::Config>,
+    traps_config: Mutex<super::traps::Config>,
+    recrawl_config: Mutex<super::recrawl::Config>,
 }
 
 fn read<T: serde::de::DeserializeOwned>(
@@ -167,6 +239,10 @@ fn put<T: Serialize>(
     tx.open_table(table)?
         .insert(key, serde_json::to_vec(value)?.as_slice())?;
     Ok(())
+}
+
+fn default_url_weight() -> f64 {
+    1.0
 }
 
 fn millis(time: chrono::DateTime<chrono::Utc>) -> u64 {
@@ -226,6 +302,20 @@ impl Frontier {
         tx.open_table(HTTP_READY)?;
         tx.open_table(HTTP_URLS)?;
         tx.open_table(HTTP_ACTIVE)?;
+        tx.open_table(RETRIES)?;
+        tx.open_table(LIVE_PENDING)?;
+        tx.open_table(METADATA_VERSIONS)?;
+        tx.open_table(CANDIDATES)?;
+        tx.open_table(CANDIDATE_READY)?;
+        tx.open_table(CANDIDATE_SOURCE)?;
+        tx.open_table(DISCOVERY_CYCLES)?;
+        tx.open_table(DOCUMENTS)?;
+        tx.open_table(FAMILIES)?;
+        tx.open_table(QUARANTINE)?;
+        tx.open_table(RELEASES)?;
+        tx.open_table(CONTENT)?;
+        tx.open_table(RECRAWL)?;
+        tx.open_table(RECRAWL_READY)?;
         let stats: Stats = read(&tx, META, "stats")?.unwrap_or_else(|| Stats {
             schema_version: 1,
             identity_version: crate::capture::IDENTITY_VERSION,
@@ -260,11 +350,22 @@ impl Frontier {
             observer,
             metrics: Metrics(Arc::new(Mutex::new(stats))),
             writes: Mutex::new(()),
+            retry_config: Mutex::new(Default::default()),
+            discovery_config: Mutex::new(Default::default()),
+            traps_config: Mutex::new(Default::default()),
+            recrawl_config: Mutex::new(Default::default()),
         };
         frontier.migrate_site_identity()?;
         frontier.migrate_http_origins()?;
         if !frontier.metrics.snapshot().migration_complete {
-            frontier.migrate(&legacy_path)?;
+            if legacy_path != frontier.path {
+                frontier.migrate(&legacy_path)?;
+            } else {
+                frontier.transaction(|_, stats| {
+                    stats.migration_complete = true;
+                    Ok(())
+                })?;
+            }
         }
         frontier.recover_leases()?;
         frontier.recover_jobs()?;
@@ -392,7 +493,9 @@ impl Frontier {
             origin.not_before,
             origin.sequence,
         ))?;
-        origin.not_before = due;
+        origin.not_before = due.max(
+            read::<super::retry::OriginState>(tx, RETRIES, key)?.map_or(0, |r| r.not_before_ms),
+        );
         stats.sequence += 1;
         origin.sequence = stats.sequence;
         let remaining = tx
@@ -499,6 +602,873 @@ impl Frontier {
             && !Domain::from(url).as_str().is_empty()
     }
 
+    pub fn configure_discovery(
+        &self,
+        discovery: &super::discovery::Config,
+        traps: &super::traps::Config,
+    ) -> Result<()> {
+        discovery.validate()?;
+        traps.validate()?;
+        *self.discovery_config.lock().unwrap() = discovery.clone();
+        *self.traps_config.lock().unwrap() = traps.clone();
+        Ok(())
+    }
+    fn trap_admission(&self, tx: &WriteTransaction, stats: &mut Stats, url: &Url) -> Result<bool> {
+        let config = self.traps_config.lock().unwrap().clone();
+        if !config.enabled {
+            return Ok(true);
+        }
+        let key = crate::capture::url_key(url)?;
+        if tx.open_table(RELEASES)?.get(key.as_str())?.is_some() {
+            return Ok(true);
+        }
+        if read::<super::traps::Quarantine>(tx, QUARANTINE, &key)?.is_some() {
+            return Ok(false);
+        }
+        let (pattern, policy) = config.pattern(url);
+        let mut family: super::traps::Family = read(tx, FAMILIES, &pattern)?.unwrap_or_default();
+        let reason = policy
+            .filter(|(_, limit)| family.admitted >= *limit)
+            .map(|(reason, _)| reason)
+            .or_else(|| {
+                (family.repeated >= config.repeated_content_budget)
+                    .then_some("repeated_content_family")
+            })
+            .or_else(|| {
+                (family.empty >= config.repeated_content_budget).then_some("empty_content_family")
+            });
+        if let Some(reason) = reason {
+            let review_sample = stats.quarantined_urls % config.review_sample_every == 0;
+            let row = super::traps::Quarantine {
+                url: url.clone(),
+                reason: reason.into(),
+                pattern,
+                created_at: chrono::Utc::now(),
+                review_sample,
+            };
+            put(tx, QUARANTINE, &key, &row)?;
+            if stats.quarantine_recent.len() >= 8 {
+                stats.quarantine_recent.remove(0);
+            }
+            stats.quarantine_recent.push(row);
+            stats.quarantined_urls += 1;
+            *stats.quarantine_reasons.entry(reason.into()).or_default() += 1;
+            stats.review_samples += u64::from(review_sample);
+            return Ok(false);
+        }
+        family.admitted += 1;
+        put(tx, FAMILIES, &pattern, &family)?;
+        Ok(true)
+    }
+    pub fn quarantine(&self, limit: usize) -> Result<Vec<super::traps::Quarantine>> {
+        self.db
+            .begin_read()?
+            .open_table(QUARANTINE)?
+            .iter()?
+            .take(limit.min(128))
+            .map(|row| {
+                let (_, value) = row?;
+                Ok(serde_json::from_slice(value.value())?)
+            })
+            .collect()
+    }
+    pub fn release_quarantine(&self, url: &Url) -> Result<bool> {
+        let key = crate::capture::url_key(url)?;
+        self.transaction(|tx, stats| {
+            if tx.open_table(QUARANTINE)?.remove(key.as_str())?.is_some() {
+                tx.open_table(RELEASES)?.insert(key.as_str(), ())?;
+                stats.quarantine_released += 1;
+                let site = Domain::from(url).as_str().to_string();
+                if let Some(mut origin) = read::<OriginRow>(tx, ORIGINS, &site)? {
+                    if origin.state == "done" {
+                        origin.state = "pending".into();
+                        origin.not_before = 0;
+                        stats.sequence += 1;
+                        origin.sequence = stats.sequence;
+                        tx.open_table(READY)?
+                            .insert((0, origin.sequence), site.as_str())?;
+                        stats.pending_sites += 1;
+                        put(tx, ORIGINS, &site, &origin)?;
+                    }
+                    origin.admitted = origin.admitted.saturating_sub(1);
+                    put(tx, ORIGINS, &site, &origin)?;
+                }
+                self.admit(tx, stats, url, true)?;
+                stats.quarantine_recent.retain(|row| row.url != *url);
+                return Ok(true);
+            }
+            Ok(false)
+        })
+    }
+    pub fn promote_candidates(&self) -> Result<usize> {
+        let mut cursor: Option<(String, String)> = {
+            let tx = self.db.begin_read()?;
+            tx.open_table(META)?
+                .get("candidate-promotion-cursor")?
+                .map(|v| serde_json::from_slice::<Option<(String, String)>>(v.value()))
+                .transpose()?
+                .flatten()
+        };
+        let mut promoted = 0;
+        for _ in 0..8 {
+            let batch = {
+                let tx = self.db.begin_read()?;
+                let table = tx.open_table(CANDIDATE_READY)?;
+                let (site, key) = cursor.clone().unwrap_or_default();
+                table
+                    .range((site.as_str(), key.as_str())..)?
+                    .filter_map(|r| match r {
+                        Ok((k, _)) => {
+                            let (site, key) = k.value();
+                            if cursor.as_ref().is_some_and(|c| c.0 == site && c.1 == key) {
+                                None
+                            } else {
+                                Some(Ok((site.to_string(), key.to_string())))
+                            }
+                        }
+                        Err(e) => Some(Err(e)),
+                    })
+                    .take(BATCH_SIZE)
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            if batch.is_empty() {
+                if cursor.is_none() {
+                    return Ok(promoted);
+                }
+                cursor = None;
+                break;
+            }
+            promoted += self.transaction(|tx, stats| {
+                let mut count = 0;
+                for (site, key) in &batch {
+                    if read::<OriginRow>(tx, ORIGINS, site)?
+                        .is_some_and(|r| r.round == stats.round && r.admitted >= self.budget)
+                    {
+                        continue;
+                    }
+                    let candidate: super::discovery::Candidate = read(tx, CANDIDATES, key)?
+                        .context("pending discovery without candidate")?;
+                    if self.admit(tx, stats, &candidate.url, true)? {
+                        let mut row: UrlRow = read(tx, URLS, key)?.unwrap();
+                        row.sitemap = candidate.sitemap;
+                        row.sitemap_depth = candidate.depth;
+                        if let Some(seed) =
+                            read::<serde_json::Value>(tx, META, &format!("seed:{key}"))?
+                        {
+                            row.weight = seed["weight"]
+                                .as_f64()
+                                .filter(|n| n.is_finite() && *n >= 0.0)
+                                .unwrap_or(1.0);
+                        }
+                        put(tx, URLS, key, &row)?;
+                        count += 1;
+                    }
+                    if read::<UrlRow>(tx, URLS, key)?.is_some_and(|r| r.round == stats.round) {
+                        tx.open_table(CANDIDATE_READY)?
+                            .remove((site.as_str(), key.as_str()))?;
+                    }
+                }
+                Ok(count)
+            })?;
+            cursor = batch.last().cloned();
+            if let Some((site, key)) = &mut cursor {
+                let tx = self.db.begin_read()?;
+                let blocked = tx
+                    .open_table(ORIGINS)?
+                    .get(site.as_str())?
+                    .map(|v| serde_json::from_slice::<OriginRow>(v.value()))
+                    .transpose()?
+                    .is_some_and(|r| {
+                        r.round == self.metrics.snapshot().round && r.admitted >= self.budget
+                    });
+                if blocked {
+                    *key = "\u{10ffff}".into();
+                }
+            }
+        }
+        self.transaction(|tx, _| put(tx, META, "candidate-promotion-cursor", &cursor))?;
+        Ok(promoted)
+    }
+    pub fn import_plan(&self, path: &Path) -> Result<u64> {
+        use std::io::{BufRead, Read};
+        let mut count = 0;
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
+        let mut reader = std::io::BufReader::new(fs::File::open(path)?);
+        loop {
+            let mut line = Vec::new();
+            let n = reader.by_ref().take(16385).read_until(b'\n', &mut line)?;
+            if n == 0 {
+                break;
+            }
+            anyhow::ensure!(n <= 16384, "planner seed record exceeds limit");
+            let value: serde_json::Value = serde_json::from_slice(&line)?;
+            anyhow::ensure!(
+                value["schema_version"] == 1,
+                "unsupported planner seed version"
+            );
+            let url = Url::parse(value["url"].as_str().context("planner seed without URL")?)?;
+            let source = value["source"]
+                .as_str()
+                .context("planner seed without provenance")?;
+            let discovered_at = chrono::DateTime::parse_from_rfc3339(
+                value["discovered_at"]
+                    .as_str()
+                    .context("planner seed without date")?,
+            )?
+            .with_timezone(&chrono::Utc);
+            anyhow::ensure!(source.len() <= 256, "planner seed provenance exceeds limit");
+            batch.push((url, value, discovered_at));
+            if batch.len() == BATCH_SIZE {
+                count += self.import_plan_batch(&batch)?;
+                batch.clear();
+            }
+        }
+        count += self.import_plan_batch(&batch)?;
+        Ok(count)
+    }
+    fn import_plan_batch(
+        &self,
+        batch: &[(Url, serde_json::Value, chrono::DateTime<chrono::Utc>)],
+    ) -> Result<u64> {
+        self.transaction(|tx, stats| {
+            let mut count = 0;
+            for (url, provenance, date) in batch {
+                let key = crate::capture::url_key(url)?;
+                if read::<super::discovery::Candidate>(tx, CANDIDATES, &key)?.is_some() {
+                    continue;
+                }
+                let candidate = super::discovery::Candidate {
+                    url: url.clone(),
+                    source: url.clone(),
+                    discovered_at: *date,
+                    lastmod: None,
+                    sitemap: false,
+                    depth: 0,
+                };
+                put(tx, CANDIDATES, &key, &candidate)?;
+                put(tx, META, &format!("seed:{key}"), provenance)?;
+                if self.admit(tx, stats, url, true)? {
+                    let mut row: UrlRow =
+                        read(tx, URLS, &key)?.context("imported planner URL missing")?;
+                    row.weight = provenance["weight"]
+                        .as_f64()
+                        .filter(|n| n.is_finite() && *n >= 0.0)
+                        .unwrap_or(1.0);
+                    put(tx, URLS, &key, &row)?;
+                }
+                tx.open_table(CANDIDATE_READY)?
+                    .insert((Domain::from(url).as_str(), key.as_str()), ())?;
+                stats.discovery_candidates += 1;
+                count += 1;
+            }
+            Ok(count)
+        })
+    }
+    pub fn candidate_urls(
+        &self,
+        source: &Url,
+        limit: usize,
+    ) -> Result<Vec<super::discovery::Candidate>> {
+        let tx = self.db.begin_read()?;
+        let sources = tx.open_table(CANDIDATE_SOURCE)?;
+        let candidates = tx.open_table(CANDIDATES)?;
+        sources
+            .range((source.as_str(), "")..=(source.as_str(), "\u{10ffff}"))?
+            .take(limit.min(512))
+            .map(|r| {
+                let (key, _) = r?;
+                let (_, url) = key.value();
+                let value = candidates
+                    .get(url)?
+                    .context("discovery source without candidate")?;
+                Ok(serde_json::from_slice(value.value())?)
+            })
+            .collect()
+    }
+    pub fn pending_live_candidates(
+        &self,
+        tenant: &Domain,
+        now: u64,
+        limit: usize,
+    ) -> Result<Vec<super::discovery::Candidate>> {
+        let tx = self.db.begin_read()?;
+        let table = tx.open_table(LIVE_PENDING)?;
+        let candidates = tx.open_table(CANDIDATES)?;
+        table
+            .range((tenant.as_str(), "")..=(tenant.as_str(), "\u{10ffff}"))?
+            .filter_map(|item| match item {
+                Ok((key, due)) if due.value() <= now => Some((|| {
+                    let value = candidates
+                        .get(key.value().1)?
+                        .context("missing durable live candidate")?;
+                    Ok(serde_json::from_slice(value.value())?)
+                })()),
+                Ok(_) => None,
+                Err(e) => Some(Err(e.into())),
+            })
+            .take(limit.min(512))
+            .collect()
+    }
+    pub fn settle_live_candidate(&self, url: &Url, due: Option<u64>) -> Result<()> {
+        let key = crate::capture::url_key(url)?;
+        self.transaction(|tx, _| {
+            let mut table = tx.open_table(LIVE_PENDING)?;
+            let tenant = Domain::from(url);
+            if let Some(due) = due {
+                if table.get((tenant.as_str(), key.as_str()))?.is_some() {
+                    table.insert((tenant.as_str(), key.as_str()), due)?;
+                }
+            } else {
+                table.remove((tenant.as_str(), key.as_str()))?;
+            }
+            Ok(())
+        })
+    }
+    pub fn process_controls(&self, directory: &Path) -> Result<()> {
+        if !directory.exists() {
+            return Ok(());
+        }
+        let mut processed = false;
+        for entry in fs::read_dir(directory)?
+            .filter(|entry| {
+                entry.as_ref().map_or(true, |entry| {
+                    entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "request")
+                })
+            })
+            .take(128)
+        {
+            let path = entry?.path();
+            if path
+                .extension()
+                .is_none_or(|extension| extension != "request")
+            {
+                continue;
+            }
+            let result = (|| -> Result<serde_json::Value> {
+                anyhow::ensure!(
+                    path.metadata()?.len() <= 16384,
+                    "crawler control request exceeds limit"
+                );
+                let request: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+                let id = request["id"]
+                    .as_str()
+                    .context("control request without id")?;
+                uuid::Uuid::parse_str(id)?;
+                anyhow::ensure!(
+                    path.file_stem().and_then(|v| v.to_str()) == Some(id),
+                    "control filename/id mismatch"
+                );
+                let url = Url::parse(
+                    request["url"]
+                        .as_str()
+                        .context("control request without URL")?,
+                )?;
+                anyhow::ensure!(
+                    request["action"] == "release_quarantine",
+                    "unsupported crawler control action"
+                );
+                let released = self.release_quarantine(&url)?;
+                Ok(
+                    serde_json::json!({"id":id,"url":url,"state":if released { "completed" } else { "not_found" }}),
+                )
+            })();
+            let value = match result {
+                Ok(v) => v,
+                Err(error) => serde_json::json!({"state":"rejected", "error":error.to_string()}),
+            };
+            let mut file = fs::File::create(path.with_extension("result.tmp"))?;
+            use std::io::Write;
+            file.write_all(&serde_json::to_vec(&value)?)?;
+            file.sync_all()?;
+            fs::rename(
+                path.with_extension("result.tmp"),
+                path.with_extension("result"),
+            )?;
+            fs::remove_file(path)?;
+            processed = true;
+        }
+        if processed {
+            fs::File::open(directory)?.sync_all()?;
+        }
+        Ok(())
+    }
+    pub fn candidate_count(&self) -> Result<u64> {
+        Ok(self.db.begin_read()?.open_table(CANDIDATES)?.len()?)
+    }
+    fn discovery_batch(
+        &self,
+        source: &Url,
+        depth: u32,
+        batch: &[crate::sitemap::SitemapEntry],
+    ) -> Result<u64> {
+        let config = self.discovery_config.lock().unwrap().clone();
+        let origin = source.origin().ascii_serialization();
+        self.transaction(|tx, stats| {
+            let mut cycle: super::discovery::Cycle =
+                read(tx, DISCOVERY_CYCLES, &origin)?.context("missing discovery cycle")?;
+            let mut inserted = 0;
+            for entry in batch {
+                let (url, lastmod, sitemap) = match entry {
+                    crate::sitemap::SitemapEntry::Url(dated) => {
+                        (&dated.url, dated.last_modified, false)
+                    }
+                    crate::sitemap::SitemapEntry::Sitemap(url) => (url, None, true),
+                };
+                let key = crate::capture::url_key(url)?;
+                if let Some(mut previous) =
+                    read::<super::discovery::Candidate>(tx, CANDIDATES, &key)?
+                {
+                    tx.open_table(CANDIDATE_SOURCE)?
+                        .insert((source.as_str(), key.as_str()), ())?;
+                    if lastmod > previous.lastmod {
+                        previous.lastmod = lastmod;
+                        put(tx, CANDIDATES, &key, &previous)?;
+                    }
+                    continue;
+                }
+                if cycle.urls >= config.max_urls || (sitemap && depth + 1 >= config.max_depth) {
+                    stats.discovery_quota_stops += 1;
+                    continue;
+                }
+                let candidate = super::discovery::Candidate {
+                    url: url.clone(),
+                    source: source.clone(),
+                    discovered_at: chrono::Utc::now(),
+                    lastmod,
+                    sitemap,
+                    depth: depth + 1,
+                };
+                put(tx, CANDIDATES, &key, &candidate)?;
+                if !sitemap {
+                    tx.open_table(LIVE_PENDING)?
+                        .insert((Domain::from(url).as_str(), key.as_str()), 0)?;
+                }
+                tx.open_table(CANDIDATE_SOURCE)?
+                    .insert((source.as_str(), key.as_str()), ())?;
+                tx.open_table(CANDIDATE_READY)?
+                    .insert((Domain::from(url).as_str(), key.as_str()), ())?;
+                cycle.urls += 1;
+                stats.discovery_candidates += 1;
+                inserted += 1;
+                if self.admit(tx, stats, url, true)? && sitemap {
+                    let mut row: UrlRow =
+                        read(tx, URLS, &key)?.context("missing sitemap candidate")?;
+                    row.sitemap = true;
+                    row.sitemap_depth = depth + 1;
+                    put(tx, URLS, &key, &row)?;
+                }
+                if read::<UrlRow>(tx, URLS, &key)?.is_some_and(|r| r.round == stats.round) {
+                    tx.open_table(CANDIDATE_READY)?
+                        .remove((Domain::from(url).as_str(), key.as_str()))?;
+                }
+            }
+            put(tx, DISCOVERY_CYCLES, &origin, &cycle)?;
+            Ok(inserted)
+        })
+    }
+    pub fn ingest_sitemap(&self, source: &Url, text: &str) -> Result<super::discovery::Report> {
+        self.ingest_discovery(source, text, None)
+    }
+    pub fn ingest_feed(
+        &self,
+        source: &Url,
+        text: &str,
+        kind: crate::feed::FeedKind,
+    ) -> Result<super::discovery::Report> {
+        self.ingest_discovery(source, text, Some(kind))
+    }
+    fn ingest_discovery(
+        &self,
+        source: &Url,
+        text: &str,
+        kind: Option<crate::feed::FeedKind>,
+    ) -> Result<super::discovery::Report> {
+        let config = self.discovery_config.lock().unwrap().clone();
+        let origin = source.origin().ascii_serialization();
+        let key = crate::capture::url_key(source)?;
+        let document_key = format!("{key}:{}", crate::capture::sha256(text.as_bytes()));
+        let cycle_id = (chrono::Utc::now().timestamp_millis().max(0) as u64) / config.cycle_ms;
+        let admission = self.transaction(|tx, stats| {
+            let mut cycle: super::discovery::Cycle =
+                read(tx, DISCOVERY_CYCLES, &origin)?.unwrap_or_default();
+            if cycle.round != cycle_id {
+                cycle = super::discovery::Cycle {
+                    round: cycle_id,
+                    ..Default::default()
+                };
+            }
+            if tx
+                .open_table(DOCUMENTS)?
+                .get(document_key.as_str())?
+                .is_some_and(|v| v.value() == cycle_id)
+            {
+                return Ok(Err("already_processed"));
+            }
+            let depth = read::<UrlRow>(tx, URLS, &key)?.map_or(0, |r| r.sitemap_depth);
+            if depth >= config.max_depth
+                || cycle.documents >= config.max_documents
+                || cycle.bytes.saturating_add(text.len() as u64) > config.max_total_bytes
+            {
+                stats.discovery_quota_stops += 1;
+                return Ok(Err("discovery_aggregate_quota"));
+            }
+            cycle.documents += 1;
+            cycle.bytes += text.len() as u64;
+            stats.discovery_documents += 1;
+            stats.discovery_bytes += text.len() as u64;
+            put(tx, DISCOVERY_CYCLES, &origin, &cycle)?;
+            tx.open_table(DOCUMENTS)?
+                .insert(document_key.as_str(), cycle_id)?;
+            Ok(Ok(depth))
+        })?;
+        let before_stops = self.metrics.snapshot().discovery_quota_stops;
+        let depth = match admission {
+            Ok(depth) => depth,
+            Err(reason) => {
+                return Ok(super::discovery::Report {
+                    candidates: 0,
+                    reason: reason.into(),
+                })
+            }
+        };
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
+        let mut candidates = 0;
+        let mut emit = |entry| -> Result<()> {
+            batch.push(entry);
+            if batch.len() >= BATCH_SIZE {
+                candidates += self
+                    .discovery_batch(source, depth, &batch)
+                    .map_err(super::discovery::StorageError)?;
+                batch.clear();
+            }
+            Ok(())
+        };
+        let result = match kind {
+            Some(kind) => crate::feed::visit(text, kind, |entry| {
+                emit(crate::sitemap::SitemapEntry::Url(entry))
+            }),
+            None => crate::sitemap::visit_sitemap(text.as_bytes(), emit),
+        };
+        candidates += self.discovery_batch(source, depth, &batch)?;
+        let reason = match result {
+            Ok(_) if self.metrics.snapshot().discovery_quota_stops > before_stops => {
+                "discovery_aggregate_quota"
+            }
+            Ok(_) => "complete",
+            Err(error)
+                if error
+                    .downcast_ref::<super::discovery::StorageError>()
+                    .is_some() =>
+            {
+                return Err(error)
+            }
+            Err(_) => {
+                self.transaction(|_, stats| {
+                    stats.discovery_invalid_xml += 1;
+                    Ok(())
+                })?;
+                "invalid_discovery_xml"
+            }
+        };
+        Ok(super::discovery::Report {
+            candidates,
+            reason: reason.into(),
+        })
+    }
+
+    pub fn configure_recrawl(&self, config: &super::recrawl::Config) -> Result<()> {
+        config.validate()?;
+        *self.recrawl_config.lock().unwrap() = config.clone();
+        Ok(())
+    }
+    pub fn revalidation_state(&self, url: &Url) -> Result<Option<super::recrawl::Resource>> {
+        let key = crate::capture::url_key(url)?;
+        self.db
+            .begin_read()?
+            .open_table(RECRAWL)?
+            .get(key.as_str())?
+            .map(|v| serde_json::from_slice(v.value()).map_err(Into::into))
+            .transpose()
+    }
+    fn record_resource(
+        &self,
+        tx: &WriteTransaction,
+        stats: &mut Stats,
+        metadata: &crate::capture::Metadata,
+        receipt: &Receipt,
+    ) -> Result<()> {
+        let config = self.recrawl_config.lock().unwrap().clone();
+        let key = metadata.requested_url.as_str();
+        let previous: Option<super::recrawl::Resource> = read(tx, RECRAWL, key)?;
+        let mime = metadata
+            .response
+            .values("content-type")
+            .next()
+            .or_else(|| previous.as_ref().and_then(|r| r.mime.clone()));
+        let value = read::<UrlRow>(tx, URLS, key)?.map_or(1.0, |row| row.weight);
+        let bytes = metadata
+            .revalidation
+            .as_ref()
+            .map_or(metadata.payload_bytes, |reference| reference.payload_bytes);
+        let (initial_interval, max_interval) =
+            config.bounds(value, mime.as_deref(), metadata.fetch_time_ms, bytes);
+        let now = millis(metadata.response.received_at);
+        let mut resource = if let Some(mut old) = previous {
+            tx.open_table(RECRAWL_READY)?
+                .remove((old.next_eligible_ms, key))?;
+            let changed = metadata.revalidation.is_none()
+                && old.reference.payload_sha256 != metadata.payload_sha256;
+            old.checks += 1;
+            if changed {
+                old.changes += 1;
+                stats.recrawl_changes += 1;
+            }
+            old.interval_ms = if changed {
+                (old.interval_ms / 2)
+                    .min(initial_interval)
+                    .max(config.min_interval_ms)
+            } else {
+                old.interval_ms
+                    .saturating_mul(3)
+                    .saturating_div(2)
+                    .min(max_interval)
+            };
+            old
+        } else {
+            super::recrawl::Resource {
+                mime: mime.clone(),
+                reference: super::recrawl::PayloadReference {
+                    version: 1,
+                    fetch_id: metadata.fetch_id.clone(),
+                    segment: receipt.segment.clone(),
+                    record_offset: receipt.record_offset.unwrap_or(receipt.start),
+                    record_end: receipt.end,
+                    payload_sha256: metadata.payload_sha256.clone(),
+                    payload_bytes: metadata.payload_bytes,
+                    url: metadata.response.url.clone(),
+                },
+                etag: None,
+                last_modified: None,
+                robots: metadata.robots.clone(),
+                checks: 1,
+                changes: 0,
+                last_checked_ms: now,
+                next_eligible_ms: now,
+                interval_ms: initial_interval,
+            }
+        };
+        resource.mime = mime;
+        if let Some(reference) = &metadata.revalidation {
+            anyhow::ensure!(
+                reference.fetch_id == resource.reference.fetch_id
+                    && reference.payload_sha256 == resource.reference.payload_sha256,
+                "304 reference conflicts with durable resource"
+            );
+            stats.revalidations += 1;
+            stats.recrawl_bytes_saved += reference.payload_bytes as u64;
+        } else {
+            resource.reference = super::recrawl::PayloadReference {
+                version: 1,
+                fetch_id: metadata.fetch_id.clone(),
+                segment: receipt.segment.clone(),
+                record_offset: receipt.record_offset.unwrap_or(receipt.start),
+                record_end: receipt.end,
+                payload_sha256: metadata.payload_sha256.clone(),
+                payload_bytes: metadata.payload_bytes,
+                url: metadata.response.url.clone(),
+            };
+            let version = crate::capture::sha256(&serde_json::to_vec(&(
+                metadata.schema_version,
+                &metadata.requested_url,
+                &metadata.response.headers,
+                &metadata.robots,
+                &metadata.payload_sha256,
+            ))?);
+            tx.open_table(METADATA_VERSIONS)?
+                .insert(version.as_str(), ())?;
+            let payload = metadata.payload_sha256.as_str();
+            let duplicate = tx.open_table(CONTENT)?.get(payload)?.is_some();
+            if duplicate {
+                stats.duplicate_content += 1;
+            } else {
+                tx.open_table(CONTENT)?
+                    .insert(payload, metadata.fetch_id.as_str())?;
+                stats.content_versions += 1;
+            }
+            let (pattern, _) = self
+                .traps_config
+                .lock()
+                .unwrap()
+                .pattern(&url::Url::parse(&metadata.response.url)?);
+            let mut family: super::traps::Family =
+                read(tx, FAMILIES, &pattern)?.unwrap_or_default();
+            if duplicate {
+                family.repeated += 1;
+            }
+            if metadata.decoded_bytes == 0 {
+                family.empty += 1;
+                stats.empty_pages += 1;
+            }
+            put(tx, FAMILIES, &pattern, &family)?;
+        }
+        let etag = metadata.response.values("etag").next();
+        let modified = metadata.response.values("last-modified").next();
+        if metadata.revalidation.is_none() || etag.is_some() {
+            resource.etag = etag;
+        }
+        if metadata.revalidation.is_none() || modified.is_some() {
+            resource.last_modified = modified;
+        }
+        resource.robots = metadata.robots.clone();
+        resource.last_checked_ms = now;
+        resource.next_eligible_ms = now.saturating_add(resource.interval_ms);
+        if config.enabled {
+            tx.open_table(RECRAWL_READY)?
+                .insert((resource.next_eligible_ms, key), ())?;
+        }
+        put(tx, RECRAWL, key, &resource)
+    }
+    pub fn requeue_recrawls(&self, now: chrono::DateTime<chrono::Utc>) -> Result<usize> {
+        if !self.recrawl_config.lock().unwrap().enabled {
+            return Ok(0);
+        }
+        self.transaction(|tx, stats| {
+            let batch = tx
+                .open_table(RECRAWL_READY)?
+                .range(..=(millis(now), "\u{10ffff}"))?
+                .take(BATCH_SIZE)
+                .map(|r| r.map(|(k, _)| (k.value().0, k.value().1.to_string())))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut count = 0;
+            for (due, key) in batch {
+                let Some(mut row): Option<UrlRow> = read(tx, URLS, &key)? else {
+                    continue;
+                };
+                if row.state != State::Committed {
+                    tx.open_table(RECRAWL_READY)?.remove((due, key.as_str()))?;
+                    continue;
+                }
+                let mut origin: OriginRow =
+                    read(tx, ORIGINS, &row.site)?.context("recrawl origin missing")?;
+                if origin.state == "active" {
+                    continue;
+                }
+                if origin.round != stats.round {
+                    origin.round = stats.round;
+                    origin.admitted = 0;
+                    origin.done = 0;
+                    stats.known_sites += 1;
+                }
+                if origin.state == "done" {
+                    if stats.pending_sites + stats.active_sites >= self.capacity as u64 {
+                        continue;
+                    }
+                    origin.state = "pending".into();
+                    stats.pending_sites += 1;
+                } else {
+                    tx.open_table(READY)?
+                        .remove((origin.not_before, origin.sequence))?;
+                }
+                stats.sequence += 1;
+                origin.sequence = stats.sequence;
+                origin.not_before = origin.not_before.min(due);
+                tx.open_table(READY)?
+                    .insert((origin.not_before, origin.sequence), row.site.as_str())?;
+                put(tx, ORIGINS, &row.site, &origin)?;
+                row.round = stats.round;
+                row.state = State::Pending;
+                row.fetch_id = None;
+                row.retry = Default::default();
+                row.reason = Some("recrawl_due".into());
+                row.not_before = due;
+                stats.committed_urls -= 1;
+                stats.pending_urls += 1;
+                tx.open_table(ELIGIBLE)?
+                    .insert((row.site.as_str(), key.as_str()), due)?;
+                Self::queue_http_origin(tx, stats, &row)?;
+                put(tx, URLS, &key, &row)?;
+                tx.open_table(RECRAWL_READY)?.remove((due, key.as_str()))?;
+                count += 1;
+            }
+            Ok(count)
+        })
+    }
+
+    pub fn configure_retry(&self, config: &super::retry::Config) -> Result<()> {
+        config.validate()?;
+        *self.retry_config.lock().unwrap() = config.clone();
+        Ok(())
+    }
+
+    pub fn authorize_request(
+        &self,
+        requested: &Url,
+        destination: &Url,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<super::Result<()>> {
+        let config = self.retry_config.lock().unwrap().clone();
+        let key = crate::capture::url_key(requested)?;
+        let origin = destination.origin().ascii_serialization();
+        let now = millis(now);
+        self.transaction(|tx, stats| {
+            let mut row: UrlRow =
+                read(tx, URLS, &key)?.context("request without durable URL admission")?;
+            let mut state: super::retry::OriginState =
+                read(tx, RETRIES, &origin)?.unwrap_or_default();
+            if state.not_before_ms > now {
+                return Ok(Err(super::Error::CrawlDeferred {
+                    retry_after_ms: state.not_before_ms - now,
+                }));
+            }
+            if row.retry.failures >= config.max_attempts
+                || (row.retry.first_attempt_ms > 0
+                    && now.saturating_sub(row.retry.first_attempt_ms) >= config.max_elapsed_ms)
+            {
+                return Ok(Err(super::Error::RetryExhausted(key.clone())));
+            }
+            if now.saturating_sub(state.window_start_ms) >= 60_000 {
+                state.window_start_ms = now;
+                state.window_attempts = 0;
+            }
+            let mut global: super::retry::OriginState =
+                read(tx, META, "request-budget.v1")?.unwrap_or_default();
+            if now.saturating_sub(global.window_start_ms) >= 60_000 {
+                global.window_start_ms = now;
+                global.window_attempts = 0;
+            }
+            if state.window_attempts >= config.origin_attempts_per_minute {
+                return Ok(Err(super::Error::CrawlDeferred {
+                    retry_after_ms: state
+                        .window_start_ms
+                        .saturating_add(60_000)
+                        .saturating_sub(now),
+                }));
+            }
+            if global.window_attempts >= config.global_attempts_per_minute {
+                return Ok(Err(super::Error::CrawlDeferred {
+                    retry_after_ms: global
+                        .window_start_ms
+                        .saturating_add(60_000)
+                        .saturating_sub(now),
+                }));
+            }
+            state.window_attempts += 1;
+            global.window_attempts += 1;
+            row.retry.attempts += 1;
+            if row.retry.first_attempt_ms == 0 {
+                row.retry.first_attempt_ms = now;
+            }
+            stats.http_attempts += 1;
+            put(tx, URLS, &key, &row)?;
+            put(tx, RETRIES, &origin, &state)?;
+            put(tx, META, "request-budget.v1", &global)?;
+            Ok(Ok(()))
+        })
+    }
+
     fn admit(
         &self,
         tx: &WriteTransaction,
@@ -512,9 +1482,21 @@ impl Frontier {
         let key = crate::capture::url_key(url)?;
         let site = Domain::from(url).as_str().to_owned();
         let old: Option<UrlRow> = read(tx, URLS, &key)?;
-        if old.as_ref().is_some_and(|row| row.round == stats.round) {
+        if old.as_ref().is_some_and(|row| {
+            row.round == stats.round
+                || matches!(
+                    row.reason.as_deref(),
+                    Some("http_410" | "PermanentFailure { reason: \"http_410\" }")
+                )
+        }) {
             return Ok(false);
         }
+        if old.is_none() && !self.trap_admission(tx, stats, url)? {
+            return Ok(false);
+        }
+        let due = read::<super::recrawl::Resource>(tx, RECRAWL, &key)?
+            .map_or(0, |r| r.next_eligible_ms)
+            .max(old.as_ref().map_or(0, |r| r.not_before));
         let mut origin: OriginRow = match read::<OriginRow>(tx, ORIGINS, &site)? {
             Some(row) if row.round == stats.round => {
                 if !internal || row.admitted >= self.budget || row.state == "done" {
@@ -528,7 +1510,7 @@ impl Frontier {
                 }
                 stats.sequence += 1;
                 tx.open_table(READY)?
-                    .insert((0, stats.sequence), site.as_str())?;
+                    .insert((due, stats.sequence), site.as_str())?;
                 stats.known_sites += 1;
                 stats.pending_sites += 1;
                 OriginRow {
@@ -538,7 +1520,7 @@ impl Frontier {
                     seed: key.clone(),
                     admitted: 0,
                     done: 0,
-                    not_before: 0,
+                    not_before: due,
                 }
             }
         };
@@ -558,6 +1540,7 @@ impl Frontier {
             URLS,
             &key,
             &UrlRow {
+                weight: 1.0,
                 url: key.clone(),
                 origin: url.origin().ascii_serialization(),
                 site: site.clone(),
@@ -565,13 +1548,15 @@ impl Frontier {
                 state: State::Pending,
                 fetch_id: None,
                 reason: None,
-                not_before: 0,
+                not_before: due,
                 sitemap: false,
+                retry: Default::default(),
+                sitemap_depth: 0,
                 continuation: None,
             },
         )?;
         tx.open_table(ELIGIBLE)?
-            .insert((site.as_str(), key.as_str()), 0)?;
+            .insert((site.as_str(), key.as_str()), due)?;
         let row: UrlRow = read(tx, URLS, &key)?.context("missing admitted URL")?;
         Self::queue_http_origin(tx, stats, &row)?;
         put(tx, ORIGINS, &site, &origin)?;
@@ -718,6 +1703,13 @@ impl Frontier {
                     "conflicting durable capture for fetch_id {}",
                     metadata.fetch_id
                 );
+                let key = crate::capture::url_key(&Url::parse(&metadata.requested_url)?)?;
+                if read::<super::recrawl::Resource>(tx, RECRAWL, &key)?.is_none()
+                    && read::<UrlRow>(tx, URLS, &key)?
+                        .is_some_and(|r| r.fetch_id.as_deref() == Some(metadata.fetch_id.as_str()))
+                {
+                    self.record_resource(tx, stats, metadata, receipt)?;
+                }
                 return Ok(false);
             }
             let key = crate::capture::url_key(&Url::parse(&metadata.requested_url)?)?;
@@ -763,6 +1755,7 @@ impl Frontier {
                 origin.done += 1;
                 put(tx, ORIGINS, &row.site, &origin)?;
             }
+            self.record_resource(tx, stats, metadata, receipt)?;
             stats.committed_urls += 1;
             stats.commits += 1;
             stats.outbox_entries += 1;
@@ -885,7 +1878,7 @@ impl Frontier {
                     if row.round == stats.round && row.state == State::Pending {
                         urls.push_back(WeightedUrl {
                             url: Url::parse(&key)?,
-                            weight: 1.0,
+                            weight: row.weight,
                         });
                     }
                 }
@@ -947,6 +1940,7 @@ impl Frontier {
         if outcome.status == JobStatus::StorageFailed {
             anyhow::bail!("Crawler storage failed; URL leases remain recoverable");
         }
+        let retry_config = self.retry_config.lock().unwrap().clone();
         let status = self.transaction(|tx, stats| {
             let site = domain.as_str();
             let _: OriginRow = read(tx, ORIGINS, site)?.context("missing active crawler origin")?;
@@ -960,6 +1954,22 @@ impl Frontier {
                 let Some(mut row): Option<UrlRow> = read(tx, URLS, &key)? else {
                     continue;
                 };
+                if matches!(entry.outcome, FetchOutcome::DurableSuccess { .. }) {
+                    let retry_origin = match &entry.outcome {
+                        FetchOutcome::DurableSuccess { final_url } => {
+                            final_url.origin().ascii_serialization()
+                        }
+                        _ => row.origin.clone(),
+                    };
+                    let mut retry: super::retry::OriginState =
+                        read(tx, RETRIES, &retry_origin)?.unwrap_or_default();
+                    if retry.consecutive_failures > 0 {
+                        stats.retry_recovered += 1;
+                    }
+                    retry.success(millis(now));
+                    delay = delay.max(retry.penalty_ms);
+                    put(tx, RETRIES, &retry_origin, &retry)?;
+                }
                 if matches!(row.state, State::Committed | State::Terminal) {
                     continue;
                 }
@@ -977,9 +1987,45 @@ impl Frontier {
                         reason,
                     } => {
                         delay = delay.max(retry_after_ms.unwrap_or(0));
-                        row.state = State::Pending;
-                        row.reason = Some(reason.clone());
-                        stats.pending_urls += 1;
+                        if super::retry::is_transient(reason) {
+                            row.retry.failures = row.retry.failures.saturating_add(1);
+                            if row.retry.first_attempt_ms == 0 {
+                                row.retry.first_attempt_ms = millis(now);
+                            }
+                            delay = delay.max(retry_config.delay(
+                                row.retry.failures,
+                                retry_after_ms.unwrap_or(0),
+                                &row.url,
+                            ));
+                            let retry_origin =
+                                row.continuation.as_ref().map_or(row.origin.clone(), |c| {
+                                    c.url.origin().ascii_serialization()
+                                });
+                            let mut retry: super::retry::OriginState =
+                                read(tx, RETRIES, &retry_origin)?.unwrap_or_default();
+                            if retry.failure(&retry_config, millis(now), delay) {
+                                stats.circuits_opened += 1;
+                            }
+                            delay = delay.max(retry.not_before_ms.saturating_sub(millis(now)));
+                            put(tx, RETRIES, &retry_origin, &retry)?;
+                        }
+                        if row.retry.failures >= retry_config.max_attempts
+                            || (row.retry.first_attempt_ms > 0
+                                && millis(now).saturating_sub(row.retry.first_attempt_ms)
+                                    >= retry_config.max_elapsed_ms)
+                        {
+                            row.state = State::Terminal;
+                            row.reason = Some(format!("retry_budget_exhausted:{reason}"));
+                            row.continuation = None;
+                            stats.retry_exhausted += 1;
+                            stats.terminal_urls += 1;
+                            completed += 1;
+                        } else {
+                            row.state = State::Pending;
+                            row.reason = Some(reason.clone());
+                            stats.pending_urls += 1;
+                            stats.retry_deferred += 1;
+                        }
                     }
                     FetchOutcome::Cancelled => {
                         row.state = State::Pending;
@@ -988,7 +2034,10 @@ impl Frontier {
                     other => {
                         row.state = State::Terminal;
                         row.continuation = None;
-                        row.reason = Some(format!("{other:?}"));
+                        row.reason = Some(match other { FetchOutcome::PermanentFailure { reason } | FetchOutcome::Skipped { reason } => reason.clone(), _ => format!("{other:?}") });
+                        if matches!(other, FetchOutcome::PermanentFailure { reason } if reason == "http_404") {
+                            row.not_before = millis(now).saturating_add(604_800_000);
+                        }
                         stats.terminal_urls += 1;
                         completed += 1;
                     }
@@ -1023,7 +2072,7 @@ impl Frontier {
             if let Some(key) = http_origin {
                 Self::reschedule_http_origin(tx, stats, &key, millis(now).saturating_add(delay))?;
             }
-            if outcome.status == JobStatus::Completed && !remaining {
+            if !remaining {
                 origin.state = "done".into();
             } else {
                 origin.state = "pending".into();
@@ -1199,7 +2248,7 @@ impl Frontier {
                     "invalid capture journal checksum/version"
                 );
                 for receipt in &group.receipts {
-                    if receipt.capture_version.is_none() || self.has_commit(&receipt.capture_id)? {
+                    if receipt.capture_version.is_none() {
                         continue;
                     }
                     anyhow::ensure!(

@@ -198,3 +198,7 @@ required-features = ["crawler-bench"]
 [[example]]
 name = "crawler_scheduler_bench"
 required-features = ["crawler-bench"]
+
+[[example]]
+name = "crawler_resilience_bench"
+required-features = ["crawler-bench"]

@@ -317,6 +317,9 @@ pub async fn run(config: Config) -> Result<serde_json::Value> {
     let directory = config.output_dir.join("warc");
     fs::create_dir(&directory).context("benchmark requires a fresh output directory")?;
     let crawler_config = Arc::new(CrawlerConfig {
+        discovery: Default::default(),
+        retry: Default::default(),
+        recrawl: Default::default(),
         spool: Default::default(),
         num_worker_threads: config.workers,
         scheduler: super::scheduler::Config::default(),

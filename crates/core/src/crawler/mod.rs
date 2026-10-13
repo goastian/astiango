@@ -41,17 +41,22 @@ pub mod body;
 #[cfg(feature = "crawler-bench")]
 pub mod capture_frontier_benchmark;
 pub mod coordinator;
+pub mod dedup;
+pub mod discovery;
 pub mod extraction;
 pub mod frontier;
 pub mod identity;
 pub mod pipeline;
 #[cfg(feature = "crawler-bench")]
 pub mod pipeline_benchmark;
+#[cfg(feature = "crawler-bench")]
+pub mod resilience_benchmark;
 pub mod robots_txt;
 pub mod router;
 pub mod spool;
 #[cfg(feature = "crawler-bench")]
 pub mod spool_benchmark;
+pub mod traps;
 pub use router::Router;
 #[cfg(feature = "crawler-bench")]
 pub mod benchmark;
@@ -63,7 +68,11 @@ mod file_queue;
 pub mod local;
 mod observer;
 pub mod outcome;
+pub mod plan_signals;
+pub mod plan_store;
 pub mod planner;
+pub mod recrawl;
+pub mod retry;
 pub mod robot_client;
 pub mod runtime;
 pub mod scheduler;
@@ -122,6 +131,9 @@ pub enum Error {
 
     #[error("origin not eligible for {retry_after_ms} ms")]
     CrawlDeferred { retry_after_ms: u64 },
+
+    #[error("retry budget exhausted: {0}")]
+    RetryExhausted(String),
 
     #[error("destination rejected by network policy: {0}")]
     NonPublicDestination(String),
@@ -314,7 +326,7 @@ impl From<Job> for WorkerJob {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CrawlDatum {
     pub capture: Option<crate::capture::Capture>,
     pub url: Url,
@@ -411,6 +423,29 @@ pub struct RedirectContinuation {
 }
 
 pub trait DatumSink: Send + Sync {
+    fn revalidation_state(
+        &self,
+        _url: &Url,
+    ) -> impl Future<Output = Result<Option<recrawl::Resource>>> + Send {
+        async { Ok(None) }
+    }
+
+    fn ingest_sitemap(
+        &self,
+        _source: Url,
+        _body: body::AdmittedBody,
+    ) -> impl Future<Output = Result<Option<discovery::Report>>> + Send {
+        async { Ok(None) }
+    }
+
+    fn authorize_request(
+        &self,
+        _requested: &Url,
+        _destination: &Url,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
     fn redirect_continuation(
         &self,
         _url: &Url,

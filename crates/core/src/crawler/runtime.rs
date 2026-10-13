@@ -37,6 +37,14 @@ pub trait Dns: Send + Sync {
 }
 
 pub trait Http: Send + Sync {
+    fn send_with_headers(
+        &self,
+        url: Url,
+        timeout: Option<Duration>,
+        _headers: reqwest::header::HeaderMap,
+    ) -> IoFuture<'_, Result<reqwest::Response>> {
+        self.send(url, timeout)
+    }
     fn send(&self, url: Url, timeout: Option<Duration>) -> IoFuture<'_, Result<reqwest::Response>>;
 }
 

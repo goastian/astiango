@@ -36,7 +36,7 @@ use crate::{
     dated_url::DatedUrl,
     distributed::{retry_strategy::ExponentialBackoff, sonic},
     entrypoint::crawler::router::{NewJob, RouterService},
-    sitemap::{parse_sitemap, SitemapEntry},
+    sitemap::SitemapEntry,
     webpage::url_ext::UrlExt,
 };
 
@@ -152,6 +152,7 @@ pub struct JobExecutor<S: DatumSink> {
     writer: Arc<S>,
     client: RobotClient,
     has_gotten_429_response: bool,
+    request_identity: Option<Url>,
     politeness_factor: u32,
     crawled_urls: Arc<HashSet<Url>>,
     crawled_sitemaps: HashSet<Site>,
@@ -198,6 +199,7 @@ impl<S: DatumSink> JobExecutor<S> {
             max_politeness_factor: config.max_politeness_factor,
             wander_prioritiser: WanderPrioritiser::new(),
             has_gotten_429_response: false,
+            request_identity: None,
             job,
         }
     }
@@ -640,13 +642,20 @@ impl<S: DatumSink> JobExecutor<S> {
                 reason: "robots_unavailable".into(),
                 retry_after_ms: None,
             },
-            Error::FetchFailed { status_code, .. }
-                if status_code.is_server_error()
-                    || matches!(status_code.as_u16(), 408 | 425 | 429) =>
+            Error::FetchFailed {
+                status_code,
+                headers,
+            } if status_code.is_server_error()
+                || matches!(status_code.as_u16(), 408 | 425 | 429) =>
             {
                 FetchOutcome::Deferred {
                     reason: format!("http_{}", status_code.as_u16()),
-                    retry_after_ms: None,
+                    retry_after_ms: super::retry::retry_after(&headers, self.client.utc_now()),
+                }
+            }
+            Error::Anyhow(ref cause) if super::retry::tls_validation_failure(cause) => {
+                FetchOutcome::PermanentFailure {
+                    reason: "tls_validation_failed".into(),
                 }
             }
             Error::ResponseBodyReadFailed | Error::Anyhow(_) => FetchOutcome::Deferred {
@@ -660,6 +669,7 @@ impl<S: DatumSink> JobExecutor<S> {
     }
 
     async fn process_sitemap_turn(&mut self, url: Url) -> std::result::Result<(), FetchOutcome> {
+        self.request_identity = Some(url.clone());
         self.writer
             .reserve_url(&url)
             .await
@@ -670,7 +680,7 @@ impl<S: DatumSink> JobExecutor<S> {
                 reason: "sitemap_already_resolved".into(),
             })?;
         let response = self
-            .fetch(url)
+            .fetch(url.clone())
             .await
             .map_err(|error| self.error_outcome(error))?;
         let body = self
@@ -678,25 +688,24 @@ impl<S: DatumSink> JobExecutor<S> {
             .body(response, BodyKind::Sitemap)
             .await
             .map_err(|error| self.error_outcome(error))?;
-        let entries = self
-            .client
-            .parse_body(body, |text| parse_sitemap(text))
-            .await
-            .map_err(|error| self.error_outcome(error))?;
-        let mut urls = Vec::new();
-        let mut sitemaps = Vec::new();
-        for entry in entries.into_iter().take(super::MAX_OUTGOING_URLS_PER_PAGE) {
-            match entry {
-                SitemapEntry::Url(url) => urls.push(url.url),
-                SitemapEntry::Sitemap(url) => sitemaps.push(url),
-            }
-        }
-        self.writer
-            .discovered_urls(urls, sitemaps)
+        let report = self
+            .writer
+            .ingest_sitemap(url, body)
             .await
             .map_err(|error| FetchOutcome::StorageFailure {
                 message: error.to_string(),
-            })
+            })?;
+        match report {
+            Some(report) if report.reason == "complete" || report.reason == "already_processed" => {
+                Ok(())
+            }
+            Some(report) => Err(FetchOutcome::Skipped {
+                reason: report.reason,
+            }),
+            None => Err(FetchOutcome::Skipped {
+                reason: "sitemap_sink_not_supported".into(),
+            }),
+        }
     }
 
     fn increase_politeness(&mut self) {
@@ -727,6 +736,7 @@ impl<S: DatumSink> JobExecutor<S> {
         mut url: Url,
     ) -> std::result::Result<ProcessedUrl, FetchOutcome> {
         let requested_url = url.clone();
+        self.request_identity = Some(requested_url.clone());
         let fetch_id = self
             .writer
             .reserve_url(&requested_url)
@@ -808,6 +818,81 @@ impl<S: DatumSink> JobExecutor<S> {
             );
             let status = response.status();
             let headers = response.headers().clone();
+            if status.as_u16() == 304 {
+                let prior = self
+                    .writer
+                    .revalidation_state(&requested_url)
+                    .await
+                    .map_err(|e| FetchOutcome::StorageFailure {
+                        message: e.to_string(),
+                    })?
+                    .filter(|prior| {
+                        !prior
+                            .headers(self.client.recrawl_config(), &fetched_url)
+                            .is_empty()
+                    })
+                    .ok_or_else(|| FetchOutcome::PermanentFailure {
+                        reason: "unexpected_304_without_validator".into(),
+                    })?;
+                drop(response);
+                let elapsed = self.client.now().duration_since(started);
+                let mut robots = prior.robots;
+                robots.merge(crate::capture::Robots::from_headers(
+                    &captured_response,
+                    self.client.agent_token(),
+                ));
+                let mut transformations = captured_response.transformations();
+                transformations.push("content-length-omitted-for-304".into());
+                let capture = crate::capture::Capture {
+                    metadata: crate::capture::Metadata {
+                        revalidation: Some(prior.reference),
+                        schema_version: crate::capture::VERSION,
+                        identity_version: crate::capture::IDENTITY_VERSION,
+                        fetch_id,
+                        requested_url: crate::capture::url_key(&requested_url).map_err(|e| {
+                            FetchOutcome::PermanentFailure {
+                                reason: e.to_string(),
+                            }
+                        })?,
+                        response: captured_response,
+                        redirects,
+                        payload_sha256: crate::capture::sha256(&[]),
+                        payload_bytes: 0,
+                        decoded_bytes: 0,
+                        charset: "utf-8".into(),
+                        decoded_limit_bytes: self.client.page_reservation_bytes(),
+                        user_agent: self.client.agent_token().into(),
+                        robots,
+                        transformations,
+                        fetch_time_ms: elapsed.as_millis() as u64,
+                        discovery_urls: Vec::new(),
+                        internal_urls: Vec::new(),
+                    },
+                    payload: Arc::new(Vec::new()),
+                };
+                let datum = CrawlDatum {
+                    capture: Some(capture),
+                    url: fetched_url,
+                    body: String::new(),
+                    payload_type: crate::warc::PayloadType::Html,
+                    fetch_time_ms: elapsed.as_millis() as u64,
+                    date: self.client.utc_now(),
+                };
+                self.writer
+                    .write_prepared(super::pipeline::PreparedPage {
+                        datum,
+                        extraction: None,
+                        body_lease: None,
+                        admission: Some(admission),
+                    })
+                    .await
+                    .map_err(|e| FetchOutcome::StorageFailure {
+                        message: e.to_string(),
+                    })?;
+                return Err(FetchOutcome::Skipped {
+                    reason: "http_304_revalidated_durable".into(),
+                });
+            }
             let admitted = self
                 .cancellable(self.client.body(response, BodyKind::Page))
                 .await;
@@ -947,6 +1032,7 @@ impl<S: DatumSink> JobExecutor<S> {
             let transformations = captured_response.transformations();
             let capture = crate::capture::Capture {
                 metadata: crate::capture::Metadata {
+                    revalidation: None,
                     schema_version: crate::capture::VERSION,
                     identity_version: crate::capture::IDENTITY_VERSION,
                     fetch_id,
@@ -1021,6 +1107,7 @@ impl<S: DatumSink> JobExecutor<S> {
             }
             Arc::make_mut(&mut self.crawled_urls).insert(url.clone());
             Arc::make_mut(&mut self.crawled_urls).insert(fetched_url.clone());
+            self.has_gotten_429_response = false;
             if !self.has_gotten_429_response {
                 self.decrease_politeness();
             }
@@ -1036,10 +1123,29 @@ impl<S: DatumSink> JobExecutor<S> {
         if self.cancelled() {
             return Err(anyhow!("cancelled").into());
         }
-        let request = self.cancellable(self.client.get(url.clone())).await?;
+        let prior = self
+            .writer
+            .revalidation_state(self.request_identity.as_ref().unwrap_or(&url))
+            .await?;
+        let headers = prior
+            .as_ref()
+            .map_or_else(reqwest::header::HeaderMap::new, |p| {
+                p.headers(self.client.recrawl_config(), &url)
+            });
+        let request = self
+            .cancellable(self.client.get(url.clone()))
+            .await?
+            .headers(headers);
         if self.cancelled() {
             return Err(anyhow!("cancelled").into());
         }
+        self.writer
+            .authorize_request(
+                self.request_identity.as_ref().unwrap_or(&url),
+                &url,
+                self.client.utc_now(),
+            )
+            .await?;
         self.outcome.counters.page_http_attempts += 1;
         if let Some(observer) = &self.observer {
             let observed_at = self.client.now();
@@ -1092,11 +1198,31 @@ impl<S: DatumSink> JobExecutor<S> {
     async fn urls_from_sitemap(&mut self, sitemap: Url, max_depth: usize) -> Vec<DatedUrl> {
         let mut stack = vec![(sitemap, 0)];
         let mut urls = vec![];
+        let config = self.client.discovery_config().clone();
+        let mut visited = std::collections::HashSet::new();
+        let mut bytes = 0u64;
+        let mut documents = 0u32;
 
         while let Some((url, depth)) = stack.pop() {
             if self.stopped() {
                 break;
             }
+            if !visited.insert(url.clone()) {
+                continue;
+            }
+            if depth >= max_depth.min(config.max_depth as usize)
+                || documents >= config.max_documents
+                || bytes >= config.max_total_bytes
+            {
+                self.record(
+                    url,
+                    FetchOutcome::Skipped {
+                        reason: "discovery_aggregate_quota".into(),
+                    },
+                );
+                continue;
+            }
+            documents += 1;
             if depth >= max_depth {
                 continue;
             }
@@ -1112,8 +1238,25 @@ impl<S: DatumSink> JobExecutor<S> {
                 let body = self
                     .cancellable(self.client.body(response, BodyKind::Sitemap))
                     .await?;
-                self.cancellable(self.client.parse_body(body, |text| parse_sitemap(text)))
-                    .await
+                bytes = bytes.saturating_add(body.len() as u64);
+                if bytes > config.max_total_bytes {
+                    return Err(Error::Anyhow(anyhow!("discovery_aggregate_quota")));
+                }
+                let remaining = config
+                    .max_urls
+                    .saturating_sub(urls.len() as u64)
+                    .min(50_000) as usize;
+                self.cancellable(self.client.parse_body(body, move |text| {
+                    let mut entries = Vec::new();
+                    crate::sitemap::visit_sitemap(text.as_bytes(), |entry| {
+                        anyhow::ensure!(entries.len() < remaining, "discovery_aggregate_quota");
+                        entries.push(entry);
+                        Ok(())
+                    })
+                    .map(|_| entries)
+                }))
+                .await?
+                .map_err(Error::Anyhow)
             }
             .await;
             self.sleep(self.delay_duration()).await;
@@ -1131,7 +1274,16 @@ impl<S: DatumSink> JobExecutor<S> {
                         urls.push(url);
                     }
                     SitemapEntry::Sitemap(url) => {
-                        stack.push((url, depth + 1));
+                        if stack.len() + (documents as usize) < config.max_documents as usize {
+                            stack.push((url, depth + 1));
+                        } else {
+                            self.record(
+                                url,
+                                FetchOutcome::Skipped {
+                                    reason: "discovery_aggregate_quota".into(),
+                                },
+                            );
+                        }
                     }
                 }
             }

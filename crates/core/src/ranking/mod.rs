@@ -321,13 +321,14 @@ mod tests {
                     <html>
                         <head>
                             <title>Title</title>
-                            <meta property="og:updated_time" content="2023-06-22T19:37:34+00:00" />
+                            <meta property="og:updated_time" content="{}" />
                         </head>
                         <body>
                             {CONTENT} {}
                         </body>
                     </html>
                 "#,
+                        (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339(),
                         crate::rand_words(100)
                     ),
                     "https://www.new.com",
@@ -769,6 +770,7 @@ mod tests {
         let temp_dir = file_store::temp::TempDir::new().unwrap();
         let worker = crate::block_on(IndexingWorker::new(
             IndexerConfig {
+                dedup: Default::default(),
                 host_centrality_store_path: temp_dir
                     .as_ref()
                     .join("host_centrality")

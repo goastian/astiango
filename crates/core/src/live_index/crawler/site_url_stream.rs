@@ -48,13 +48,16 @@ impl StreamingResponse for SiteUrlStream {
     type Item = Url;
 
     async fn next_batch(&mut self) -> Result<Vec<Self::Item>> {
-        self.searcher
+        let urls = self
+            .searcher
             .search_generic(GetSiteUrlsQuery {
                 site: self.site.clone(),
                 offset: Some(self.offset as u64),
                 limit: SITE_URL_BATCH_SIZE as u64,
             })
             .await
-            .map(|res| res.urls)
+            .map(|res| res.urls)?;
+        self.offset = self.offset.saturating_add(urls.len());
+        Ok(urls)
     }
 }

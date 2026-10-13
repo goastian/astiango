@@ -97,7 +97,7 @@ impl WebgraphWorker {
                         continue;
                     }
                 };
-                if !record.links_allowed() {
+                if !record.links_allowed() || record.is_revalidation() {
                     continue;
                 }
                 let webpage =

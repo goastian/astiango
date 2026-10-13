@@ -34,6 +34,13 @@ export interface Site extends ExplicitCounters {
 }
 
 export interface FrontierDbStats {
+  retry_deferred?: number; retry_exhausted?: number; circuits_opened?: number; retry_recovered?: number; http_attempts?: number;
+  discovery_candidates?: number; discovery_documents?: number; discovery_bytes?: number; discovery_quota_stops?: number; discovery_invalid_xml?: number;
+  quarantine_recent?: Array<{ url: string; reason: string; pattern: string; created_at: string; review_sample: boolean }>;
+  quarantined_urls?: number; quarantine_released?: number; review_samples?: number; quarantine_reasons?: Record<string, number>;
+  duplicate_content?: number; content_versions?: number; empty_pages?: number;
+  revalidations?: number; recrawl_changes?: number; recrawl_bytes_saved?: number;
+
   site_identity_version?: number;
   identity_mapped_urls?: number;
   identity_migration_complete?: boolean;

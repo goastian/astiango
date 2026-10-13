@@ -197,6 +197,7 @@ impl LiveIndexService {
                 index_path,
                 config.shard_id,
                 indexer::worker::Config {
+                    dedup: Default::default(),
                     host_centrality_store_path: config.host_centrality_store_path.clone(),
                     page_centrality_store_path: config.page_centrality_store_path.clone(),
                     page_webgraph: Some(indexer::worker::IndexerGraphConfig::Existing {

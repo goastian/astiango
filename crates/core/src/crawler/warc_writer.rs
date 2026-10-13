@@ -249,7 +249,37 @@ async fn writer_task(
                     .run_durable(bytes, move || {
                         let records: Vec<_> =
                             batch.iter().map(|(page, _, _)| &page.datum).collect();
-                        let committed = shared.lock().unwrap().append(&records);
+                        let committed = (|| -> anyhow::Result<Vec<Receipt>> {
+                            let mut disk = shared.lock().unwrap();
+                            for record in &records {
+                                if let Some(reference) = record
+                                    .capture
+                                    .as_ref()
+                                    .and_then(|c| c.metadata.revalidation.as_ref())
+                                {
+                                    disk.reference(
+                                        &reference.segment,
+                                        "resource-catalog-v1",
+                                        "304",
+                                        true,
+                                    )?;
+                                }
+                            }
+                            let receipts = disk.append(&records)?;
+                            for (record, receipt) in records.iter().zip(&receipts) {
+                                if let Some(capture) = &record.capture {
+                                    if capture.metadata.revalidation.is_none() {
+                                        disk.reference(
+                                            &receipt.segment,
+                                            "resource-catalog-v1",
+                                            "revisit",
+                                            true,
+                                        )?;
+                                    }
+                                }
+                            }
+                            Ok(receipts)
+                        })();
                         drop(records);
                         let mut failure = committed.as_ref().err().map(ToString::to_string);
                         for (index, (page, _lease, reply)) in batch.into_iter().enumerate() {

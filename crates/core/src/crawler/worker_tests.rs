@@ -128,6 +128,13 @@ struct TurnSink {
     data: Mutex<Vec<CrawlDatum>>,
 }
 impl DatumSink for TurnSink {
+    async fn ingest_sitemap(
+        &self,
+        source: Url,
+        body: crate::crawler::body::AdmittedBody,
+    ) -> Result<Option<crate::crawler::discovery::Report>> {
+        Ok(Some(self.frontier.ingest_sitemap(&source, &body)?))
+    }
     async fn reserve_url(&self, url: &Url) -> Result<Option<String>> {
         Ok(self.frontier.begin_url(url)?)
     }
@@ -189,6 +196,7 @@ async fn fair_turns_resume_relative_and_cross_origin_redirects_and_release_retry
     });
     let mut options = config();
     options.scheduler.mode = crate::crawler::scheduler::Mode::FairTurns;
+    frontier.configure_retry(&options.retry).unwrap();
     let options = Arc::new(options);
     let http = Arc::new(FixtureHttp::default());
     let clock = Arc::new(ManualClock::default());
@@ -293,6 +301,7 @@ async fn sitemap_discovery_is_durable_and_uses_separate_fair_turns_through_the_c
     });
     let mut options = config();
     options.scheduler.mode = crate::crawler::scheduler::Mode::FairTurns;
+    frontier.configure_retry(&options.retry).unwrap();
     let options = Arc::new(options);
     let http = Arc::new(FixtureHttp::default());
     let clock = Arc::new(ManualClock::default());
@@ -382,6 +391,9 @@ fn config() -> CrawlerConfig {
     let mut config = CrawlerConfig::for_tests();
     config.min_crawl_delay_ms = 10;
     config.max_crawl_delay_ms = 100;
+    config.retry.initial_backoff_ms = 5;
+    config.retry.max_backoff_ms = 100;
+    config.retry.circuit_open_ms = 50;
     config.start_politeness_factor = 0;
     config.min_politeness_factor = 0;
     config.max_url_slowdown_retry = 2;

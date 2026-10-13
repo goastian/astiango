@@ -17,7 +17,7 @@
 use chrono::Utc;
 use itertools::Itertools;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use tracing::debug;
 
@@ -58,6 +58,7 @@ impl From<crate::config::IndexerGraphConfig> for IndexerGraphConfig {
 
 #[derive(Clone)]
 pub struct Config {
+    pub dedup: crate::crawler::dedup::Config,
     pub host_centrality_store_path: String,
     pub page_centrality_store_path: Option<String>,
     pub page_webgraph: Option<IndexerGraphConfig>,
@@ -68,6 +69,7 @@ pub struct Config {
 impl From<IndexerConfig> for Config {
     fn from(config: IndexerConfig) -> Self {
         Self {
+            dedup: config.dedup,
             host_centrality_store_path: config.host_centrality_store_path,
             page_centrality_store_path: config.page_centrality_store_path,
             page_webgraph: config.page_webgraph.map(IndexerGraphConfig::from),
@@ -196,7 +198,7 @@ pub struct IndexingWorker {
     job_settings: Option<JobSettings>,
     rake: RakeModel,
     dual_encoder: Option<DualEncoder>,
-    seen_urls: Mutex<bloom::BytesBloomFilter<String>>,
+    pub(super) dedup: crate::crawler::dedup::Config,
 }
 
 impl IndexingWorker {
@@ -240,7 +242,7 @@ impl IndexingWorker {
                     page_centrality_rank_threshold: dual_encoder.page_centrality_rank_threshold,
                 }
             }),
-            seen_urls: Mutex::new(bloom::BytesBloomFilter::new(10_000_000_000, 0.05)),
+            dedup: config.dedup,
         }
     }
 
@@ -250,19 +252,6 @@ impl IndexingWorker {
 
     pub(super) fn page_webgraph(&self) -> Option<&Webgraph> {
         self.page_webgraph.as_ref()
-    }
-
-    /// Returns false if the URL has not been seen before and marks it as seen.
-    /// Returns true if the URL has been seen before.
-    pub(super) fn see(&self, url: &String) -> bool {
-        let mut seen_urls = self.seen_urls.lock().unwrap();
-
-        if seen_urls.contains(url) {
-            true
-        } else {
-            seen_urls.insert(url);
-            false
-        }
     }
 
     pub fn process(&mut self, job: &Job) -> Index {
@@ -479,10 +468,22 @@ impl IndexingWorker {
     }
 
     pub async fn prepare_webpages(&self, batch: &[IndexableWebpage]) -> Vec<Webpage> {
+        self.prepare_webpages_with_positions(batch)
+            .await
+            .into_iter()
+            .map(|(_, page)| page)
+            .collect()
+    }
+
+    pub(crate) async fn prepare_webpages_with_positions(
+        &self,
+        batch: &[IndexableWebpage],
+    ) -> Vec<(usize, Webpage)> {
+        let mut positions = Vec::with_capacity(batch.len());
         let mut res = Vec::with_capacity(batch.len());
         let mut signal_computer = SignalComputer::new(None);
 
-        for page in batch {
+        for (position, page) in batch.iter().enumerate() {
             let mut webpage = match self.prepare(page) {
                 Ok(html) => html,
                 Err(err) => {
@@ -502,6 +503,7 @@ impl IndexingWorker {
             signal_computer.set_current_timestamp(Utc::now().timestamp().max(0) as usize);
             webpage.pre_computed_score = signal_computer.precompute_score(&webpage);
 
+            positions.push(position);
             res.push(webpage);
         }
 
@@ -509,7 +511,7 @@ impl IndexingWorker {
         self.set_keyword_embeddings(&mut res);
         self.set_backlinks(&mut res).await;
 
-        res
+        positions.into_iter().zip(res).collect()
     }
 }
 
@@ -525,6 +527,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let worker = crate::block_on(IndexingWorker::new(
             IndexerConfig {
+                dedup: Default::default(),
                 host_centrality_store_path: temp_dir
                     .as_ref()
                     .join("host_centrality")

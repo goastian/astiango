@@ -115,7 +115,10 @@ pub fn write<W: Write>(
         http.extend_from_slice(&value);
         http.extend_from_slice(b"\r\n");
     }
-    http.extend_from_slice(format!("content-length: {}\r\n\r\n", capture.payload.len()).as_bytes());
+    if meta.response.status != 304 {
+        http.extend_from_slice(format!("content-length: {}\r\n", capture.payload.len()).as_bytes());
+    }
+    http.extend_from_slice(b"\r\n");
     let mut block_digest = ring::digest::Context::new(&ring::digest::SHA256);
     block_digest.update(&http);
     block_digest.update(&capture.payload);

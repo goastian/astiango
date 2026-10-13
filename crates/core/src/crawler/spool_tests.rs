@@ -325,7 +325,9 @@ fn all_reference_kinds_block_gc_until_durable_release() {
     let id = spool.segments()[0].id.clone();
     spool.published(&id).unwrap();
     for kind in ["revisit", "304", "consumer", "outbox", "backup"] {
-        spool.reference(&id, "fixture", kind, true).unwrap();
+        spool
+            .reference(&format!("{id}.warc.gz"), "fixture", kind, true)
+            .unwrap();
     }
     spool.reference(&id, "archive", "consumer", false).unwrap();
     drop(spool);

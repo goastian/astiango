@@ -59,6 +59,16 @@ impl Job {
         let mut index = Index::open(Path::new(&self.base_path).join(name)).unwrap();
         index.prepare_writer().unwrap();
 
+        let mut exact = crate::crawler::dedup::ExactSet::open(
+            &Path::new(&self.base_path)
+                .join(name)
+                .join("exact-versions.redb"),
+            &worker.dedup,
+        )
+        .expect("open exact index dedup store");
+        let mut committed_keys = std::collections::HashSet::new();
+        let mut key_bytes = 0usize;
+
         let paths = vec![self.warc_path.clone()];
         let warc_files = download_all_warc_files(&paths, &self.source_config);
         pin!(warc_files);
@@ -77,24 +87,35 @@ impl Job {
                         None
                     }
                 })
-                .filter(|record| record.indexing_allowed())
+                .filter(|record| record.indexing_allowed() && !record.is_revalidation())
                 .filter(|record| match &record.response.payload_type {
                     Some(payload_type) => matches!(payload_type, PayloadType::Html),
                     None => true,
                 })
-                .filter(|record| !worker.see(&record.request.url))
                 .chunks(self.settings.batch_size)
                 .into_iter()
             {
                 batch.clear();
 
+                let mut keys = Vec::new();
+                let mut batch_keys = std::collections::HashSet::new();
                 for record in chunk {
-                    batch.push(IndexableWebpage::from(record));
+                    let key = crate::crawler::dedup::ExactSet::version_key(&record)
+                        .expect("capture dedup contract");
+                    if exact.contains(&key).expect("read exact dedup key")
+                        || committed_keys.contains(&key)
+                        || !batch_keys.insert(key.clone())
+                    {
+                        continue;
+                    }
+                    let page = IndexableWebpage::from(record);
+                    keys.push(key);
+                    batch.push(page);
                 }
 
-                let prepared = crate::block_on(worker.prepare_webpages(&batch));
+                let prepared = crate::block_on(worker.prepare_webpages_with_positions(&batch));
 
-                for webpage in &prepared {
+                for (position, webpage) in &prepared {
                     if webpage.host_centrality > 0.0 {
                         has_host_centrality = true;
                     }
@@ -115,16 +136,28 @@ impl Job {
                         panic!();
                     }
 
+                    let key = keys[*position].clone();
+                    key_bytes += key.len() + 64;
+                    committed_keys.insert(key);
                     num_inserts_since_commit += 1;
                 }
 
-                if num_inserts_since_commit >= self.settings.autocommit_after_num_inserts {
+                if num_inserts_since_commit >= self.settings.autocommit_after_num_inserts
+                    || key_bytes >= worker.dedup.max_memory_bytes
+                {
                     index.commit().unwrap();
+                    exact
+                        .commit(&committed_keys.drain().collect::<Vec<_>>())
+                        .expect("persist exact index dedup after index commit");
+                    key_bytes = 0;
                     num_inserts_since_commit = 0;
                 }
             }
         }
         index.commit().unwrap();
+        exact
+            .commit(&committed_keys.drain().collect::<Vec<_>>())
+            .expect("persist exact index dedup after index commit");
 
         if !has_host_centrality {
             warn!("no host centrality values found in {}", name);
@@ -207,5 +240,82 @@ mod capture_contract_tests {
             .unwrap();
         assert!(!record.indexing_allowed());
         assert_eq!(record.response.body, body);
+    }
+}
+
+#[cfg(test)]
+mod exact_dedup_contract {
+    use super::*;
+    #[test]
+    fn saturated_filter_preserves_distinct_index_documents_and_never_marks_rejected_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let warcs = dir.path().join("warc");
+        std::fs::create_dir(&warcs).unwrap();
+        let mut writer = crate::warc::WarcWriter::new();
+        let mut rejected = None;
+        for i in 0..200 {
+            let record = crate::warc::WarcRecord {
+                request: crate::warc::Request {
+                    url: format!("https://example.org/page/{i}?signature=keep"),
+                    date: Some(chrono::Utc::now()),
+                },
+                response: crate::warc::Response {
+                    body: format!(
+                        "<html><head><title>Page {i}</title></head><body><p>{}</p></body></html>",
+                        "An original page with several readable words for indexing. ".repeat(40)
+                    ),
+                    payload_type: Some(PayloadType::Html),
+                },
+                metadata: crate::warc::Metadata {
+                    fetch_time_ms: 1,
+                    capture: None,
+                },
+            };
+            writer.write(&record).unwrap();
+            if i == 0 {
+                let mut bad = record.clone();
+                bad.response.body = "<html><body>missing title</body></html>".into();
+                rejected = Some(crate::crawler::dedup::ExactSet::version_key(&bad).unwrap());
+                writer.write(&bad).unwrap();
+            }
+        }
+        std::fs::write(warcs.join("fixture.warc.gz"), writer.finish().unwrap()).unwrap();
+        let config = super::super::worker::Config {
+            dedup: crate::crawler::dedup::Config {
+                max_memory_bytes: 8,
+                ..Default::default()
+            },
+            host_centrality_store_path: dir.path().join("centrality").to_str().unwrap().into(),
+            page_centrality_store_path: None,
+            page_webgraph: None,
+            safety_classifier_path: None,
+            dual_encoder: None,
+        };
+        let mut worker = crate::block_on(IndexingWorker::new(config));
+        let settings = JobSettings {
+            host_centrality_threshold: None,
+            minimum_clean_words: None,
+            batch_size: 16,
+            autocommit_after_num_inserts: 32,
+        };
+        worker.set_job_settings(settings);
+        let job = Job {
+            source_config: config::WarcSource::Local(config::LocalConfig {
+                folder: warcs.to_str().unwrap().into(),
+                names: Vec::new(),
+            }),
+            warc_path: "fixture.warc.gz".into(),
+            base_path: dir.path().join("indexes").to_str().unwrap().into(),
+            settings,
+        };
+        let index = job.process(&worker);
+        assert_eq!(index.inverted_index.num_documents(), 200);
+        let set = crate::crawler::dedup::ExactSet::open(
+            &dir.path()
+                .join("indexes/fixture.warc.gz/exact-versions.redb"),
+            &worker.dedup,
+        )
+        .unwrap();
+        assert!(!set.contains(&rejected.unwrap()).unwrap());
     }
 }

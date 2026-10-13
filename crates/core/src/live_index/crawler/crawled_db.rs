@@ -57,11 +57,13 @@ impl redb::Key for TruncatedUrl {
 }
 
 impl redb::Value for TruncatedUrl {
-    type SelfType<'a> = TruncatedUrl
+    type SelfType<'a>
+        = TruncatedUrl
     where
         Self: 'a;
 
-    type AsBytes<'a> = &'a [u8]
+    type AsBytes<'a>
+        = &'a [u8]
     where
         Self: 'a;
 
@@ -97,11 +99,13 @@ impl redb::Key for InsertionTime {
 }
 
 impl redb::Value for InsertionTime {
-    type SelfType<'a> = InsertionTime
+    type SelfType<'a>
+        = InsertionTime
     where
         Self: 'a;
 
-    type AsBytes<'a> = Vec<u8>
+    type AsBytes<'a>
+        = Vec<u8>
     where
         Self: 'a;
 
@@ -137,129 +141,154 @@ impl redb::Value for InsertionTime {
 struct InnerDb {
     db: redb::Database,
     last_truncate: chrono::DateTime<chrono::Utc>,
+    clock: Arc<dyn crate::crawler::runtime::Clock>,
 }
+const URLS_V2: redb::TableDefinition<&str, i64> = redb::TableDefinition::new("urls.v2");
+const TIMES_V2: redb::TableDefinition<(i64, &str), ()> = redb::TableDefinition::new("times.v2");
 
 impl InnerDb {
     fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref().join("downloaded.db");
-
-        let db = if !path.exists() {
-            if let Some(parent) = path.parent() {
-                if !parent.exists() {
-                    std::fs::create_dir_all(parent)?;
-                }
+        Self::open_with_clock(path, Arc::new(crate::crawler::runtime::SystemClock))
+    }
+    fn open_with_clock<P: AsRef<Path>>(
+        path: P,
+        clock: Arc<dyn crate::crawler::runtime::Clock>,
+    ) -> Result<Self> {
+        std::fs::create_dir_all(path.as_ref())?;
+        let file = path.as_ref().join("downloaded.db");
+        let backup = path.as_ref().join("downloaded.identity-v1.db");
+        if file.exists() && !backup.exists() {
+            let temporary = path.as_ref().join("downloaded.identity-v1.tmp");
+            std::fs::copy(&file, &temporary)?;
+            std::fs::File::open(&temporary)?.sync_all()?;
+            std::fs::rename(temporary, backup)?;
+            std::fs::File::open(path.as_ref())?.sync_all()?;
+        }
+        let db = redb::Database::builder()
+            .set_cache_size(512 * 1024)
+            .create(file)?;
+        let tx = db.begin_write()?;
+        tx.open_table(Self::urls_table_definition())?;
+        tx.open_table(Self::times_table_definition())?;
+        tx.open_table(URLS_V2)?;
+        tx.open_table(TIMES_V2)?;
+        tx.commit()?;
+        loop {
+            let tx = db.begin_write()?;
+            let batch = tx
+                .open_table(Self::times_table_definition())?
+                .iter()?
+                .take(128)
+                .map(|r| r.map(|(time, url)| (time.value(), url.value())))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            if batch.is_empty() {
+                break;
             }
-
-            redb::Database::create(&path)?
-        } else {
-            redb::Database::open(&path)?
-        };
-
-        // make sure the tables exist
-        let txn = db.begin_write()?;
-
-        txn.open_table(Self::urls_table_definition())?;
-        txn.open_table(Self::times_table_definition())?;
-
-        txn.commit()?;
-
+            for (time, url) in batch {
+                if let Ok(parsed) = Url::parse(&url.0) {
+                    let key = crate::capture::url_key(&parsed)?;
+                    let millis = time.time.timestamp_millis();
+                    let previous = tx
+                        .open_table(URLS_V2)?
+                        .get(key.as_str())?
+                        .map(|v| v.value());
+                    if previous.is_none_or(|previous| previous < millis) {
+                        if let Some(previous) = previous {
+                            tx.open_table(TIMES_V2)?.remove((previous, key.as_str()))?;
+                        }
+                        tx.open_table(URLS_V2)?.insert(key.as_str(), millis)?;
+                        tx.open_table(TIMES_V2)?
+                            .insert((millis, key.as_str()), ())?;
+                    }
+                }
+                tx.open_table(Self::times_table_definition())?
+                    .remove(time)?;
+            }
+            tx.commit()?;
+        }
+        let now = clock.utc_now();
         Ok(Self {
             db,
-            last_truncate: chrono::Utc::now(),
+            last_truncate: now,
+            clock,
         })
     }
-
     fn urls_table_definition() -> redb::TableDefinition<'static, TruncatedUrl, ()> {
         redb::TableDefinition::new("urls")
     }
-
     fn times_table_definition() -> redb::TableDefinition<'static, InsertionTime, TruncatedUrl> {
         redb::TableDefinition::new("times")
     }
-
     fn has_crawled(&self, url: &Url) -> Result<bool> {
-        let url = TruncatedUrl::new(url);
-
-        Ok(self
+        let key = crate::capture::url_key(url)?;
+        let now = self.clock.utc_now().timestamp_millis();
+        let timestamp = self
             .db
             .begin_read()?
-            .open_table(Self::urls_table_definition())?
-            .get(&url)?
-            .is_some())
+            .open_table(URLS_V2)?
+            .get(key.as_str())?
+            .map(|v| v.value());
+        Ok(timestamp.is_some_and(|time| now.saturating_sub(time) < TTL.as_millis() as i64))
     }
-
     fn truncate(&mut self, ttl: Duration) -> Result<()> {
-        let now = chrono::Utc::now();
-        let thresh = now - ttl;
-
-        let thresh = InsertionTime { time: thresh };
-        let txn = self.db.begin_write()?;
-
-        let to_remove = {
-            let times = txn.open_table(Self::times_table_definition())?;
-
-            let to_remove: Vec<_> = times
-                .range(..thresh)?
-                .map(|r| {
-                    let (time, url) = r.unwrap();
-
-                    (time.value().clone(), url.value().clone())
-                })
-                .collect();
-
-            to_remove
-        };
-
-        {
-            let mut times = txn.open_table(Self::times_table_definition())?;
-            let mut urls = txn.open_table(Self::urls_table_definition())?;
-
-            for (time, url) in to_remove {
-                times.remove(time)?;
-                urls.remove(url)?;
+        let now = self.clock.utc_now();
+        let threshold = now
+            .timestamp_millis()
+            .saturating_sub(ttl.as_millis() as i64);
+        loop {
+            let tx = self.db.begin_write()?;
+            let batch = tx
+                .open_table(TIMES_V2)?
+                .range(..=(threshold, "\u{10ffff}"))?
+                .take(128)
+                .map(|r| r.map(|(key, _)| (key.value().0, key.value().1.to_string())))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            if batch.is_empty() {
+                break;
             }
+            for (time, key) in batch {
+                tx.open_table(TIMES_V2)?.remove((time, key.as_str()))?;
+                let latest = tx
+                    .open_table(URLS_V2)?
+                    .get(key.as_str())?
+                    .map(|v| v.value());
+                if latest == Some(time) {
+                    tx.open_table(URLS_V2)?.remove(key.as_str())?;
+                }
+            }
+            tx.commit()?;
         }
-
-        txn.commit()?;
-
-        self.last_truncate = chrono::Utc::now();
-
+        self.last_truncate = now;
         Ok(())
     }
-
     fn maybe_truncate(&mut self) -> Result<()> {
-        let now = chrono::Utc::now();
-
-        if self.last_truncate.signed_duration_since(now).num_seconds() < 60 {
-            return Ok(());
-        }
-
-        self.truncate(TTL)
-    }
-
-    fn insert(&mut self, url: &Url) -> Result<()> {
+        if self
+            .clock
+            .utc_now()
+            .signed_duration_since(self.last_truncate)
+            .num_seconds()
+            >= 60
         {
-            let key = TruncatedUrl::new(url);
-            let txn = self.db.begin_write()?;
-            {
-                let mut table = txn.open_table(Self::urls_table_definition())?;
-                table.insert(&key, ())?;
-            }
-
-            let time = InsertionTime {
-                time: chrono::Utc::now(),
-            };
-            {
-                let mut table = txn.open_table(Self::times_table_definition())?;
-                table.insert(time, key)?;
-            }
-
-            txn.commit()?;
+            self.truncate(TTL)?;
         }
-
-        self.maybe_truncate()?;
-
         Ok(())
+    }
+    fn insert(&mut self, url: &Url) -> Result<()> {
+        let key = crate::capture::url_key(url)?;
+        let time = self.clock.utc_now().timestamp_millis();
+        let mut tx = self.db.begin_write()?;
+        tx.set_durability(redb::Durability::Paranoid);
+        let previous = tx
+            .open_table(URLS_V2)?
+            .get(key.as_str())?
+            .map(|v| v.value());
+        if let Some(previous) = previous {
+            tx.open_table(TIMES_V2)?.remove((previous, key.as_str()))?;
+        }
+        tx.open_table(URLS_V2)?.insert(key.as_str(), time)?;
+        tx.open_table(TIMES_V2)?.insert((time, key.as_str()), ())?;
+        tx.commit()?;
+        self.maybe_truncate()
     }
 }
 
@@ -309,18 +338,22 @@ impl ShardedCrawledDb {
             std::fs::create_dir_all(folder.as_ref())?;
         }
 
-        let inner = Arc::new(
-            std::fs::read_dir(&folder)?
-                .filter_map(|entry| entry.ok())
-                .filter(|entry| entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
-                .filter_map(|entry| {
-                    let path = entry.path();
-                    let shard = ShardedHost(path.file_name()?.to_str()?.to_string());
-                    let db = CrawledDb::open(path).ok()?;
-                    Some((shard, db))
+        let inner = Arc::new(DashMap::new());
+        for entry in std::fs::read_dir(&folder)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if !entry.file_type()?.is_dir()
+                || !name.to_str().is_some_and(|name| {
+                    name.len() == 2 && name.chars().all(|c| c.is_ascii_hexdigit())
                 })
-                .collect::<DashMap<ShardedHost, CrawledDb>>(),
-        );
+            {
+                continue;
+            }
+            inner.insert(
+                ShardedHost(name.to_str().unwrap().to_string()),
+                CrawledDb::open(entry.path())?,
+            );
+        }
 
         Ok(Self {
             folder: folder.as_ref().to_path_buf(),
@@ -341,11 +374,12 @@ impl ShardedCrawledDb {
         let shard =
             ShardedHost::from_url(url).ok_or(anyhow::anyhow!("Failed to get shard from url"))?;
 
-        let db = self.inner.entry(shard.clone()).or_insert_with(|| {
-            let path = self.folder.join(shard.0);
-            CrawledDb::open(path).unwrap()
-        });
-
+        let db = match self.inner.entry(shard.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(entry) => entry.into_ref(),
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                entry.insert(CrawledDb::open(self.folder.join(shard.0))?)
+            }
+        };
         db.insert(url)
     }
 }
@@ -366,22 +400,55 @@ mod tests {
         assert!(db.has_crawled(&url).unwrap());
     }
 
+    struct TestClock {
+        start: std::time::Instant,
+        epoch: chrono::DateTime<chrono::Utc>,
+        elapsed: std::sync::Mutex<Duration>,
+    }
+    impl crate::crawler::runtime::Clock for TestClock {
+        fn now(&self) -> std::time::Instant {
+            self.start + *self.elapsed.lock().unwrap()
+        }
+        fn utc_now(&self) -> chrono::DateTime<chrono::Utc> {
+            self.epoch + chrono::Duration::from_std(*self.elapsed.lock().unwrap()).unwrap()
+        }
+        fn sleep(&self, delay: Duration) -> crate::crawler::runtime::IoFuture<'_, ()> {
+            Box::pin(async move {
+                *self.elapsed.lock().unwrap() += delay;
+            })
+        }
+    }
     #[test]
-    fn test_truncate_ttl() {
-        let dir = crate::gen_temp_dir().unwrap();
-        let db = CrawledDb::open(&dir).unwrap();
-
-        let url = Url::parse("https://example.com").unwrap();
-        db.insert(&url).unwrap();
-
-        assert!(db.has_crawled(&url).unwrap());
-
-        let ttl = Duration::from_secs(1);
-        std::thread::sleep(ttl + Duration::from_secs(1));
-
-        db.inner.lock().unwrap().truncate(ttl).unwrap();
-
-        assert!(!db.has_crawled(&url).unwrap());
+    fn test_truncate_ttl_and_refresh_with_controlled_clock() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(TestClock {
+            start: std::time::Instant::now(),
+            epoch: chrono::Utc::now(),
+            elapsed: std::sync::Mutex::new(Duration::ZERO),
+        });
+        let mut db = InnerDb::open_with_clock(dir.path(), clock.clone()).unwrap();
+        let a = Url::parse("https://example.org/a").unwrap();
+        let b = Url::parse("https://example.org/b").unwrap();
+        db.insert(&a).unwrap();
+        db.insert(&b).unwrap();
+        *clock.elapsed.lock().unwrap() = TTL - Duration::from_secs(1);
+        db.insert(&a).unwrap();
+        *clock.elapsed.lock().unwrap() = TTL + Duration::from_secs(1);
+        assert!(db.has_crawled(&a).unwrap());
+        assert!(!db.has_crawled(&b).unwrap());
+        db.truncate(TTL).unwrap();
+        assert!(db.has_crawled(&a).unwrap());
+        assert_eq!(
+            db.db
+                .begin_read()
+                .unwrap()
+                .open_table(TIMES_V2)
+                .unwrap()
+                .iter()
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     #[test]

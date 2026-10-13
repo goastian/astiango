@@ -37,6 +37,13 @@ use tracing::{debug, trace};
 pub mod capture;
 
 impl WarcRecord {
+    pub fn is_revalidation(&self) -> bool {
+        self.metadata
+            .capture
+            .as_ref()
+            .is_some_and(|capture| capture.revalidation.is_some())
+    }
+
     pub fn indexing_allowed(&self) -> bool {
         self.metadata
             .capture
@@ -297,7 +304,7 @@ impl Arbitrary for Request {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PayloadType {
     Html,
     Pdf,

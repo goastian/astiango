@@ -142,6 +142,7 @@ impl Centrality {
         let mut node_ids = graph.stream_page_node_ids().await;
 
         while let Some(node_id) = node_ids.next().await {
+            let node_id = node_id?;
             match original_centrality.get(&node_id)? {
                 Some(original_centrality) => {
                     harmonic.insert(node_id, original_centrality)?;

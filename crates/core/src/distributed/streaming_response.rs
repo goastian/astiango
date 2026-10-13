@@ -14,94 +14,32 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use futures::{pin_mut, Stream};
-
 use crate::Result;
-use std::{
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use futures::Stream;
+use std::{collections::VecDeque, future::Future};
 
 pub trait StreamingResponse: Unpin + Sized {
     type Item: Unpin;
-
     fn next_batch(&mut self) -> impl Future<Output = Result<Vec<Self::Item>>>;
-
-    fn stream(self) -> impl Stream<Item = Self::Item> {
-        StreamingResponseStream::new(self)
-    }
-}
-
-pub struct StreamingResponseStream<T>
-where
-    T: StreamingResponse,
-{
-    inner: T,
-    batch: Option<Vec<T::Item>>,
-}
-
-impl<T> StreamingResponseStream<T>
-where
-    T: StreamingResponse,
-{
-    fn new(inner: T) -> Self {
-        Self { inner, batch: None }
-    }
-}
-
-impl<T> Stream for StreamingResponseStream<T>
-where
-    T: StreamingResponse,
-{
-    type Item = T::Item;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-
-        if this.batch.is_none() {
-            let fut = this.inner.next_batch();
-            pin_mut!(fut);
-
-            match fut.poll(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(batch) => match batch {
-                    Ok(batch) => {
-                        if batch.is_empty() {
-                            return Poll::Ready(None);
-                        }
-                        this.batch = Some(batch);
-                    }
-                    Err(_) => return Poll::Ready(None),
-                },
-            }
-        }
-
-        match this.batch.as_mut() {
-            Some(batch) => {
+    fn stream(self) -> impl Stream<Item = Result<Self::Item>> + Unpin {
+        Box::pin(futures::stream::unfold(
+            (self, VecDeque::new(), false),
+            |(mut inner, mut batch, done)| async move {
+                if done {
+                    return None;
+                }
                 if batch.is_empty() {
-                    let fut = this.inner.next_batch();
-                    pin_mut!(fut);
-
-                    match fut.poll(cx) {
-                        Poll::Pending => return Poll::Pending,
-                        Poll::Ready(next_batch) => match next_batch {
-                            Ok(next_batch) => {
-                                if next_batch.is_empty() {
-                                    return Poll::Ready(None);
-                                }
-
-                                batch.extend(next_batch);
-                            }
-                            Err(_) => return Poll::Ready(None),
-                        },
+                    match inner.next_batch().await {
+                        Ok(items) if items.is_empty() => return None,
+                        Ok(items) => batch.extend(items),
+                        Err(error) => return Some((Err(error), (inner, batch, true))),
                     }
                 }
-
-                Poll::Ready(batch.pop())
-            }
-            None => Poll::Ready(None),
-        }
+                batch
+                    .pop_front()
+                    .map(|item| (Ok(item), (inner, batch, false)))
+            },
+        ))
     }
 }
 
@@ -146,16 +84,62 @@ mod tests {
             TestStreamingResponse::new(vec!["a".to_string(), "b".to_string(), "c".to_string()])
                 .stream();
 
-        assert_eq!(stream.next().await, Some("a".to_string()));
-        assert_eq!(stream.next().await, Some("b".to_string()));
-        assert_eq!(stream.next().await, Some("c".to_string()));
-        assert_eq!(stream.next().await, None);
+        assert_eq!(
+            stream.next().await.map(|r| r.unwrap()),
+            Some("a".to_string())
+        );
+        assert_eq!(
+            stream.next().await.map(|r| r.unwrap()),
+            Some("b".to_string())
+        );
+        assert_eq!(
+            stream.next().await.map(|r| r.unwrap()),
+            Some("c".to_string())
+        );
+        assert!(stream.next().await.is_none());
     }
 
     #[tokio::test]
     async fn test_empty_stream() {
         let mut stream = TestStreamingResponse::new(Vec::new()).stream();
 
-        assert_eq!(stream.next().await, None);
+        assert!(stream.next().await.is_none());
+    }
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::*;
+    use futures::StreamExt;
+    struct Delayed {
+        offset: usize,
+    }
+    impl StreamingResponse for Delayed {
+        type Item = usize;
+        async fn next_batch(&mut self) -> Result<Vec<usize>> {
+            tokio::task::yield_now().await;
+            if self.offset == 250 {
+                anyhow::bail!("controlled stream error");
+            }
+            let end = (self.offset + 100).min(250);
+            let result = (self.offset..end).collect();
+            self.offset = end;
+            Ok(result)
+        }
+    }
+    #[tokio::test]
+    async fn pending_preserves_future_cursor_order_and_error() {
+        let mut stream = Delayed { offset: 0 }.stream();
+        for expected in 0..250 {
+            assert_eq!(stream.next().await.unwrap().unwrap(), expected);
+        }
+        assert!(stream
+            .next()
+            .await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("controlled"));
+        assert!(stream.next().await.is_none());
     }
 }

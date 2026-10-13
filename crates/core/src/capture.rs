@@ -131,6 +131,14 @@ pub struct Robots {
 }
 
 impl Robots {
+    pub fn merge(&mut self, other: Self) {
+        self.no_index |= other.no_index;
+        self.no_follow |= other.no_follow;
+        for directive in other.directives {
+            self.add(directive, "");
+        }
+    }
+
     pub fn from_headers(response: &HttpResponse, agent: &str) -> Self {
         let mut result = Self::default();
         for value in response.values("x-robots-tag") {
@@ -201,6 +209,8 @@ impl Robots {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Metadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revalidation: Option<crate::crawler::recrawl::PayloadReference>,
     pub schema_version: u32,
     pub identity_version: u32,
     pub fetch_id: String,
@@ -235,6 +245,19 @@ impl Metadata {
             "unsupported URL identity version {}",
             self.identity_version
         );
+        if let Some(reference) = &self.revalidation {
+            anyhow::ensure!(
+                reference.version == 1
+                    && self.response.status == 304
+                    && self.payload_bytes == 0
+                    && self.decoded_bytes == 0
+                    && reference.record_end > reference.record_offset
+                    && reference.payload_sha256.len() == 64
+                    && reference.fetch_id != self.fetch_id,
+                "invalid 304 payload reference"
+            );
+            uuid::Uuid::parse_str(&reference.fetch_id).context("invalid prior fetch_id")?;
+        }
         uuid::Uuid::parse_str(&self.fetch_id).context("invalid capture fetch_id")?;
         anyhow::ensure!(
             self.decoded_limit_bytes > 0 && self.decoded_limit_bytes <= 128 * 1024 * 1024,
@@ -248,7 +271,7 @@ impl Metadata {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Capture {
     pub metadata: Metadata,
     pub payload: Arc<Vec<u8>>,
@@ -281,6 +304,7 @@ pub fn fixture(url: &Url, fetch_id: String, payload: Vec<u8>, headers: Vec<Heade
     let robots = Robots::from_headers(&response, DEFAULT_AGENT);
     Capture {
         metadata: Metadata {
+            revalidation: None,
             schema_version: VERSION,
             identity_version: IDENTITY_VERSION,
             fetch_id,

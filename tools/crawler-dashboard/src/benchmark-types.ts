@@ -188,3 +188,16 @@ export interface SchedulerBenchmarkReport {
   comparisons: Array<{ origins: number; speedup: number; throughput_gain_pct: number }>;
   acceptance: { passed: boolean; courtesy_violations: number; request_sets_match: boolean };
 }
+
+export interface ResilienceBenchmarkReport {
+  schema_version: 1;
+  kind: "crawler_resilience_benchmark";
+  generated_at: string;
+  code: { commit: string; source_sha256: string; dirty: boolean };
+  hardware: { platform: string; logical_cpus: number; memory: string };
+  configuration: { pages: number; rounds: number; repetitions: number; planner_cache_bytes: number };
+  scenarios: Array<{ name: string; mode?: string; urls?: number; repetitions: number; metrics: Record<string, Distribution>; runs: Array<Record<string, unknown>> }>;
+  comparisons: { body_bytes: number; cpu_ms: number; duration_ms: number; trap_requests?: number };
+  recovery: Array<{ urls: number; replayed_from: number; repetition: number }>;
+  acceptance: { passed: boolean };
+}

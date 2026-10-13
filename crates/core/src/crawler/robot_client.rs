@@ -152,13 +152,98 @@ pub struct RobotClient {
     pipeline: super::pipeline::Pipeline,
     config: Arc<CrawlerConfig>,
     runtime: Option<Arc<super::runtime::Runtime>>,
+    discovery_frontier: Option<Arc<super::frontier::Frontier>>,
 }
 
 impl RobotClient {
+    pub(crate) fn with_discovery_frontier(
+        mut self,
+        frontier: Arc<super::frontier::Frontier>,
+    ) -> Self {
+        self.discovery_frontier = Some(frontier);
+        self
+    }
+    pub(crate) fn discovery_frontier(&self) -> Option<Arc<super::frontier::Frontier>> {
+        self.discovery_frontier.clone()
+    }
+    pub(crate) fn discovery_config(&self) -> &super::discovery::Config {
+        &self.config.discovery
+    }
+    pub(crate) async fn discover_document(
+        &self,
+        source: Url,
+        body: AdmittedBody,
+        kind: Option<crate::feed::FeedKind>,
+    ) -> Result<Vec<super::discovery::Candidate>> {
+        let frontier = self.discovery_frontier.clone();
+        let limit = self.config.discovery.max_urls.min(512) as usize;
+        self.pipeline
+            .parse
+            .run(
+                body.len(),
+                move || -> anyhow::Result<Vec<super::discovery::Candidate>> {
+                    if let Some(frontier) = frontier {
+                        let report = match kind {
+                            Some(kind) => frontier.ingest_feed(&source, &body, kind)?,
+                            None => frontier.ingest_sitemap(&source, &body)?,
+                        };
+                        anyhow::ensure!(
+                            matches!(report.reason.as_str(), "complete" | "already_processed"),
+                            "discovery stopped: {}",
+                            report.reason
+                        );
+                        frontier.candidate_urls(&source, limit)
+                    } else {
+                        let mut candidates = Vec::new();
+                        let mut emit = |url, lastmod, sitemap| -> anyhow::Result<()> {
+                            anyhow::ensure!(
+                                candidates.len() < limit,
+                                "discovery candidate quota exceeded"
+                            );
+                            candidates.push(super::discovery::Candidate {
+                                url,
+                                source: source.clone(),
+                                discovered_at: chrono::Utc::now(),
+                                lastmod,
+                                sitemap,
+                                depth: 0,
+                            });
+                            Ok(())
+                        };
+                        match kind {
+                            Some(kind) => crate::feed::visit(&body, kind, |dated| {
+                                emit(dated.url, dated.last_modified, false)
+                            })?,
+                            None => {
+                                crate::sitemap::visit_sitemap(
+                                    body.as_bytes(),
+                                    |entry| match entry {
+                                        crate::sitemap::SitemapEntry::Url(dated) => {
+                                            emit(dated.url, dated.last_modified, false)
+                                        }
+                                        crate::sitemap::SitemapEntry::Sitemap(url) => {
+                                            emit(url, None, true)
+                                        }
+                                    },
+                                )?
+                            }
+                        };
+                        Ok(candidates)
+                    }
+                },
+            )
+            .await?
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn recrawl_config(&self) -> &super::recrawl::Config {
+        &self.config.recrawl
+    }
     pub(crate) fn agent_token(&self) -> &str {
         &self.config.user_agent.token
     }
     pub fn new(config: &CrawlerConfig) -> Result<Self> {
+        config.retry.validate()?;
         config.scheduler.validate()?;
         config.robots.validate(&config.body)?;
         let transport = SharedTransport::new(config, config.transport.clone())?;
@@ -168,6 +253,7 @@ impl RobotClient {
         transport.set_setup_stage(pipeline.network_setup.clone());
         Ok(Self {
             runtime: None,
+            discovery_frontier: None,
             robots_txt_manager: RobotsTxtManager::with_pipeline_readers(
                 config,
                 transport.clone(),
@@ -214,6 +300,7 @@ impl RobotClient {
             pipeline,
             config: Arc::new(config.clone()),
             runtime: Some(runtime),
+            discovery_frontier: None,
         })
     }
 
@@ -244,6 +331,7 @@ impl RobotClient {
             pipeline,
             config: Arc::new(config.clone()),
             runtime: None,
+            discovery_frontier: None,
         }
     }
 
@@ -348,6 +436,7 @@ impl RobotClient {
 }
 
 pub struct RequestBuilder {
+    headers: reqwest::header::HeaderMap,
     gated: Option<(super::scheduler::Scheduler, Url)>,
     permit: Option<Arc<super::scheduler::Permit>>,
     request: Option<reqwest::RequestBuilder>,
@@ -370,6 +459,7 @@ impl From<reqwest::RequestBuilder> for RequestBuilder {
 impl RequestBuilder {
     pub fn new(builder: reqwest::RequestBuilder) -> Self {
         Self {
+            headers: reqwest::header::HeaderMap::new(),
             request: Some(builder),
             gated: None,
             permit: None,
@@ -384,6 +474,7 @@ impl RequestBuilder {
         config: &CrawlerConfig,
     ) -> Self {
         Self {
+            headers: reqwest::header::HeaderMap::new(),
             request: None,
             gated: None,
             permit: None,
@@ -401,6 +492,7 @@ impl RequestBuilder {
 
     pub(crate) fn managed(transport: SharedTransport, url: Url) -> Self {
         Self {
+            headers: reqwest::header::HeaderMap::new(),
             request: None,
             gated: None,
             permit: None,
@@ -428,7 +520,11 @@ impl RequestBuilder {
     pub async fn send(mut self) -> Result<reqwest::Response> {
         self = self.prepare().await?;
         let permit = self.permit.take();
-        let response = self.send_inner().await?;
+        let result = self.send_inner().await;
+        if let Some(permit) = &permit {
+            permit.feedback(&result);
+        }
+        let response = result?;
         match permit {
             Some(permit) => super::scheduler::guard_response(response, permit),
             None => Ok(response),
@@ -439,16 +535,20 @@ impl RequestBuilder {
         if let Some((runtime, url, timeout, headers, total)) = self.injected {
             let total = timeout.map_or(total, |timeout| timeout.min(total));
             let started = std::time::Instant::now();
-            let mut response =
-                tokio::time::timeout(headers.min(total), runtime.http.send(url, Some(total)))
-                    .await
-                    .map_err(|_| {
-                        Error::Body(if headers < total {
-                            super::body::BodyError::HeadersTimeout
-                        } else {
-                            super::body::BodyError::TotalTimeout
-                        })
-                    })??;
+            let mut response = tokio::time::timeout(
+                headers.min(total),
+                runtime
+                    .http
+                    .send_with_headers(url, Some(total), self.headers.clone()),
+            )
+            .await
+            .map_err(|_| {
+                Error::Body(if headers < total {
+                    super::body::BodyError::HeadersTimeout
+                } else {
+                    super::body::BodyError::TotalTimeout
+                })
+            })??;
             response
                 .extensions_mut()
                 .insert(super::body::RequestDeadline {
@@ -458,7 +558,9 @@ impl RequestBuilder {
             return Ok(response);
         }
         if let Some((transport, url, timeout)) = self.managed {
-            return transport.send(url, timeout).await;
+            return transport
+                .send_with_headers(url, timeout, self.headers)
+                .await;
         }
         #[cfg(not(test))]
         {
@@ -474,6 +576,11 @@ impl RequestBuilder {
         }
     }
 
+    pub fn headers(mut self, headers: reqwest::header::HeaderMap) -> Self {
+        self.headers = headers.clone();
+        self.request = self.request.map(|request| request.headers(headers));
+        self
+    }
     pub fn timeout(mut self, timeout: Duration) -> Self {
         if let Some((_, _, value, _, _)) = &mut self.injected {
             *value = Some(timeout);

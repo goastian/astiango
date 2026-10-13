@@ -196,7 +196,8 @@ impl EntityIndexer {
         let mut index = EntityIndex::open(output_path)?;
         index.prepare_writer();
 
-        let mut image_bloom = bloom::BytesBloomFilter::new(1_000_000_000, 0.05);
+        let mut image_bloom =
+            bloom::BytesBloomFilter::with_memory_limit(1_000_000_000, 0.05, 128 * 1024 * 1024);
 
         let mut inserts = 0;
 

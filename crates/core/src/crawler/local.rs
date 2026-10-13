@@ -36,8 +36,18 @@ use super::{
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
+    pub retry: super::retry::Config,
+    #[serde(default)]
+    pub recrawl: super::recrawl::Config,
+    #[serde(default)]
+    pub discovery: super::discovery::Config,
+    #[serde(default)]
+    pub traps: super::traps::Config,
+    #[serde(default)]
     pub seeds: Vec<String>,
     pub seeds_file: Option<PathBuf>,
+    #[serde(default)]
+    pub plan_file: Option<PathBuf>,
     pub output_path: PathBuf,
     pub status_path: PathBuf,
     pub state_directory: Option<PathBuf>,
@@ -102,6 +112,10 @@ impl Config {
     }
 
     fn validate(&self) -> Result<()> {
+        self.retry.validate()?;
+        self.recrawl.validate()?;
+        self.discovery.validate()?;
+        self.traps.validate()?;
         self.scheduler.validate()?;
         self.transport.validate()?;
         self.body.validate()?;
@@ -135,6 +149,9 @@ impl Config {
     fn crawler_config(&self) -> CrawlerConfig {
         CrawlerConfig {
             num_worker_threads: self.num_worker_threads,
+            discovery: self.discovery.clone(),
+            retry: self.retry.clone(),
+            recrawl: self.recrawl.clone(),
             scheduler: self.scheduler.clone(),
             robots: self.robots.clone(),
             user_agent: self.user_agent.clone(),
@@ -294,6 +311,57 @@ impl LocalWarcSink {
 }
 
 impl DatumSink for LocalWarcSink {
+    async fn revalidation_state(
+        &self,
+        url: &Url,
+    ) -> super::Result<Option<super::recrawl::Resource>> {
+        let frontier = self.frontier.clone();
+        let url = url.clone();
+        Ok(self
+            .pipeline
+            .control
+            .run(url.as_str().len(), move || {
+                frontier.revalidation_state(&url)
+            })
+            .await??)
+    }
+
+    async fn ingest_sitemap(
+        &self,
+        source: Url,
+        body: super::body::AdmittedBody,
+    ) -> super::Result<Option<super::discovery::Report>> {
+        let frontier = self.frontier.clone();
+        let bytes = body.len();
+        let result = self
+            .pipeline
+            .parse
+            .run(bytes, move || frontier.ingest_sitemap(&source, &body))
+            .await??;
+        Ok(Some(result))
+    }
+
+    async fn authorize_request(
+        &self,
+        requested: &Url,
+        destination: &Url,
+        now: chrono::DateTime<Utc>,
+    ) -> super::Result<()> {
+        if self.segmented.is_none() {
+            return Ok(());
+        }
+        let frontier = self.frontier.clone();
+        let requested = requested.clone();
+        let destination = destination.clone();
+        self.pipeline
+            .control
+            .run_durable(
+                requested.as_str().len() + destination.as_str().len(),
+                move || frontier.authorize_request(&requested, &destination, now),
+            )
+            .await??
+    }
+
     async fn redirect_continuation(
         &self,
         url: &Url,
@@ -538,9 +606,16 @@ pub async fn run(config: Config) -> Result<()> {
         config.pages_per_domain,
         observer.clone(),
     )?);
+    frontier.configure_retry(&config.retry)?;
+    frontier.configure_recrawl(&config.recrawl)?;
+    frontier.configure_discovery(&config.discovery, &config.traps)?;
     observer.observe_frontier(frontier.metrics.clone());
     observer.observe_robots(client.robots_txt_manager().clone());
     frontier.discover(seeds.clone())?;
+    if let Some(path) = &config.plan_file {
+        frontier.import_plan(path)?;
+        frontier.promote_candidates()?;
+    }
     let commit_frontier = frontier.clone();
     let commit_observer = observer.clone();
     let segmented = Arc::new(
@@ -600,6 +675,7 @@ pub async fn run(config: Config) -> Result<()> {
     tokio::pin!(shutdown);
     let mut exhausted_at: Option<std::time::Instant> = None;
     let seeds = Arc::new(seeds);
+    let control_directory = Arc::new(config.state_directory().join("control"));
     let seed_bytes = seeds.iter().map(|url| url.as_str().len()).sum::<usize>();
     let outcome: Result<()> = async {
         loop {
@@ -609,11 +685,15 @@ pub async fn run(config: Config) -> Result<()> {
                 let frontier = frontier.clone();
                 let control = pipeline.control.clone();
                 let seeds = seeds.clone();
+                let control_directory = control_directory.clone();
                 let fair_turns = config.scheduler.mode == super::scheduler::Mode::FairTurns;
                 let restart = exhausted_at.is_some_and(|since| since.elapsed() >= Duration::from_secs(config.revisit_interval_seconds));
                 claims.spawn(async move {
                     control.run_durable(seed_bytes, move || {
+                        frontier.process_controls(&control_directory)?;
+                        frontier.requeue_recrawls(Utc::now())?;
                         if restart && frontier.is_empty() { frontier.restart_round(seeds.as_ref().clone())?; }
+                        frontier.promote_candidates()?;
                         let job = if fair_turns { frontier.claim_turn_at(Utc::now())? } else { frontier.claim()? };
                         Ok::<_, anyhow::Error>((job, frontier.is_empty(), frontier.next_eligible_at()?))
                     }).await.map_err(anyhow::Error::from)?
@@ -626,7 +706,7 @@ pub async fn run(config: Config) -> Result<()> {
                     cancellation.store(true, Ordering::Release);
                     pipeline.stop_admission();
                 }
-                _ = heartbeat.tick() => { observer.heartbeat(); }
+                _ = heartbeat.tick() => { observer.heartbeat(); if !shutting_down { can_claim = true; } }
                 _ = tokio::time::sleep_until(claim_due), if !can_claim && claims.is_empty() && jobs.len() < config.num_worker_threads && !shutting_down => { can_claim = true; }
                 result = claims.join_next(), if !claims.is_empty() => {
                     let (job, empty, eligible) = result.unwrap().context("Frontier task panicked")??;
