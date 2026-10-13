@@ -149,6 +149,7 @@ export interface BodyStats {
   max_reserved_bytes: number;
 }
 export interface Snapshot {
+  resources?: ResourceStats;
   scheduler?: SchedulerStats;
   robots?: RobotsStats;
   frontier_db?: FrontierDbStats;
@@ -170,7 +171,7 @@ export interface Snapshot {
   updated_at: string;
   started_at: string;
   finished_at: string | null;
-  phase: "running" | "idle" | "completed" | "stopped" | "failed";
+  phase: "running" | "idle" | "backpressure" | "completed" | "stopped" | "failed";
   user_agent: string;
   workers: number;
   min_crawl_delay_ms: number;
@@ -195,6 +196,15 @@ export interface Snapshot {
   history: { at: string; downloaded: number; failed: number; bytes: number }[];
 }
 
+export interface ResourceStats {
+  automatic: boolean; effective_cpus: number; rss_bytes: number; process_cpu_percent: number;
+  process_read_bytes: number; process_written_bytes: number;
+  memory_current_bytes: number | null; memory_limit_bytes: number;
+  disk_free_bytes: number; free_inodes: number; open_fds: number;
+  workers_allowed: number; workers_max: number; reason: string; adjustments: number;
+  network_bytes_today: number; daily_network_bytes: number; sampled_at: string;
+}
+
 export interface SchedulerStats {
   mode: "fair_turns" | "long_jobs";
   requests_admitted: number; requests_deferred: number; wait_ms: number;
@@ -204,6 +214,7 @@ export interface SchedulerStats {
 export interface RobotsStats {
   hits: number; misses: number; single_flight_waits: number; downloads: number;
   evictions: number; unreachable: number; unavailable: number; disallowed: number;
+  capacity_deferred?: number;
   entries: number; capacity: number; ttl_seconds: number; failure_ttl_seconds: number;
 }
 

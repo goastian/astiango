@@ -4,6 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isBenchmarkReport } from "./benchmark-report.mjs";
+import { snapshotCache, paginate, aggregateMetrics } from "./observability.mjs";
+import { resourceSeries } from "./series.mjs";
 
 const appDirectory = dirname(fileURLToPath(import.meta.url));
 const contentTypes = {
@@ -37,8 +39,13 @@ export function createDashboardServer({
     resolve(appDirectory, "../../data/crawler-local/status.json"),
   benchmarkPath = process.env.CRAWLER_BENCHMARK_PATH || null,
   distDirectory = resolve(appDirectory, "dist"),
+  seriesPath = process.env.CRAWLER_SERIES_PATH || null,
+  operationsPath = process.env.CRAWLER_OPERATIONS_PATH || resolve(appDirectory, "../../data/crawler-operations/report.json"),
+  soakPath = process.env.CRAWLER_SOAK_PATH || resolve(appDirectory, "../../data/crawler-operations/soak.json"),
 } = {}) {
   const distRoot = resolve(distDirectory);
+  const observations = snapshotCache(statePath);
+  const series = resourceSeries(seriesPath);
   return createServer(async (request, response) => {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "no-referrer");
@@ -71,6 +78,23 @@ export function createDashboardServer({
         status: "ok",
         service: "crawler-dashboard",
       });
+      return;
+    }
+    if (pathname === "/api/operations") {
+      try {
+        if ((await stat(operationsPath)).size > 1024 * 1024) throw new Error("Operations report exceeds size budget");
+        const report = JSON.parse(await readFile(operationsPath, "utf8"));
+        if (report.version !== 1 || report.kind !== "isolated_local_verification") throw new Error("Unsupported operations report");
+        let soak = null;
+        try {
+          if ((await stat(soakPath)).size > 65536) throw new Error("Soak report exceeds size budget");
+          soak = JSON.parse(await readFile(soakPath, "utf8"));
+          if (soak.version !== 1) throw new Error("Unsupported soak report");
+        } catch (error) { if (error.code !== "ENOENT") throw error; }
+        respondJson(response, 200, { report, soak });
+      } catch (error) {
+        respondJson(response, error.code === "ENOENT" ? 404 : 503, { code: "OPERATIONS_UNAVAILABLE", error: "Operational verification is unavailable." });
+      }
       return;
     }
     if (pathname === "/api/quarantine/release") {
@@ -120,35 +144,46 @@ export function createDashboardServer({
       }
       return;
     }
-    if (pathname === "/api/status") {
+    if (["/api/status", "/api/sites", "/api/events", "/api/series", "/metrics"].includes(pathname)) {
       try {
-        const [source, info] = await Promise.all([
-          readFile(statePath, "utf8"),
-          stat(statePath),
-        ]);
-        const snapshot = JSON.parse(source);
-        if (
-          snapshot.schema_version !== 1 ||
-          !Array.isArray(snapshot.sites) ||
-          !snapshot.counters
-        ) {
-          respondJson(response, 503, {
-            error: "El estado del crawler tiene un formato no compatible.",
-          });
+        const observation = await observations.get();
+        const { snapshot } = observation;
+        await series.observe(snapshot);
+        if (pathname === "/api/series") {
+          const run = new URL(request.url, "http://localhost").searchParams.get("run_id");
+          const data = series.read();
+          respondJson(response, 200, { ...data, samples: run ? data.samples.filter(sample => sample.run_id === run) : data.samples });
           return;
         }
-        respondJson(response, 200, {
-          snapshot,
-          meta: {
+        if (pathname === "/metrics") {
+          response.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8", "Cache-Control": "no-store" });
+          response.end(aggregateMetrics(snapshot, observations.counters));
+          return;
+        }
+        if (pathname !== "/api/status") {
+          try {
+            const parameters = new URL(request.url, "http://localhost").searchParams;
+            const rows = pathname === "/api/sites" ? snapshot.sites : snapshot.recent_events || [];
+            const fields = pathname === "/api/sites" ? ["host", "current_url"] : ["kind", "message", "host", "url"];
+            respondJson(response, 200, { run_id: snapshot.run_id, sampled_at: snapshot.updated_at, ...paginate(rows, parameters, fields) });
+          } catch (error) { respondJson(response, 400, { error: error.message }); }
+          return;
+        }
+        const meta = {
             read_at: new Date().toISOString(),
-            modified_at: info.mtime.toISOString(),
+            modified_at: observation.modifiedAt,
             process_alive: processAlive(snapshot.pid),
-          },
+            cache: { ...observations.counters },
+          };
+        response.writeHead(200, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store",
         });
+        response.end(`{"snapshot":${observation.source},"meta":${JSON.stringify(meta)}}`);
       } catch (error) {
         const missing = error.code === "ENOENT";
         respondJson(response, 503, {
-          error: missing
+          error: error.code === "STATE_SCHEMA" ? "El estado del crawler tiene un formato no compatible." : missing
             ? "El crawler todavía no ha publicado su estado."
             : "No se pudo leer el estado del crawler.",
           code: missing ? "STATE_UNAVAILABLE" : "STATE_UNREADABLE",

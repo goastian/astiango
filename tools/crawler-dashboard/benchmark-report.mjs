@@ -52,6 +52,7 @@ function signedDistribution(value) {
 }
 
 export function isBenchmarkReport(report) {
+  if (record(report) && report.kind === "crawler_resilience_benchmark") return isResilienceBenchmarkReport(report);
   if (record(report) && report.kind === "crawler_scheduler_benchmark") return isSchedulerBenchmarkReport(report);
   if (record(report) && report.kind === "crawler_capture_frontier_benchmark") return isCaptureFrontierBenchmarkReport(report);
   if (record(report) && report.kind === "crawler_spool_benchmark")
@@ -141,6 +142,29 @@ export function isBenchmarkReport(report) {
   )
     return false;
   return true;
+}
+
+function isResilienceBenchmarkReport(report) {
+  if (report.schema_version !== 1 || !Number.isFinite(Date.parse(report.generated_at)) ||
+      !record(report.configuration) || report.configuration.repetitions !== 3 ||
+      !count(report.configuration.pages) || report.configuration.pages === 0 ||
+      !count(report.configuration.planner_cache_bytes) || report.configuration.planner_cache_bytes === 0 ||
+      !record(report.code) || !/^[a-f0-9]{40}$/i.test(report.code.commit) ||
+      !/^[a-f0-9]{64}$/i.test(report.code.source_sha256) ||
+      !record(report.acceptance) || typeof report.acceptance.passed !== "boolean" ||
+      !record(report.comparisons) || !["body_bytes", "cpu_ms", "duration_ms"].every(key => finite(report.comparisons[key])) ||
+      !Object.values(report.comparisons).every(finite)) return false;
+  if (!Array.isArray(report.recovery) || report.recovery.length !== 3 ||
+      !report.recovery.every(row => record(row) && [1, 2, 3].includes(row.repetition) &&
+        count(row.urls) && row.urls > 0 && count(row.replayed_from) && row.replayed_from > 0) ||
+      new Set(report.recovery.map(row => row.repetition)).size !== 3) return false;
+  const names = ["recrawl", "planner", "discovery", "traps", "diversity"];
+  return Array.isArray(report.scenarios) && names.every(name => report.scenarios.some(row => record(row) && row.name === name)) &&
+    report.scenarios.every(row => record(row) && names.includes(row.name) && row.repetitions === 3 &&
+      record(row.metrics) && ["duration_ms", "cpu_ms", "rss_after_bytes"].every(key => distribution(row.metrics[key])) &&
+      Object.values(row.metrics).every(distribution) && Array.isArray(row.runs) && row.runs.length === 3 &&
+      row.runs.every(run => record(run) && [1, 2, 3].includes(run.repetition)) &&
+      new Set(row.runs.map(run => run.repetition)).size === 3);
 }
 
 export function isCaptureFrontierBenchmarkReport(report) {

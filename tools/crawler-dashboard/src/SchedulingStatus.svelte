@@ -38,6 +38,7 @@
           <div><dt>{$t("Aciertos de caché / descargas")}</dt><dd>{number(robots?.hits)} / {number(robots?.downloads)}</dd></div>
           <div><dt>{$t("Consultas simultáneas agrupadas")}</dt><dd>{number(robots?.single_flight_waits)}</dd></div>
           <div><dt>{$t("Entradas / cota")}</dt><dd>{number(robots?.entries)} / {number(robots?.capacity)}</dd></div>
+          <div><dt>{$t("Robots cache admission waits")}</dt><dd>{number(robots?.capacity_deferred)}</dd></div>
           <div><dt>{$t("TTL / revalidación de fallos · s")}</dt><dd>{number(robots?.ttl_seconds)} / {number(robots?.failure_ttl_seconds)}</dd></div>
           <div><dt>{$t("Fallos temporales / rutas excluidas")}</dt><dd>{number(robots?.unreachable)} / {number(robots?.disallowed)}</dd></div>
         </dl></section>

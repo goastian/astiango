@@ -19,6 +19,9 @@
   import CaptureFrontierStatus from "./CaptureFrontierStatus.svelte";
   import ResilienceStatus from "./ResilienceStatus.svelte";
   import SchedulingStatus from "./SchedulingStatus.svelte";
+  import ResourceStatus from "./ResourceStatus.svelte";
+  import OperationsStatus from "./OperationsStatus.svelte";
+  import PerformanceRates from "./PerformanceRates.svelte";
   import {
     buildHistoryBars,
     summarizeOutcomes,
@@ -83,6 +86,7 @@
     failed: "Fallido",
   };
   const phases = {
+    backpressure: "Admission paused by resource pressure",
     running: "En ejecución",
     idle: "Esperando sitios",
     completed: "Completado",
@@ -91,7 +95,7 @@
   };
   const snapshot = $derived(response?.snapshot);
   const activeProcess = $derived(
-    snapshot?.phase === "running" || snapshot?.phase === "idle",
+    snapshot?.phase === "running" || snapshot?.phase === "idle" || snapshot?.phase === "backpressure",
   );
   const stale = $derived(
     (snapshotAgeMs(snapshot, now) ?? 0) > 15_000,
@@ -1012,6 +1016,8 @@
         <ResilienceStatus {snapshot} />
         {#if !snapshot?.scheduler && !snapshot?.frontier_db}<div class="empty-view panel"><h2>{$t("Sin métricas de cola disponibles")}</h2><p>{$t("Esta ejecución todavía no publica el estado de sus políticas. Puedes consultar los sitios y la actividad registrados.")}</p><a href="#/crawler/sites">{$t("Consultar sitios")}</a></div>{/if}
       {:else if view === "performance"}
+        <ResourceStatus stats={snapshot?.resources} {paused} readError={!!error} />
+        <PerformanceRates runId={snapshot?.run_id} {paused} />
         <TelemetryStatus {snapshot} {now} readError={!!error} stale={stale && activeProcess} {paused} />
         <TransportStatus stats={snapshot?.transport} readError={!!error} stale={stale && activeProcess} />
         <BodyStatus stats={snapshot?.body} readError={!!error} stale={stale && activeProcess} />
@@ -1100,6 +1106,7 @@
       {:else if view === "not-found"}
         <section class="empty-view panel"><Icon name="components" size={30} /><h2>{$t("Esta vista no está disponible")}</h2><p>{$t("Usa la navegación para abrir una función del centro de control.")}</p><a class="button primary" href="#/overview">{$t("Volver a la vista general")}</a></section>
       {/if}
+      {#if view === "benchmarks"}<OperationsStatus />{/if}
       <BenchmarkPanel visible={view === "benchmarks"} />
       <footer class="page-footer"><span>AstianGO <span class="slash">/</span> {snapshot?.run_id ?? $t("Sin ejecución")}</span><span>{$t("Hora de Bogotá · Estado: {p0}", { p0: time(snapshot?.updated_at) })}</span></footer>
     </main>
