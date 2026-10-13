@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { getI18n } from "./i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import Icon from "./Icon.svelte";
   import type { ExtractionStats } from "./types";
   let { stats, readError, stale }: { stats?: ExtractionStats; readError: boolean; stale: boolean } = $props();
-  const number = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 });
+  const number = $derived(new Intl.NumberFormat($formatLocale, { maximumFractionDigits: 2 }));
   const display = (value: number | undefined) => value == null ? "—" : number.format(value);
   const groups = $derived([
     { title: "Extracción compartida", metrics: [
@@ -27,18 +30,16 @@
 
 {#if stats}
   <details class="panel extraction-panel">
-    <summary><strong>Enlaces y metadatos</strong>
-      <span class="extraction-summary">{display(stats.documents)} documentos · {display(stats.dom_parses)} parseos DOM</span>
-      <span class="extraction-toggle">Detalles <Icon name="chevron" size={16} /></span>
+    <summary><strong>{$t("Enlaces y metadatos")}</strong>
+      <span class="extraction-summary">{$t("{p0} documentos · {p1} parseos DOM", { p0: display(stats.documents), p1: display(stats.dom_parses) })}</span>
+      <span class="extraction-toggle">{$t("Detalles")} <Icon name="chevron" size={16} /></span>
     </summary>
     <div class="extraction-details">
-      <p>Una extracción comparte los enlaces de exploración y descubrimiento. Respeta base URL y robots meta.
-        Los límites se aplican durante la extracción; la CPU corresponde al análisis de HTML y enlaces de esta ejecución.
-        Las asignaciones por página y la comparación anterior se publican en el informe local de extracción.</p>
-      {#if readError || stale}<p class="extraction-notice">Se conserva la última lectura disponible de enlaces y metadatos.</p>{/if}
-      <div class="extraction-groups">{#each groups as group}<section aria-label={group.title}>
-        <h3>{group.title}</h3><dl>{#each group.metrics as metric}<div>
-          <dt>{metric.label}</dt><dd>{display(metric.value)}{metric.value != null && metric.unit ? ` ${metric.unit}` : ""}</dd>
+      <p>{$t("Una extracción comparte los enlaces de exploración y descubrimiento. Respeta base URL y robots meta. Los límites se aplican durante la extracción; la CPU corresponde al análisis de HTML y enlaces de esta ejecución. Las asignaciones por página y la comparación anterior se publican en el informe local de extracción.")}</p>
+      {#if readError || stale}<p class="extraction-notice">{$t("Se conserva la última lectura disponible de enlaces y metadatos.")}</p>{/if}
+      <div class="extraction-groups">{#each groups as group}<section aria-label={$t(group.title)}>
+        <h3>{$t(group.title)}</h3><dl>{#each group.metrics as metric}<div>
+          <dt>{$t(metric.label)}</dt><dd>{display(metric.value)}{metric.value != null && metric.unit ? ` ${metric.unit}` : ""}</dd>
         </div>{/each}</dl>
       </section>{/each}</div>
     </div>

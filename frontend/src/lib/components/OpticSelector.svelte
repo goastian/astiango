@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import { DEFAULT_OPTICS, opticKey } from '$lib/optics';
   import { opticsStore, opticsShowStore } from '$lib/stores';
   import Select from './Select.svelte';
@@ -19,15 +22,16 @@
   const optics = derived(opticsStore, ($optics) => [...$optics, ...DEFAULT_OPTICS]);
 
   $: options = [
-    { value: '', label: 'No Optic' },
+    { value: '', label: $t('No Optic') },
     ...$optics
       .filter((optic) => $opticsShowStore[opticKey(optic)])
-      .map((optic) => ({ value: optic.url, label: optic.name })),
+      .map((optic) => ({ value: optic.url, label: DEFAULT_OPTICS.some(item => item.url === optic.url) ? $t(optic.name) : optic.name })),
   ];
 </script>
 
 <div class="noscript:hidden m-0 flex h-full flex-col justify-center p-0">
   <Select
+    translateLabels={false}
     form="searchbar-form"
     id="optics-selector"
     name="optic"
@@ -35,6 +39,6 @@
     submitOnChange={searchOnChange}
     bind:value={selected}
     {options}
-    ariaLabel="Optic selector"
+    ariaLabel={$t("Optic selector")}
   />
 </div>

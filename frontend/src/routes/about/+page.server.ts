@@ -1,7 +1,8 @@
-import { loadMarkdown } from '$lib/server/articles';
+import { languageParameter, resolveLocale } from '../../../../packages/i18n';
+import { loadArticle } from '$lib/server/articles';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async () => {
-  const { md } = await loadMarkdown('src/routes/about/README.md');
+export const load: PageServerLoad = async ({ url }) => {
+  const { md } = await loadArticle('about', resolveLocale(url.searchParams.get(languageParameter)));
   return { md, globals: { title: 'About us' } };
 };

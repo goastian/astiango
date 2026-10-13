@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "./i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import Icon from "./Icon.svelte";
   import type { TransportStats } from "./types";
 
@@ -7,7 +10,7 @@
     readError: boolean;
     stale: boolean;
   } = $props();
-  const number = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 1 });
+  const number = $derived(new Intl.NumberFormat($formatLocale, { maximumFractionDigits: 1 }));
   const count = (value: number | undefined) => value == null ? "—" : number.format(value);
   const groups = $derived([
     { title: "Peticiones y cuerpos", metrics: [
@@ -58,29 +61,24 @@
 {#if stats}
   <details class="panel transport-panel">
     <summary>
-      <span class="transport-heading">HTTP y DNS</span>
-      <span class="transport-summary">{count(stats.requests_started)} peticiones iniciadas · {count(stats.clients_reused)} reutilizaciones de cliente</span>
-      <span class="transport-toggle">Detalles <Icon name="chevron" size={16} /></span>
+      <span class="transport-heading">{$t("HTTP y DNS")}</span>
+      <span class="transport-summary">{$t("{p0} peticiones iniciadas · {p1} reutilizaciones de cliente", { p0: count(stats.requests_started), p1: count(stats.clients_reused) })}</span>
+      <span class="transport-toggle">{$t("Detalles")} <Icon name="chevron" size={16} /></span>
     </summary>
     <div class="transport-details">
       <p>
-        Transporte compartido por páginas, robots y sitemaps. Los clientes del pool
-        pueden reutilizarse; estos contadores no miden conexiones TCP. Los tiempos
-        son acumulados y los cuerpos interrumpidos no equivalen a fallos de almacenamiento.
-        Los timeouts de petición incluyen la espera por DNS o por un cliente disponible.
-        Su desglose por conexión, cabeceras y plazo total no se suma de nuevo al total.
-        Una consulta al resolver del sistema puede terminar después de cancelar la petición.
+        {$t("Transporte compartido por páginas, robots y sitemaps. Los clientes del pool pueden reutilizarse; estos contadores no miden conexiones TCP. Los tiempos son acumulados y los cuerpos interrumpidos no equivalen a fallos de almacenamiento. Los timeouts de petición incluyen la espera por DNS o por un cliente disponible. Su desglose por conexión, cabeceras y plazo total no se suma de nuevo al total. Una consulta al resolver del sistema puede terminar después de cancelar la petición.")}
       </p>
       {#if readError || stale}
-        <p class="transport-notice">Se muestra la última lectura disponible del transporte.</p>
+        <p class="transport-notice">{$t("Se muestra la última lectura disponible del transporte.")}</p>
       {/if}
       <div class="transport-groups">
         {#each groups as group}
-          <section aria-label={group.title}>
-            <h3>{group.title}</h3>
+          <section aria-label={$t(group.title)}>
+            <h3>{$t(group.title)}</h3>
             <dl>
               {#each group.metrics as metric}
-                <div><dt>{metric.label}</dt><dd>{count(metric.value)}{metric.value != null && metric.unit ? ` ${metric.unit}` : ""}</dd></div>
+                <div><dt>{$t(metric.label)}</dt><dd>{count(metric.value)}{metric.value != null && metric.unit ? ` ${metric.unit}` : ""}</dd></div>
               {/each}
             </dl>
           </section>

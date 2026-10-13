@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import Select from '$lib/components/Select.svelte';
   import { postSearchStore } from '$lib/stores';
 
@@ -13,6 +16,6 @@
     bind:value={$postSearchStore}
     class="text-neutral-focus"
     {options}
-    ariaLabel="Select request type"
+    ariaLabel={$t("Select request type")}
   />
 </div>

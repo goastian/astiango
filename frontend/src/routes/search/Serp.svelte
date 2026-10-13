@@ -1,6 +1,11 @@
 <svelte:options accessors />
 
 <script lang="ts">
+  import { localizedHref, languageParameter } from '../../../../packages/i18n';
+
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import { type DisplayedWebpage } from '$lib/api';
   import type { SearchResults } from '$lib/search';
   import { onMount } from 'svelte';
@@ -72,7 +77,7 @@
 {/if}
 
 {#if results._type == 'websites'}
-  <h1 class="sr-only">Search Results</h1>
+  <h1 class="sr-only">{$t("Search Results")}</h1>
   <div class="qwant-serp">
     {#if results.spellCorrection}
       <SpellCorrection spellCorrection={results.spellCorrection} bind:this={spellCorrectElem} />
@@ -103,25 +108,25 @@
     <div class="pagination-wrap">
       <div class="pagination">
         {#if prevPageSearchParams}
-          <a href="/search?{prevPageSearchParams}" aria-label="Previous page">
+          <a href={localizedHref(`/search?${prevPageSearchParams}`, $locale)} aria-label={$t("Previous page")}>
             <ChevronLeft
               class="text-xl text-primary hover:text-primary-focus"
-              aria-label="Chevron left"
+              aria-label={$t("Chevron left")}
             />
           </a>
         {:else}
-          <ChevronLeft class="text-xl text-neutral" aria-label="Chevron left" />
+          <ChevronLeft class="text-xl text-neutral" aria-label={$t("Chevron left")} />
         {/if}
-        <div>Page {currentPage}</div>
+        <div>{$t("Page {p0}", { p0: currentPage })}</div>
         {#if nextPageSearchParams}
-          <a href="/search?{nextPageSearchParams}" aria-label="Next page">
+          <a href={localizedHref(`/search?${nextPageSearchParams}`, $locale)} aria-label={$t("Next page")}>
             <ChevronRight
               class="text-xl text-primary hover:text-primary-focus"
-              aria-label="Chevron right"
+              aria-label={$t("Chevron right")}
             />
           </a>
         {:else}
-          <ChevronRight class="text-xl text-neutral" aria-label="Chevron right" />
+          <ChevronRight class="text-xl text-neutral" aria-label={$t("Chevron right")} />
         {/if}
       </div>
     </div>

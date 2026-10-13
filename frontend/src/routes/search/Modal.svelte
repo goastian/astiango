@@ -22,6 +22,9 @@
 </script>
 
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import type { Ranking } from '$lib/rankings';
   import { hostRankingsStore } from '$lib/stores';
   import type { DisplayedWebpage, SignalEnumDiscriminants, SignalScore } from '$lib/api';
@@ -239,7 +242,7 @@
   }}
 >
   <div>
-    <h2 class="w-full text-center">Do you like results from</h2>
+    <h2 class="w-full text-center">{$t("Do you like results from")}</h2>
     <p class="w-full break-all text-center">
       {modal.site.site}?
     </p>
@@ -259,7 +262,7 @@
       {/each}
     </div>
     {#if signalGroups.length > 0}
-      <h3 class="mt-4 font-medium">Ranking Explanation</h3>
+      <h3 class="mt-4 font-medium">{$t("Ranking Explanation")}</h3>
       <div class="flex flex-col gap-y-1">
         {#each signalGroups.slice(0, 3) as { label, signals }}
           <SignalInfo {label} {signals} />

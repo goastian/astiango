@@ -1,4 +1,9 @@
 <script lang="ts">
+  import { localizedHref, languageParameter } from '../../../../packages/i18n';
+
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import { getApiBase, type DisplayedEntity } from '$lib/api';
   import EntitySnippet from '$lib/components/EntitySnippet.svelte';
   import ResultLink from './ResultLink.svelte';
@@ -29,12 +34,12 @@
     <div class="text-sm">
       <span><EntitySnippet snippet={entity.smallAbstract} /></span>{' '}
       <span class="italic">
-        source:{' '}
+        {$t("source:{p0}", { p0: ' ' })}
         <ResultLink
           _class="text-link visited:text-link-visited hover:underline"
           href="https://en.wikipedia.org/wiki/{encodeURI(entity.title)}"
         >
-          wikipedia
+          {$t("wikipedia")}
         </ResultLink>
       </span>
     </div>
@@ -52,18 +57,18 @@
     {/if}
     {#if entity.relatedEntities.length > 0}
       <div class="mt-5 flex w-full flex-col text-neutral">
-        <div class="font-light">Related Searches</div>
+        <div class="font-light">{$t("Related Searches")}</div>
         <ul class="flex overflow-auto">
           {#each entity.relatedEntities as related, index (`${index}-${related.title}`)}
             <li class="flex flex-col items-center p-4 hover:underline">
               <ResultLink
-                href="/search?q={encodeURIComponent(related.title)}"
+                href={localizedHref(`/search?q=${encodeURIComponent(related.title)}`, $locale)}
                 _class="flex flex-col items-center"
               >
                 {#if related.imageId != null}
                   <div class="h-20 w-20">
                     <img
-                      alt="Image of {related.title}"
+                      alt={$t("Image of {p0}", { p0: related.title })}
                       class="h-full w-full rounded-full object-cover"
                       src="{getApiBase()}/beta/api/entity_image?imageId={related.imageId}&maxWidth=200&maxHeight=200"
                     />

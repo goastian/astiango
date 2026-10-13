@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import type { ComponentType } from 'svelte';
   import InformationCircle from '~icons/heroicons/information-circle-20-solid';
   import CheckCircle from '~icons/heroicons/check-circle-20-solid';
@@ -40,7 +43,7 @@
       <div class="flex items-center space-x-1.5 pb-1 font-bold capitalize tracking-wide">
         <svelte:component this={icon} aria-label={iconLabel} />
         <span>
-          {title}
+          {$t(title)}
         </span>
         <div class="m-0 flex-1"></div>
         <slot name="top-right" />

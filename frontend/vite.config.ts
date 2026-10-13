@@ -36,7 +36,7 @@ export default defineConfig({
   },
   server: {
     fs: {
-      allow: ['../crates/client-wasm/pkg/'],
+      allow: [path.resolve(__dirname), path.resolve(__dirname, '../crates/client-wasm/pkg'), path.resolve(__dirname, '../packages/i18n')],
     },
   },
 });

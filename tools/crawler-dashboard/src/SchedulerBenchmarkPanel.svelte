@@ -1,20 +1,22 @@
 <script lang="ts">
+  import { getI18n } from "./i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import type { SchedulerBenchmarkReport } from "./benchmark-types";
   let { report }: { report: SchedulerBenchmarkReport } = $props();
-  const formatter = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 });
+  const formatter = $derived(new Intl.NumberFormat($formatLocale, { maximumFractionDigits: 2 }));
   const display = (value: number) => formatter.format(value);
 </script>
 <div class="scheduler-benchmark">
-  <p class="result">{report.acceptance.passed ? "Aceptación verificada" : "Aceptación pendiente"} · identidad, cortesía y robots · tres repeticiones por escenario</p>
-  <p>Dos trabajadores, el mismo conjunto de páginas y la misma demora mínima. HTTP y archivo WARC reales, con todos los endpoints en loopback.</p>
-  <div class="table-scroll"><table aria-label="Resultados de identidad, cortesía y robots"><thead><tr><th>Orígenes</th><th>Modelo</th><th>Páginas/s</th><th>Duración · ms</th><th>CPU · ms</th><th>RSS · MiB</th><th>Atraso p99 · ms</th></tr></thead>
-    <tbody>{#each report.summaries as row}<tr><td>{display(row.origins)}</td><td>{row.mode === "fair_turns" ? "Turnos cortos" : "Jobs largos"}</td>
+  <p class="result">{$t("{p0} · identidad, cortesía y robots · tres repeticiones por escenario", { p0: report.acceptance.passed ? "Aceptación verificada" : "Aceptación pendiente" })}</p>
+  <p>{$t("Dos trabajadores, el mismo conjunto de páginas y la misma demora mínima. HTTP y archivo WARC reales, con todos los endpoints en loopback.")}</p>
+  <div class="table-scroll"><table aria-label={$t("Resultados de identidad, cortesía y robots")}><thead><tr><th>{$t("Orígenes")}</th><th>{$t("Modelo")}</th><th>{$t("Páginas/s")}</th><th>{$t("Duración · ms")}</th><th>{$t("CPU · ms")}</th><th>{$t("RSS · MiB")}</th><th>{$t("Atraso p99 · ms")}</th></tr></thead>
+    <tbody>{#each report.summaries as row}<tr><td>{display(row.origins)}</td><td>{row.mode === "fair_turns" ? $t("Turnos cortos") : $t("Jobs largos")}</td>
       {#each ["pages_per_second", "duration_ms", "cpu_ms", "rss_peak_bytes", "ready_lag_p99_ms"] as key}<td>{display(row.metrics[key].median / (key === "rss_peak_bytes" ? 1048576 : 1))}
-        <small>MAD {display(row.metrics[key].mad / (key === "rss_peak_bytes" ? 1048576 : 1))}</small></td>{/each}
+        <small>{$t("MAD {p0}", { p0: display(row.metrics[key].mad / (key === "rss_peak_bytes" ? 1048576 : 1)) })}</small></td>{/each}
     </tr>{/each}</tbody></table></div>
-  <ul>{#each report.comparisons as row}<li>{display(row.origins)} orígenes: {display(row.speedup)}× páginas/s · mejora {display(row.throughput_gain_pct)} %.</li>{/each}</ul>
-  <p>{display(report.acceptance.courtesy_violations)} violaciones de cortesía. Contadores y conjuntos de peticiones contrastados con el servidor.
-    Estas ganancias corresponden al fixture dimensionado; Internet, almacenamiento y pocos orígenes pueden limitar el rendimiento.</p>
+  <ul>{#each report.comparisons as row}<li>{$t("{p0} orígenes: {p1}× páginas/s · mejora {p2} %.", { p0: display(row.origins), p1: display(row.speedup), p2: display(row.throughput_gain_pct) })}</li>{/each}</ul>
+  <p>{$t("{p0} violaciones de cortesía. Contadores y conjuntos de peticiones contrastados con el servidor. Estas ganancias corresponden al fixture dimensionado; Internet, almacenamiento y pocos orígenes pueden limitar el rendimiento.", { p0: display(report.acceptance.courtesy_violations) })}</p>
 </div>
 <style>
   p, li { font-size: 12px; line-height: 1.6; color: #697386; }

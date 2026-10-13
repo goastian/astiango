@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   export let audioBase64: string;
 
   $: playing = false;
@@ -32,7 +35,7 @@
 </script>
 
 <div>
-  <p class="text-xl">Write the numbers from the audio file below</p>
+  <p class="text-xl">{$t("Write the numbers from the audio file below")}</p>
   <audio bind:this={audio} src={audioBase64} on:ended={() => (playing = false)}>
     <source src={audioBase64} />
   </audio>
@@ -40,6 +43,6 @@
     type="button"
     class="h-16 w-full rounded bg-primary text-xl font-semibold text-primary-content"
     on:click={click}
-    bind:this={button}>PLAY</button
+    bind:this={button}>{$t("PLAY")}</button
   >
 </div>

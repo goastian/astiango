@@ -1,6 +1,10 @@
 <svelte:options accessors />
 
 <script lang="ts">
+  import { languageParameter } from '../../../../packages/i18n';
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import MagnifyingGlass from '~icons/heroicons/magnifying-glass';
   import { api, type HighlightedFragment } from '$lib/api';
   import { safeSearchStore, postSearchStore } from '$lib/stores';
@@ -96,6 +100,7 @@
   method={$postSearchStore ? 'POST' : 'GET'}
   bind:this={formElem}
 >
+  <input type="hidden" name={languageParameter} value={$locale} />
   <input type="hidden" value={$safeSearchStore ? 'true' : 'false'} name="ss" />
 
   <label
@@ -107,13 +112,13 @@
     aria-autocomplete="list"
     aria-expanded={suggestions.length > 0 && hasFocus}
   >
-    <MagnifyingGlass class="search-glyph" aria-label="Magnifying glass" />
+    <MagnifyingGlass class="search-glyph" aria-label={$t("Magnifying glass")} />
     <!-- svelte-ignore a11y-autofocus -->
     <input
       id="searchbar"
       name="q"
       {autofocus}
-      placeholder="Search the web privately"
+      placeholder={$t("Search the web privately")}
       autocomplete="off"
       aria-expanded={suggestions.length > 0 && hasFocus}
       class="search-input"
@@ -137,7 +142,7 @@
       on:keydown={onKeydown}
       bind:this={inputElem}
     />
-    <button class="search-submit" type="submit" aria-label="Search">
+    <button class="search-submit" type="submit" aria-label={$t("Search")}>
       <MagnifyingGlass aria-hidden="true" />
     </button>
 
@@ -173,7 +178,7 @@
                 }}
                 type="submit"
               >
-                <MagnifyingGlass class="suggestion-icon" aria-label="Magnifying glass" />
+                <MagnifyingGlass class="suggestion-icon" aria-label={$t("Magnifying glass")} />
                 <span>
                   {#each s as fragment}
                     {#if fragment.kind == 'highlighted'}

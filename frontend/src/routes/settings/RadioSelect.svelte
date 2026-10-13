@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import type { Writable } from 'svelte/store';
 
   const options = [
@@ -14,7 +17,7 @@
   {#each options as [name, state]}
     <label class="flex cursor-pointer flex-col items-center" for="{prefix}-{state}">
       <input type="radio" name={prefix} id="{prefix}-{state}" value={state} bind:group={$store} />
-      <span class="capitalize">{name}</span>
+      <span class="capitalize">{$t(name)}</span>
     </label>
   {/each}
 </div>

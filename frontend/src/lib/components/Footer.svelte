@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
+  import { localizedHref } from '../../../../packages/i18n';
   const footer = [
     ['/privacy-and-happy-lawyers', 'Terms & Privacy'],
     ['https://astiango.com/beta/api/docs/swagger', 'API'],
@@ -6,14 +10,14 @@
 </script>
 
 <footer class="site-footer">
-  <div class="footer-brand"><span>Astian</span><b>GO</b><small>Private search for the open web.</small></div>
-  <nav aria-label="Footer links">
+  <div class="footer-brand"><span>Astian</span><b>GO</b><small>{$t("Private search for the open web.")}</small></div>
+  <nav aria-label={$t("Footer links")}>
     {#each footer as [url, name]}
-      <a href={url} target={name === 'API' ? '_blank' : undefined} rel={name === 'API' ? 'noreferrer' : undefined}>{name}</a>
+      <a href={localizedHref(url, $locale)} target={name === 'API' ? '_blank' : undefined} rel={name === 'API' ? 'noreferrer' : undefined}>{$t(name)}</a>
     {/each}
-    <a href="/webmasters">Webmasters</a>
+    <a href={localizedHref('/webmasters', $locale)}>{$t("Webmasters")}</a>
   </nav>
-  <span class="copyright">© 2026 Astian</span>
+  <span class="copyright">{$t("© 2026 Astian")}</span>
 </footer>
 
 <style>

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import Select from './Select.svelte';
   import { themeStore } from '$lib/stores';
   import { THEMES } from '$lib/themes';
@@ -15,6 +18,6 @@
     class="text-neutral-focus"
     {options}
     id="theme"
-    ariaLabel="Select theme"
+    ariaLabel={$t("Select theme")}
   />
 </div>

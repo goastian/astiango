@@ -1,4 +1,9 @@
 <script lang="ts">
+  import { localizedHref, languageParameter } from '../../../../packages/i18n';
+
+  import { getI18n } from "$lib/i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import XMark from '~icons/heroicons/x-mark';
   import PlusCircleOutline from '~icons/heroicons/plus-circle';
   import ChevronDown from '~icons/heroicons/chevron-down';
@@ -16,7 +21,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
-  import { InvalidHostError, UnknownHostError } from '.';
+  import { InvalidHostError, UnknownHostError, InternalServerError } from '.';
 
   export let data: PageData;
 
@@ -29,10 +34,10 @@
 
   $: chosenHostString = chosenHosts.join(',');
 
-  $: {
-    api.webgraphHostSimilar({ hosts: chosenHosts, topN: limit }).data.then((res) => {
-      similarHosts = res;
-    });
+  $: if (browser && chosenHosts.length > 0) {
+    api.webgraphHostSimilar({ hosts: chosenHosts, topN: limit }).data
+      .then((res) => { similarHosts = res; })
+      .catch(() => { errorMessage = InternalServerError; });
   }
 
   $: {
@@ -103,9 +108,9 @@
   <div class="noscirpt:hidden flex w-full max-w-3xl flex-col">
     <div class="mb-4 flex flex-col items-center">
       <div class="mb-5 flex flex-col items-center space-y-1">
-        <h1 class="text-2xl font-bold">Explore the web</h1>
+        <h1 class="text-2xl font-bold">{$t("Explore the web")}</h1>
         <p class="text-center">
-          Find sites similar to your favorites and discover hidden gems you never knew existed.
+          {$t("Find sites similar to your favorites and discover hidden gems you never knew existed.")}
         </p>
       </div>
       <form
@@ -115,6 +120,7 @@
         id="site-input-container"
         on:submit|preventDefault={() => addWebsite(inputWebsite, true)}
       >
+      <input type="hidden" name={languageParameter} value={$locale} />
         <!-- svelte-ignore a11y-autofocus -->
         <input
           class="grow border-none bg-transparent outline-none placeholder:opacity-50 focus:ring-0"
@@ -122,27 +128,28 @@
           id="site-input"
           name="site"
           autofocus
-          placeholder="www.example.com"
+          placeholder={$t("www.example.com")}
           bind:value={inputWebsite}
         />
         <input class="hidden" type="text" name="chosenHosts" bind:value={chosenHostString} />
-        <Button>Add</Button>
+        <Button>{$t("Add")}</Button>
       </form>
       <noscript>
         <div class="mb-2">
           <form>
-            <Button pale kind="info">Clear All Sites</Button>
+      <input type="hidden" name={languageParameter} value={$locale} />
+            <Button pale kind="info">{$t("Clear All Sites")}</Button>
           </form>
         </div>
       </noscript>
       {#if errorMessage}
         <div class="my-2" transition:slide>
-          <Callout kind="warning" title="Unable to add page">
-            <button slot="top-right" on:click={() => (errorMessage = undefined)} title="Close">
-              <XMark aria-label="X-mark" />
+          <Callout kind="warning" title={$t("Unable to add page")}>
+            <button slot="top-right" on:click={() => (errorMessage = undefined)} title={$t("Close")}>
+              <XMark aria-label={$t("X-mark")} />
             </button>
 
-            {errorMessage}
+            {$t(errorMessage)}
           </Callout>
         </div>
       {/if}
@@ -160,7 +167,7 @@
     {#if chosenHosts.length > 0 && similarHosts.length > 0}
       <div class="flex flex-col space-y-4">
         <div class="grid grid-cols-[auto_auto_1fr_auto] items-center gap-5">
-          <h2 class="text-2xl font-bold">Similar sites</h2>
+          <h2 class="text-2xl font-bold">{$t("Similar sites")}</h2>
           <div class="flex space-x-1">
             <Select
               id="limit"
@@ -169,18 +176,18 @@
               class="cursor-pointer rounded border-none dark:bg-transparent"
               bind:value={limit}
               options={LIMIT_OPTIONS.map((value) => ({ value, label: value.toString() }))}
-              title="Limit number of similar sites shown"
+              title={$t("Limit number of similar sites shown")}
             />
           </div>
           <div></div>
-          <Button _class="noscript:hidden" on:click={exportAsOptic}>Export as optic</Button>
+          <Button _class="noscript:hidden" on:click={exportAsOptic}>{$t("Export as optic")}</Button>
         </div>
         <table class="w-full border-separate border-spacing-y-1">
           <thead>
             <tr class="text-left">
-              <th class="pb-2" aria-label="Add to search"></th>
-              <th class="pb-2">Similarity</th>
-              <th class="pb-2">Site</th>
+              <th class="pb-2" aria-label={$t("Add to search")}></th>
+              <th class="pb-2">{$t("Similarity")}</th>
+              <th class="pb-2">{$t("Site")}</th>
             </tr>
           </thead>
           <tbody>
@@ -197,17 +204,17 @@
                       chosenHosts.includes(host.host)
                         ? removeWebsite(host.host)
                         : addWebsite(host.host)}
-                    title={chosenHosts.includes(host.host) ? 'Remove from search' : 'Add to search'}
+                    title={chosenHosts.includes(host.host) ? $t("Remove from search") : $t("Add to search")}
                   >
                     <PlusCircleOutline
                       class={twJoin(
                         'text-xl text-success group-hover:scale-105 group-active:scale-95',
                       )}
-                      aria-label="Plus-mark"
+                      aria-label={$t("Plus-mark")}
                     />
                   </button>
                 </td>
-                <td class="px-2">{host.score.toFixed(2)}</td>
+                <td class="px-2">{host.score.toLocaleString($formatLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                 <td>
                   <a href="http://{host.host}" target="_blank" class="underline">{host.host}</a>
                 </td>
@@ -218,7 +225,7 @@
         <div class="noscript:hidden flex w-full justify-center">
           <button
             class="h-6 w-6 cursor-pointer rounded-full text-accent"
-            title="Show more similar sites"
+            title={$t("Show more similar sites")}
             on:click={() => {
               if (limit == LIMIT_OPTIONS[LIMIT_OPTIONS.length - 1]) {
                 return;
@@ -226,7 +233,7 @@
               limit = LIMIT_OPTIONS[LIMIT_OPTIONS.indexOf(limit) + 1];
             }}
           >
-            <ChevronDown aria-label="Chevron-down" />
+            <ChevronDown aria-label={$t("Chevron-down")} />
           </button>
         </div>
       </div>

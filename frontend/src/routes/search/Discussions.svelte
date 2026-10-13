@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import ChevronDown from '~icons/heroicons/chevron-down';
   import ChatBubbleLeftRight from '~icons/heroicons/chat-bubble-left-right-20-solid';
   import type { DisplayedWebpage } from '$lib/api';
@@ -34,8 +37,8 @@
 {#if shownDiscussions && shownDiscussions.length > 0}
   <div class="row-start-5 flex flex-col space-y-1.5 overflow-hidden">
     <div class="flex items-center space-x-1 text-lg">
-      <ChatBubbleLeftRight class="text-sm text-neutral" aria-label="Chat bubble" />
-      <span>Discussions</span>
+      <ChatBubbleLeftRight class="text-sm text-neutral" aria-label={$t("Chat bubble")} />
+      <span>{$t("Discussions")}</span>
     </div>
     <div class="flex flex-col">
       {#each shownDiscussions as discussion}
@@ -57,7 +60,7 @@
               <span>
                 <ChevronDown
                   class="text-sm transition group-open:rotate-180"
-                  aria-label="Chevron down"
+                  aria-label={$t("Chevron down")}
                 />
               </span>
             </summary>
@@ -75,7 +78,7 @@
       {/each}
       <div class="noscript:hidden mt-2">
         <Button _class="py-1" kind="neutral" pale on:click={() => (showMore = !showMore)}
-          >{showMore ? 'Show less' : 'Show more'}</Button
+          >{showMore ? $t("Show less") : $t("Show more")}</Button
         >
       </div>
     </div>

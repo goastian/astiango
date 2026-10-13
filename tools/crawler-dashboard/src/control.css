@@ -127,3 +127,6 @@ main > .transport-panel:first-child, main > .body-panel:first-child, main > .ext
   .empty-view { padding: 25px; }
 }
 @media (prefers-reduced-motion: reduce) { .nav-group a { transition: none; } }
+
+.sidebar-language { margin: auto 18px 14px; padding-top: 20px; }
+.sidebar-status { margin-top: 0; }

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import type { PartOfSpeech, ThesaurusWidget, WordMeaning } from '$lib/api';
   import ChevronDown from '~icons/heroicons/chevron-down';
   import ChevronUp from '~icons/heroicons/chevron-up';
@@ -56,7 +59,7 @@
       {#each nonExpandedMeanings as m}
         {#if m.type == 'pos'}
           <div class="text-sm italic">
-            {posName(m.pos)}
+            {$t(posName(m.pos))}
           </div>
         {:else if m.type == 'meaning'}
           <ThesaurusWidgetMeaning meaning={m.meaning} />
@@ -67,7 +70,7 @@
           {#each expandedMeanings as m}
             {#if m.type == 'pos'}
               <div class="text-sm italic">
-                {posName(m.pos)}
+                {$t(posName(m.pos))}
               </div>
             {:else if m.type == 'meaning'}
               <ThesaurusWidgetMeaning meaning={m.meaning} />
@@ -79,7 +82,7 @@
     {#if expandedMeanings.length > 0}
       <button
         class="h-6 w-6 cursor-pointer rounded-full text-primary"
-        aria-label={expanded ? 'Show less word definitions' : 'Show more word definitions'}
+        aria-label={expanded ? $t("Show less word definitions") : $t("Show more word definitions")}
         on:click={() => (expanded = !expanded)}
       >
         {#if expanded}
@@ -90,8 +93,8 @@
       </button>
     {/if}
     <div class="float-right mt-1 text-xs italic text-neutral">
-      Data from <a href="https://en-word.net/" class="hover:underline">Open English WordNet</a> and
-      <a href="https://wordnet.princeton.edu/" class="hover:underline">Princeton WordNet</a>
+      {$t("Data from")} <a href="https://en-word.net/" class="hover:underline">{$t("Open English WordNet")}</a> {$t("and")}
+      <a href="https://wordnet.princeton.edu/" class="hover:underline">{$t("Princeton WordNet")}</a>
     </div>
   </div>
 </div>

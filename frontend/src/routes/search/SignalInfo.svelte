@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import ChevronDown from '~icons/heroicons/chevron-down';
   import { match } from 'ts-pattern';
   import type { SignalLabel } from './Modal.svelte';
@@ -98,18 +101,18 @@
       <ChevronDown class="w-3 text-sm transition group-open:rotate-180" />
     </span>
     <div>
-      {signalInfo(label).title}
+      {$t(signalInfo(label).title)}
     </div>
   </summary>
-  <p class="text-sm">{signalInfo(label).description}</p>
+  <p class="text-sm">{$t(signalInfo(label).description)}</p>
   <div class="mb-2 mt-1 text-xs">
     <div class="flex flex-wrap gap-x-1 gap-y-1">
       {#each signals.slice(0, 3) as [signal, score]}
         <span
           class="rounded-full bg-base-200 px-2 text-center text-xs text-neutral-focus"
-          title="The '{signal.replace(/_/g, '-')}' signal has a score of {(
+          title={$t("The '{p0}' signal has a score of {p1}", { p0: signal.replace(/_/g, '-'), p1: (
             score.value * score.coefficient
-          ).toFixed(2)}"
+          ).toLocaleString($formatLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) })}
         >
           {signal.replace(/_/g, '-')}
         </span>

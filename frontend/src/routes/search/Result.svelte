@@ -1,6 +1,9 @@
 <svelte:options accessors />
 
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import AdjustVertical from '~icons/heroicons/adjustments-vertical';
   import type { DisplayedWebpage } from '$lib/api';
   import { createEventDispatcher } from 'svelte';
@@ -68,11 +71,11 @@
           <span class="ranking">
             <span>
               {#if ranking == 'liked'}
-                <div title="liked site" aria-label="you have liked this site">
+                <div title={$t("liked site")} aria-label={$t("you have liked this site")}>
                   <HandThumbUp class="w-3 text-success" />
                 </div>
               {:else if ranking == 'disliked'}
-                <div aria-label="you have disliked this site" title="disliked site">
+                <div aria-label={$t("you have disliked this site")} title={$t("disliked site")}>
                   <HandThumbDown class="w-3 text-warning" />
                 </div>
               {/if}
@@ -81,11 +84,11 @@
         {/if}
         <button
           class="result-menu"
-          aria-label="Open modal for result number: {resultIndex}"
+          aria-label={$t("Open modal for result number: {p0}", { p0: resultIndex })}
           bind:this={button}
           on:click|stopPropagation={() => dispatch('modal', button)}
         >
-          <AdjustVertical class="text-md" aria-label="3 vertical bars" />
+          <AdjustVertical class="text-md" aria-label={$t("3 vertical bars")} />
         </button>
       </div>
     </div>
@@ -102,23 +105,23 @@
               {#if webpage.likelyHasAds && $markPagesWithAdsStore && webpage.likelyHasPaywall && $markPagesWithPaywallStore}
                 <span
                   class="rounded border border-primary p-0.5 text-center text-xs text-neutral"
-                  title="page likely has ads and paywall"
+                  title={$t("page likely has ads and paywall")}
                 >
-                  has ads + paywall
+                  {$t("has ads + paywall")}
                 </span>
               {:else if webpage.likelyHasAds && $markPagesWithAdsStore}
                 <span
                   class="rounded border border-primary p-0.5 text-center text-xs text-neutral"
-                  title="page likely has ads"
+                  title={$t("page likely has ads")}
                 >
-                  has ads
+                  {$t("has ads")}
                 </span>
               {:else if webpage.likelyHasPaywall && $markPagesWithPaywallStore}
                 <span
                   class="rounded border border-primary p-0.5 text-center text-xs text-neutral"
-                  title="page likely has paywall"
+                  title={$t("page likely has paywall")}
                 >
-                  paywall
+                  {$t("paywall")}
                 </span>
               {/if}
               {#if webpage.snippet.date}

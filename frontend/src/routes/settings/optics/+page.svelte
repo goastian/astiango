@@ -1,4 +1,9 @@
 <script lang="ts">
+  import { localizedHref, languageParameter } from '../../../../../packages/i18n';
+
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import MinusCircle from '~icons/heroicons/minus-circle';
   import EyeSlash from '~icons/heroicons/eye-slash';
   import Eye from '~icons/heroicons/eye';
@@ -80,26 +85,22 @@
 
 <div class="space-y-16">
   <div class="space-y-3">
-    <h1 class="text-2xl font-medium">Manage Optics</h1>
+    <h1 class="text-2xl font-medium">{$t("Manage Optics")}</h1>
     <div class="text-sm">
-      Optics lets you control almost everything about which search results that gets returned to
-      you. You can discard results from specific sites, boost results from other sites and much
-      more.
+      {$t("Optics lets you control almost everything about which search results that gets returned to you. You can discard results from specific sites, boost results from other sites and much more.")}
     </div>
     <div class="text-sm">
-      See our
+      {$t("See our")}
       <a
         href="https://github.com/goastian/sample-optics/blob/main/quickstart.optic"
         class="inline-flex font-medium underline"
       >
-        quickstart
+        {$t("quickstart")}
       </a>
-      for how to get started. Once you have developed your optic, you can add it here to be used during
-      your search.
+      {$t("for how to get started. Once you have developed your optic, you can add it here to be used during your search.")}
     </div>
     <div class="text-sm">
-      Simply host the optic on a url that returns a plain-text HTTP response with the optic. We use
-      raw.githubusercontent.com, but you are free to host them elsewhere.
+      {$t("Simply host the optic on a url that returns a plain-text HTTP response with the optic. We use raw.githubusercontent.com, but you are free to host them elsewhere.")}
     </div>
   </div>
 
@@ -108,31 +109,31 @@
       class="noscript:hidden grid w-full grid-cols-[1fr_1fr_5rem] gap-x-5 gap-y-2 px-8 [&>input]:rounded [&>input]:border-none [&>input]:bg-transparent"
       on:submit|preventDefault={addOptic}
     >
+      <input type="hidden" name={languageParameter} value={$locale} />
       <input
         type="text"
         required
-        placeholder="Name"
+        placeholder={$t("Name")}
         name="Name"
         autocomplete="off"
         bind:value={name}
         lang="en"
       />
-      <input type="url" required placeholder="Url" name="Url" bind:value={url} lang="en" />
-      <Button title="Add optic">Add</Button>
+      <input type="url" required placeholder={$t("Url")} name="Url" bind:value={url} lang="en" />
+      <Button title={$t("Add optic")}>{$t("Add")}</Button>
       <input
         class="col-span-2"
         type="text"
         name="Description"
-        placeholder="Description"
+        placeholder={$t("Description")}
         bind:value={description}
         lang="en"
       />
     </form>
     {#if error}
-      <Callout kind="error" title="Validating optic failed">
+      <Callout kind="error" title={$t("Validating optic failed")}>
         <p>
-          Failed while trying to <code class="text-sm">fetch</code> the optic url. Check your browser
-          console for details.
+          {$t("Failed while trying to")} <code class="text-sm">fetch</code> {$t("the optic url. Check your browser console for details.")}
         </p>
       </Callout>
     {/if}
@@ -140,22 +141,22 @@
       <div class="grid w-full grid-cols-[auto_auto_1fr_2fr_auto] gap-5" id="optics-list">
         <span></span>
         <span></span>
-        <div class="flex-1 font-medium">Name</div>
-        <div class="flex-1 font-medium">Description</div>
-        <div class="flex-1 font-medium">Link</div>
+        <div class="flex-1 font-medium">{$t("Name")}</div>
+        <div class="flex-1 font-medium">{$t("Description")}</div>
+        <div class="flex-1 font-medium">{$t("Link")}</div>
         {#each $optics as { optic, removable }}
           <button
             class="group flex w-6 items-start !bg-transparent"
             on:click={removeOptic(optic)}
             disabled={!removable}
-            title="Remove optic"
+            title={$t("Remove optic")}
           >
             <MinusCircle
               class="text-neutral transition group-enabled:text-error group-enabled:group-hover:text-error"
-              aria-label="Minus with circle around it"
+              aria-label={$t("Minus with circle around it")}
             />
           </button>
-          <label class="flex w-6 items-start hover:cursor-pointer" title="Show/hide in UI">
+          <label class="flex w-6 items-start hover:cursor-pointer" title={$t("Show/hide in UI")}>
             <button class="m-0 flex w-6 p-0">
               <input
                 type="checkbox"
@@ -164,11 +165,11 @@
               />
               <EyeSlash
                 class="inline-flex text-neutral transition peer-checked:hidden"
-                aria-label="Eye slash"
+                aria-label={$t("Eye slash")}
               />
               <Eye
                 class="hidden text-neutral transition peer-checked:inline-flex"
-                aria-label="Eye"
+                aria-label={$t("Eye")}
               />
             </button>
           </label>
@@ -177,7 +178,7 @@
             {optic.description}
           </div>
           <div class="text-sm font-medium underline">
-            <a href={optic.url}>Source</a>
+            <a href={optic.url}>{$t("Source")}</a>
           </div>
         {/each}
       </div>

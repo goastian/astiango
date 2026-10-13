@@ -1,4 +1,7 @@
 <script lang="ts" generics="T">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import { createEventDispatcher } from 'svelte';
 
   // eslint-disable-next-line no-undef
@@ -11,9 +14,11 @@
     submitOnChange?: boolean;
     options: Option[];
     ariaLabel?: string;
+    translateLabels?: boolean;
     id?: string;
   }
 
+  export let translateLabels = true;
   export let value: T; // eslint-disable-line no-undef
   export let form: string | undefined = void 0;
   export let submitOnChange = false;
@@ -41,8 +46,8 @@
     }}
   >
     {#each options as option}
-      <option value={option.value} selected={option.value == value} title={option.title}
-        >{option.label}</option
+      <option value={option.value} selected={option.value == value} title={option.title ? $t(option.title) : undefined}
+        >{translateLabels ? $t(option.label) : option.label}</option
       >
     {/each}
   </select>

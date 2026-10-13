@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import { createEventDispatcher } from 'svelte';
   import { twMerge } from 'tailwind-merge';
 
@@ -29,8 +32,8 @@
       'noscript:hidden rounded-r-lg transition hover:bg-secondary-focus',
     )}
     on:click|preventDefault={() => dispatch('delete')}
-    title="Remove site"
+    title={$t("Remove site")}
   >
-    <span class="px-2"> × </span>
+    <span class="px-2"> {$t("×")} </span>
   </button>
 </span>

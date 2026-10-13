@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { getI18n } from "./i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import Icon from "./Icon.svelte";
   import type { FrontierDbStats, SpoolStats } from "./types";
   let { frontier, spool }: { frontier?: FrontierDbStats; spool?: SpoolStats } = $props();
-  const number = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 });
+  const number = $derived(new Intl.NumberFormat($formatLocale, { maximumFractionDigits: 2 }));
   const display = (value: number) => number.format(value);
   const mib = (value: number) => display(value / 1024 / 1024) + " MiB";
   const rows = $derived(frontier ? [
@@ -18,23 +21,22 @@
 </script>
 {#if frontier || spool?.capture_records !== undefined}
   <details class="panel capture-frontier-panel">
-    <summary><strong>Captura HTTP y frontera transaccional</strong>
-      <span class="summary">{frontier ? display(frontier.urls) + " URLs conservadas" : "Captura WARC 1.1"}</span>
-      <span class="toggle">Detalles <Icon name="chevron" size={16} /></span>
+    <summary><strong>{$t("Captura HTTP y frontera transaccional")}</strong>
+      <span class="summary">{frontier ? $t("{p0} URLs conservadas", { p0: display(frontier.urls) }) : $t("Captura WARC 1.1")}</span>
+      <span class="toggle">{$t("Detalles")} <Icon name="chevron" size={16} /></span>
     </summary>
-    <div class="content"><p>La captura conserva el cuerpo recibido y su SHA-256 antes de decodificarlo. Las decisiones de indexación acompañan al archivo.
-      Cada reserva, archivo y commit comparte un identificador; la recuperación también publica los enlaces pendientes.</p>
+    <div class="content"><p>{$t("La captura conserva el cuerpo recibido y su SHA-256 antes de decodificarlo. Las decisiones de indexación acompañan al archivo. Cada reserva, archivo y commit comparte un identificador; la recuperación también publica los enlaces pendientes.")}</p>
       <div class="groups">
-        {#if spool?.capture_records !== undefined}<section aria-label="Captura HTTP"><h3>Capturas de esta ejecución</h3><dl>
-          <div><dt>Capturas WARC 1.1 durables</dt><dd>{display(spool.capture_records)}</dd></div>
-          <div><dt>Representación recibida</dt><dd>{mib(spool.captured_payload_bytes ?? 0)}</dd></div>
-          <div><dt>Vista decodificada</dt><dd>{mib(spool.decoded_payload_bytes ?? 0)}</dd></div>
-          <div><dt>Archivadas con noindex</dt><dd>{display(spool.noindex_records ?? 0)}</dd></div>
-          <div><dt>Archivadas con nofollow</dt><dd>{display(spool.nofollow_records ?? 0)}</dd></div>
-        </dl><p>Noindex permite archivar la respuesta y excluye su contenido del índice. Nofollow excluye sus enlaces del descubrimiento y del webgraph.</p></section>{/if}
-        {#if frontier}<section aria-label="Frontier durable"><h3>Frontera durable · redb</h3><dl>
-          {#each rows as [label, value]}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}
-        </dl><p>Estos totales pertenecen al estado conservado entre reinicios. Los jobs procesados en migración incluyen sus relecturas tras una caída; las URLs se conservan una sola vez. Los resultados del banco local aparecen en su propia pestaña.</p></section>{/if}
+        {#if spool?.capture_records !== undefined}<section aria-label={$t("Captura HTTP")}><h3>{$t("Capturas de esta ejecución")}</h3><dl>
+          <div><dt>{$t("Capturas WARC 1.1 durables")}</dt><dd>{display(spool.capture_records)}</dd></div>
+          <div><dt>{$t("Representación recibida")}</dt><dd>{mib(spool.captured_payload_bytes ?? 0)}</dd></div>
+          <div><dt>{$t("Vista decodificada")}</dt><dd>{mib(spool.decoded_payload_bytes ?? 0)}</dd></div>
+          <div><dt>{$t("Archivadas con noindex")}</dt><dd>{display(spool.noindex_records ?? 0)}</dd></div>
+          <div><dt>{$t("Archivadas con nofollow")}</dt><dd>{display(spool.nofollow_records ?? 0)}</dd></div>
+        </dl><p>{$t("Noindex permite archivar la respuesta y excluye su contenido del índice. Nofollow excluye sus enlaces del descubrimiento y del webgraph.")}</p></section>{/if}
+        {#if frontier}<section aria-label={$t("Frontier durable")}><h3>{$t("Frontera durable · redb")}</h3><dl>
+          {#each rows as [label, value]}<div><dt>{$t(label)}</dt><dd>{$t(value)}</dd></div>{/each}
+        </dl><p>{$t("Estos totales pertenecen al estado conservado entre reinicios. Los jobs procesados en migración incluyen sus relecturas tras una caída; las URLs se conservan una sola vez. Los resultados del banco local aparecen en su propia pestaña.")}</p></section>{/if}
       </div>
     </div>
   </details>

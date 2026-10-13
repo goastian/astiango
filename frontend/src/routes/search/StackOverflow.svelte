@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import HandThumbUp from '~icons/heroicons/hand-thumb-up';
   import type { StackOverflowAnswer } from '$lib/api';
   import Code from '$lib/components/Code.svelte';

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "./i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import Icon from "./Icon.svelte";
   import type { BodyStats } from "./types";
 
@@ -7,7 +10,7 @@
     readError: boolean;
     stale: boolean;
   } = $props();
-  const number = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 1 });
+  const number = $derived(new Intl.NumberFormat($formatLocale, { maximumFractionDigits: 1 }));
   const count = (value: number | undefined) => value == null ? "—" : number.format(value);
   const groups = $derived([
     { title: "Admisión", metrics: [
@@ -47,23 +50,20 @@
 {#if stats}
   <details class="panel body-panel">
     <summary>
-      <span class="body-heading">Admisión y cuerpos</span>
-      <span class="body-summary">{count(stats.bodies_admitted)} admitidos · {count(stats.active_bodies)} con reserva activa</span>
-      <span class="body-toggle">Detalles <Icon name="chevron" size={16} /></span>
+      <span class="body-heading">{$t("Admisión y cuerpos")}</span>
+      <span class="body-summary">{$t("{p0} admitidos · {p1} con reserva activa", { p0: count(stats.bodies_admitted), p1: count(stats.active_bodies) })}</span>
+      <span class="body-toggle">{$t("Detalles")} <Icon name="chevron" size={16} /></span>
     </summary>
     <div class="body-details">
       <p>
-        La reserva cubre los buffers del cuerpo hasta terminar su procesamiento;
-        no representa toda la memoria del proceso. Los bytes recibidos incluyen
-        el bloque que cruza una cuota; los bytes de texto cuentan el UTF-8 admitido.
-        Los rechazos y fallos de lectura no son fallos al guardar WARC.
+        {$t("La reserva cubre los buffers del cuerpo hasta terminar su procesamiento; no representa toda la memoria del proceso. Los bytes recibidos incluyen el bloque que cruza una cuota; los bytes de texto cuentan el UTF-8 admitido. Los rechazos y fallos de lectura no son fallos al guardar WARC.")}
       </p>
-      {#if readError || stale}<p class="body-notice">Se conserva la última lectura disponible de admisión y cuerpos.</p>{/if}
+      {#if readError || stale}<p class="body-notice">{$t("Se conserva la última lectura disponible de admisión y cuerpos.")}</p>{/if}
       <div class="body-groups">
-        {#each groups as group}<section aria-label={group.title}>
-          <h3>{group.title}</h3>
+        {#each groups as group}<section aria-label={$t(group.title)}>
+          <h3>{$t(group.title)}</h3>
           <dl>{#each group.metrics as metric}<div>
-            <dt>{metric.label}</dt><dd>{count(metric.value)}{metric.value != null && metric.unit ? ` ${metric.unit}` : ""}</dd>
+            <dt>{$t(metric.label)}</dt><dd>{count(metric.value)}{metric.value != null && metric.unit ? ` ${metric.unit}` : ""}</dd>
           </div>{/each}</dl>
         </section>{/each}
       </div>

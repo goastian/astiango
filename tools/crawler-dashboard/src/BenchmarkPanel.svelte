@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "./i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import { onMount } from "svelte";
   import { benchmarkNames } from "./navigation";
   import ResilienceBenchmarkPanel from "./ResilienceBenchmarkPanel.svelte";
@@ -44,9 +47,9 @@
   const selected = $derived(report?.scenarios[selectedIndex]);
   const profile = $derived(resilienceReport ? "C14–C20" : schedulerReport ? "C11–C13" : captureFrontierReport ? "C09–C10" : spoolReport ? "C08" : pipelineReport ? "C07" : extractionReport ? "C06" : bodyReport ? "C05" : transportReport ? "C04" : report?.configuration.acceptance_profile === "c03" ? "C03" : report?.configuration.acceptance_profile === "c02" ? "C02" : "C01");
   const name = $derived(benchmarkNames[profile] ?? "Capacidad y recursos");
-  const formatter = new Intl.NumberFormat("es-CO", {
+  const formatter = $derived(new Intl.NumberFormat($formatLocale, {
     maximumFractionDigits: 2,
-  });
+  }));
   const stageNames: Record<string, string> = {
     dns: "DNS",
     http_headers: "Red · cabeceras HTTP",
@@ -87,7 +90,7 @@
       ? entries
           .map(
             ([key, count]) =>
-              `${errorNames[key] ?? key.replaceAll("_", " ")}: ${display(count)}`,
+              `${$t(errorNames[key] ?? key.replaceAll("_", " "))}: ${display(count)}`,
           )
           .join(" · ")
       : "Sin errores registrados";
@@ -133,7 +136,7 @@
       : "Sin observador";
   }
   function date(value: string) {
-    return new Intl.DateTimeFormat("es-CO", {
+    return new Intl.DateTimeFormat($formatLocale, {
       dateStyle: "medium",
       timeStyle: "short",
       timeZone: "America/Bogota",
@@ -234,8 +237,8 @@
     );
     const link = document.createElement("a");
     link.href = url;
-    const slug = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    link.download = `crawler-${slug}-${Date.parse(currentReport.generated_at)}.json`;
+    const slug = $t(name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    link.download = `crawler-${slug || "measurements"}-${Date.parse(currentReport.generated_at)}.json`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -259,29 +262,29 @@
   >
     <div class="benchmark-heading">
       <div>
-        <span class="benchmark-eyebrow">Mediciones locales</span>
-        <h2 id="benchmark-heading">{enabled ? name : "Pruebas de capacidad"}</h2>
+        <span class="benchmark-eyebrow">{$t("Mediciones locales")}</span>
+        <h2 id="benchmark-heading">{enabled ? $t(name) : $t("Pruebas de capacidad")}</h2>
         <p>
-          {#if resilienceReport}Revalidación HTTP, cuotas y planificación recuperable con tráfico controlado local.
-          {:else if schedulerReport}Turnos por origen y cortesía verificada desde el servidor local. Fixtures separados del estado operativo.
-          {:else if captureFrontierReport}Captura HTTP, recuperación y frontera con caché fija. Las pruebas permanecen fuera del estado operativo.
-          {:else if spoolReport}Archivo de corpus local y publicación S3 controlada en loopback. Los documentos de prueba pertenecen exclusivamente a este informe.
-          {:else if extractionReport}Pruebas de extracción con archivos locales, sin solicitudes de red.
-          {:else}Pruebas controladas en loopback. Sus peticiones y páginas pertenecen exclusivamente a este informe.{/if}
+          {#if resilienceReport}{$t("Revalidación HTTP, cuotas y planificación recuperable con tráfico controlado local.")}
+          {:else if schedulerReport}{$t("Turnos por origen y cortesía verificada desde el servidor local. Fixtures separados del estado operativo.")}
+          {:else if captureFrontierReport}{$t("Captura HTTP, recuperación y frontera con caché fija. Las pruebas permanecen fuera del estado operativo.")}
+          {:else if spoolReport}{$t("Archivo de corpus local y publicación S3 controlada en loopback. Los documentos de prueba pertenecen exclusivamente a este informe.")}
+          {:else if extractionReport}{$t("Pruebas de extracción con archivos locales, sin solicitudes de red.")}
+          {:else}{$t("Pruebas controladas en loopback. Sus peticiones y páginas pertenecen exclusivamente a este informe.")}{/if}
         </p>
       </div>
       <div class="benchmark-actions">
         <button class="button" onclick={refresh} disabled={loading}
-          >Actualizar mediciones</button
+          >{$t("Actualizar mediciones")}</button
         >
         <button class="button" onclick={download} disabled={!resilienceReport && !report && !transportReport && !bodyReport && !extractionReport && !pipelineReport && !spoolReport && !captureFrontierReport && !schedulerReport}
-          >Descargar mediciones</button
+          >{$t("Descargar mediciones")}</button
         >
       </div>
     </div>
     {#if error}<p class="benchmark-error" role="status">
-        {error}
-        {resilienceReport || report || transportReport || bodyReport || extractionReport || pipelineReport || spoolReport || captureFrontierReport || schedulerReport ? "Se conserva el último informe leído." : ""}
+        {$t(error)}
+        {resilienceReport || report || transportReport || bodyReport || extractionReport || pipelineReport || spoolReport || captureFrontierReport || schedulerReport ? $t("Se conserva el último informe leído.") : ""}
       </p>{/if}
     {#if resilienceReport}
       <ResilienceBenchmarkPanel report={resilienceReport} />
@@ -302,41 +305,35 @@
     {:else if report}
       <div class="benchmark-summary">
         <span class="benchmark-result" class:passed={report.acceptance.passed}>
-          {report.acceptance.passed
-            ? "Aceptación verificada"
-            : "Aceptación pendiente"}
+          {report.acceptance.passed ? $t("Aceptación verificada") : $t("Aceptación pendiente")}
         </span>
         <span
-          >{report.scenarios.length} escenarios · {date(report.generated_at)} (Bogotá)</span
+          >{$t("{p0} escenarios · {p1} (Bogotá)", { p0: report.scenarios.length, p1: date(report.generated_at) })}</span
         >
-        <span>Mediana · MAD · rango mínimo–máximo</span>
+        <span>{$t("Mediana · MAD · rango mínimo–máximo")}</span>
       </div>
       <p class="benchmark-acceptance-note">
-        La aceptación verifica el banco y la conciliación de peticiones; no
-        significa ausencia de errores de rastreo. El escenario adversarial
-        incluye errores esperados. El detalle por repetición conserva los casos
-        que pueden quedar ocultos en la mediana.
+        {$t("La aceptación verifica el banco y la conciliación de peticiones; no significa ausencia de errores de rastreo. El escenario adversarial incluye errores esperados. El detalle por repetición conserva los casos que pueden quedar ocultos en la mediana.")}
       </p>
       <div class="benchmark-scroll">
         <table class="benchmark-table">
           <caption
-            >Resultados por escenario y observador. MAD es la desviación
-            absoluta mediana.</caption
+            >{$t("Resultados por escenario y observador. MAD es la desviación absoluta mediana.")}</caption
           >
           <thead
             ><tr
-              ><th>Escenario</th><th>Orígenes</th><th>Observador</th><th
-                >Repeticiones</th
+              ><th>{$t("Escenario")}</th><th>{$t("Orígenes")}</th><th>{$t("Observador")}</th><th
+                >{$t("Repeticiones")}</th
               >
-              {#each resources as resource}<th>{resource.title}</th>{/each}<th
-                >Servidor</th
+              {#each resources as resource}<th>{$t(resource.title)}</th>{/each}<th
+                >{$t("Servidor")}</th
               >
             </tr></thead
           >
           <tbody
             >{#each report.scenarios as scenario}<tr>
-                <th scope="row">{scenario.name}</th><td>{scenario.origins}</td
-                ><td>{observer(scenario)}</td><td
+                <th scope="row">{$t(scenario.name)}</th><td>{scenario.origins}</td
+                ><td>{$t(observer(scenario))}</td><td
                   >{scenario.repetitions}</td
                 >
                 {#each resources as resource}
@@ -344,7 +341,7 @@
                   <td class="benchmark-numeric"
                     ><strong>{display(metric?.median, resource.unit)}</strong>
                     {#if metric}<small
-                        >MAD {display(metric.mad, resource.unit)}</small
+                        >{$t("MAD {p0}", { p0: display(metric.mad, resource.unit) })}</small
                       ><small
                         >{display(metric.min, resource.unit)}–{display(
                           metric.max,
@@ -354,7 +351,7 @@
                   </td>
                 {/each}
                 <td class:benchmark-failed={!scenario.requests_match}
-                  >{scenario.requests_match ? "Coincide" : "No coincide"}</td
+                  >{scenario.requests_match ? $t("Coincide") : $t("No coincide")}</td
                 >
               </tr>{/each}</tbody
           >
@@ -362,48 +359,39 @@
       </div>
       <div class="benchmark-details-grid">
         <div class="benchmark-detail">
-          <h3>Comparación del observador</h3>
+          <h3>{$t("Comparación del observador")}</h3>
           <p>
             {#if profile === "C03"}
-              Asíncrono frente a sincrónico legado. Reducción medida de llamadas
-              de escritura, en total y por actualización: un valor positivo
-              indica menos escrituras. Se conservan las diferencias de carga y decisiones.
+              {$t("Asíncrono frente a sincrónico legado. Reducción medida de llamadas de escritura, en total y por actualización: un valor positivo indica menos escrituras. Se conservan las diferencias de carga y decisiones.")}
             {:else if profile === "C02"}
-              Diferencia de duración mediana con y sin observador. La comparación
-              conserva la equivalencia de peticiones, páginas y decisiones publicada.
+              {$t("Diferencia de duración mediana con y sin observador. La comparación conserva la equivalencia de peticiones, páginas y decisiones publicada.")}
             {:else}
-              Diferencia observada de duración mediana. El informe histórico de capacidad
-              incluye cambios de pausas y presupuestos anteriores a la unificación de resultados; no estima
-              sobrecoste puro. Sólo se compara con peticiones y páginas iguales.
+              {$t("Diferencia observada de duración mediana. El informe histórico de capacidad incluye cambios de pausas y presupuestos anteriores a la unificación de resultados; no estima sobrecoste puro. Sólo se compara con peticiones y páginas iguales.")}
             {/if}
           </p>
           <div class="benchmark-scroll">
             <table class="benchmark-table">
               <thead
                 ><tr
-                  ><th>Escenario</th><th>Orígenes</th><th>Duración</th>
-                  {#if profile === "C03"}<th>Reducción de escrituras</th><th>Reducción por actualización</th>{/if}<th
-                    >Misma carga</th
+                  ><th>{$t("Escenario")}</th><th>{$t("Orígenes")}</th><th>{$t("Duración")}</th>
+                  {#if profile === "C03"}<th>{$t("Reducción de escrituras")}</th><th>{$t("Reducción por actualización")}</th>{/if}<th
+                    >{$t("Misma carga")}</th
                   ></tr
                 ></thead
               >
               <tbody
                 >{#each report.comparisons ?? [] as comparison}<tr>
-                    <th scope="row">{comparison.name}</th><td
+                    <th scope="row">{$t(comparison.name)}</th><td
                       >{comparison.origins}</td
                     >
                     <td
                       >{!comparison.requests_equal ||
-                      !comparison.saved_pages_equal || comparison.behavior_equivalent === false
-                        ? "No comparable"
-                        : comparison.duration_overhead_pct == null
-                          ? "—"
-                          : `${comparison.duration_overhead_pct > 0 ? "+" : ""}${display(comparison.duration_overhead_pct)} %`}</td
+                      !comparison.saved_pages_equal || comparison.behavior_equivalent === false ? $t("No comparable") : comparison.duration_overhead_pct == null ? "—" : `${comparison.duration_overhead_pct > 0 ? "+" : ""}${display(comparison.duration_overhead_pct)} %`}</td
                     >
                     {#if profile === "C03"}
                       {#each [comparison.write_calls_reduction_pct, comparison.writes_per_update_reduction_pct] as metric}
                         <td class="benchmark-numeric"><strong>{display(metric?.median, "%")}</strong>
-                          {#if metric}<small>MAD {display(metric.mad, "%")}</small><small>{display(metric.min, "%")}–{display(metric.max, "%")}</small>{/if}
+                          {#if metric}<small>{$t("MAD {p0}", { p0: display(metric.mad, "%") })}</small><small>{display(metric.min, "%")}–{display(metric.max, "%")}</small>{/if}
                         </td>
                       {/each}
                     {/if}
@@ -411,14 +399,10 @@
                       class:benchmark-failed={!comparison.requests_equal ||
                         !comparison.saved_pages_equal || comparison.behavior_equivalent === false}
                     >
-                      {comparison.behavior_equivalent === false
-                        ? "Decisiones o trabajo diferentes"
-                        : comparison.requests_equal && comparison.saved_pages_equal
-                          ? comparison.behavior_equivalent ? "Trabajo y decisiones iguales" : "Peticiones y páginas iguales"
-                          : "Peticiones o páginas diferentes"}
+                      {comparison.behavior_equivalent === false ? $t("Decisiones o trabajo diferentes") : comparison.requests_equal && comparison.saved_pages_equal ? comparison.behavior_equivalent ? $t("Trabajo y decisiones iguales") : $t("Peticiones y páginas iguales") : $t("Peticiones o páginas diferentes")}
                     </td>
                   </tr>{:else}<tr
-                    ><td colspan={profile === "C03" ? 6 : 4}>Sin comparación publicada.</td></tr
+                    ><td colspan={profile === "C03" ? 6 : 4}>{$t("Sin comparación publicada.")}</td></tr
                   >{/each}</tbody
               >
             </table>
@@ -426,32 +410,31 @@
         </div>
         <div class="benchmark-detail">
           <div class="benchmark-stage-heading">
-            <h3>Etapas y espera</h3>
+            <h3>{$t("Etapas y espera")}</h3>
             <label
-              ><span class="sr-only">Escenario para inspeccionar etapas</span
+              ><span class="sr-only">{$t("Escenario para inspeccionar etapas")}</span
               ><select bind:value={selectedIndex}>
                 {#each report.scenarios as scenario, index}<option value={index}
-                    >{scenario.name} · {scenario.origins} orígenes · {observer(scenario)}</option
+                    >{$t("{p0} · {p1} orígenes · {p2}", { p0: scenario.name, p1: scenario.origins, p2: $t(observer(scenario)) })}</option
                   >{/each}
               </select></label
             >
           </div>
           <p>
-            Tiempo acumulado por etapa entre trabajadores; puede superar la
-            duración total y contener etapas anidadas.
+            {$t("Tiempo acumulado por etapa entre trabajadores; puede superar la duración total y contener etapas anidadas.")}
           </p>
           <div class="benchmark-scroll">
             <table class="benchmark-table">
               <thead
                 ><tr
-                  ><th>Etapa</th><th>Mediana</th><th>MAD</th><th>Rango</th></tr
+                  ><th>{$t("Etapa")}</th><th>{$t("Mediana")}</th><th>{$t("MAD")}</th><th>{$t("Rango")}</th></tr
                 ></thead
               >
               <tbody
                 >{#each Object.entries(selected?.metrics.stages_ms ?? {}) as [key, metric]}<tr
                   >
                     <th scope="row"
-                      >{stageNames[key] ?? key.replaceAll("_", " ")}</th
+                      >{$t(stageNames[key] ?? key.replaceAll("_", " "))}</th
                     ><td>{display(metric.median, "ms")}</td><td
                       >{display(metric.mad, "ms")}</td
                     ><td
@@ -461,21 +444,21 @@
                       )}</td
                     >
                   </tr>{:else}<tr
-                    ><td colspan="4">Sin etapas publicadas.</td></tr
+                    ><td colspan="4">{$t("Sin etapas publicadas.")}</td></tr
                   >{/each}</tbody
               >
             </table>
           </div>
           {#if selected}
             {#if selected.metrics.observer_stats}
-              <h3 class="benchmark-resource-title">Publicación del observador</h3>
+              <h3 class="benchmark-resource-title">{$t("Publicación del observador")}</h3>
               <div class="benchmark-scroll">
-                <table class="benchmark-table" aria-label="Recursos del observador por escenario">
-                  <thead><tr><th>Métrica</th><th>Mediana</th><th>MAD</th><th>Rango</th></tr></thead>
+                <table class="benchmark-table" aria-label={$t("Recursos del observador por escenario")}>
+                  <thead><tr><th>{$t("Métrica")}</th><th>{$t("Mediana")}</th><th>{$t("MAD")}</th><th>{$t("Rango")}</th></tr></thead>
                   <tbody>
                     {#each Object.entries(selected.metrics.observer_stats) as [key, metric]}
                       {@const unit = key.endsWith("_ms") ? "ms" : key === "bytes_written" ? "bytes" : ""}
-                      <tr><th scope="row">{observerStatsNames[key] ?? key.replaceAll("_", " ")}</th>
+                      <tr><th scope="row">{$t(observerStatsNames[key] ?? key.replaceAll("_", " "))}</th>
                         <td>{display(metric.median, unit)}</td><td>{display(metric.mad, unit)}</td>
                         <td>{display(metric.min, unit)}–{display(metric.max, unit)}</td>
                       </tr>
@@ -488,7 +471,7 @@
               class="benchmark-resource-title"
               id="benchmark-run-errors-heading"
             >
-              Errores por repetición
+              {$t("Errores por repetición")}
             </h3>
             <div class="benchmark-scroll">
               <table
@@ -497,9 +480,9 @@
               >
                 <thead
                   ><tr
-                    ><th>Repetición</th><th>Guardadas</th><th
-                      >Peticiones cliente / servidor</th
-                    ><th>Fallos de petición</th><th>Errores registrados</th></tr
+                    ><th>{$t("Repetición")}</th><th>{$t("Guardadas")}</th><th
+                      >{$t("Peticiones cliente / servidor")}</th
+                    ><th>{$t("Fallos de petición")}</th><th>{$t("Errores registrados")}</th></tr
                   ></thead
                 >
                 <tbody>
@@ -523,25 +506,23 @@
                       >
                     </tr>
                   {:else}<tr
-                      ><td colspan="5">Sin detalle por repetición publicado.</td
+                      ><td colspan="5">{$t("Sin detalle por repetición publicado.")}</td
                       ></tr
                     >{/each}
                 </tbody>
               </table>
             </div>
             <h3 class="benchmark-resource-title">
-              Recursos del escenario seleccionado
+              {$t("Recursos del escenario seleccionado")}
             </h3>
             <p>
-              Recursos del proceso crawler; excluyen el servidor de pruebas y el
-              dashboard. Los picos de hilos y descriptores dependen del
-              intervalo de muestreo.
+              {$t("Recursos del proceso crawler; excluyen el servidor de pruebas y el dashboard. Los picos de hilos y descriptores dependen del intervalo de muestreo.")}
             </p>
             <div class="benchmark-scroll">
               <table class="benchmark-table">
                 <thead
                   ><tr
-                    ><th>Recurso</th><th>Mediana</th><th>MAD</th><th>Rango</th
+                    ><th>{$t("Recurso")}</th><th>{$t("Mediana")}</th><th>{$t("MAD")}</th><th>{$t("Rango")}</th
                     ></tr
                   ></thead
                 >
@@ -549,7 +530,7 @@
                   >{#each additionalResources as resource}
                     {@const metric = distribution(selected, resource.key)}
                     {#if metric}<tr
-                        ><th scope="row">{resource.title}</th><td
+                        ><th scope="row">{$t(resource.title)}</th><td
                           >{display(metric.median, resource.unit)}</td
                         ><td>{display(metric.mad, resource.unit)}</td><td
                           >{display(metric.min, resource.unit)}–{display(
@@ -567,47 +548,45 @@
       </div>
       <details class="benchmark-provenance">
         <summary
-          >Código, corpus, hardware y configuración de esta medición</summary
+          >{$t("Código, corpus, hardware y configuración de esta medición")}</summary
         >
         <dl>
           <div>
-            <dt>Commit</dt>
+            <dt>{$t("Commit")}</dt>
             <dd>
-              {report.code?.commit ?? "No publicado"}{report.code?.dirty
-                ? " · cambios locales"
-                : ""}
+              {report.code?.commit ?? $t("No publicado")}{report.code?.dirty ? $t("· cambios locales") : ""}
             </dd>
           </div>
           <div>
-            <dt>SHA-256 del corpus</dt>
-            <dd>{report.corpus?.sha256 ?? "No publicado"}</dd>
+            <dt>{$t("SHA-256 del corpus")}</dt>
+            <dd>{report.corpus?.sha256 ?? $t("No publicado")}</dd>
           </div>
           <div>
-            <dt>Archivos del corpus</dt>
-            <dd>{report.corpus?.files?.length ?? "No publicado"}</dd>
+            <dt>{$t("Archivos del corpus")}</dt>
+            <dd>{report.corpus?.files?.length ?? $t("No publicado")}</dd>
           </div>
         </dl>
         <div class="benchmark-details-grid">
           <div>
-            <h3>Configuración</h3>
+            <h3>{$t("Configuración")}</h3>
             <pre>{JSON.stringify(report.configuration, null, 2)}</pre>
           </div>
           <div>
-            <h3>Hardware</h3>
+            <h3>{$t("Hardware")}</h3>
             <pre>{JSON.stringify(report.hardware ?? {}, null, 2)}</pre>
           </div>
           <div>
-            <h3>Huella del código</h3>
+            <h3>{$t("Huella del código")}</h3>
             <pre>{JSON.stringify(report.code ?? {}, null, 2)}</pre>
           </div>
           <div>
-            <h3>Comprobaciones de aceptación</h3>
+            <h3>{$t("Comprobaciones de aceptación")}</h3>
             <pre>{JSON.stringify(report.acceptance, null, 2)}</pre>
           </div>
         </div>
       </details>
     {:else}<p class="benchmark-empty">
-      {#if !ready}Consultando las mediciones locales…{:else if !enabled && !error}No hay un informe local seleccionado. Selecciona un informe al iniciar el dashboard para comparar capacidad y recursos.{:else}Esperando el informe de la ejecución local.{/if}
+      {#if !ready}{$t("Consultando las mediciones locales…")}{:else if !enabled && !error}{$t("No hay un informe local seleccionado. Selecciona un informe al iniciar el dashboard para comparar capacidad y recursos.")}{:else}{$t("Esperando el informe de la ejecución local.")}{/if}
       </p>{/if}
   </section>
 {/if}

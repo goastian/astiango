@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { getI18n } from "./i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import type { Snapshot } from "./types";
 
   let { counters }: { counters?: Snapshot["counters"] } = $props();
-  const number = new Intl.NumberFormat("es-CO");
+  const number = $derived(new Intl.NumberFormat($formatLocale));
   const count = (value: number | undefined) =>
     value == null ? "—" : number.format(value);
   const requests = $derived([
@@ -20,24 +23,21 @@
 </script>
 
 <section class="panel request-outcomes" aria-labelledby="requests-heading">
-  <h2 id="requests-heading">Solicitudes y resultados</h2>
+  <h2 id="requests-heading">{$t("Solicitudes y resultados")}</h2>
   <p class="card-description">
-    Una página puede requerir varios intentos HTTP. El contador de HTTP incluye
-    reintentos y sitemaps; excluye robots.txt. Sólo las páginas confirmadas por el
-    almacenamiento cuentan como útiles durables.
+    {$t("Una página puede requerir varios intentos HTTP. El contador de HTTP incluye reintentos y sitemaps; excluye robots.txt. Sólo las páginas confirmadas por el almacenamiento cuentan como útiles durables.")}
   </p>
   <dl class="request-metrics">
     {#each requests as metric}
-      <div><dt>{metric.label}</dt><dd>{count(metric.value)}</dd></div>
+      <div><dt>{$t(metric.label)}</dt><dd>{count(metric.value)}</dd></div>
     {/each}
   </dl>
   <dl class="explicit-outcomes">
     {#each outcomes as outcome}
-      <div><dt>{outcome.label}</dt><dd>{count(outcome.value)}</dd></div>
+      <div><dt>{$t(outcome.label)}</dt><dd>{count(outcome.value)}</dd></div>
     {/each}
   </dl>
   <p class="card-footnote">
-    Los aplazamientos y las cancelaciones conservan su resultado; no se cuentan
-    como éxito. «—» indica que esta ejecución no publica ese contador.
+    {$t("Los aplazamientos y las cancelaciones conservan su resultado; no se cuentan como éxito. «—» indica que esta ejecución no publica ese contador.")}
   </p>
 </section>

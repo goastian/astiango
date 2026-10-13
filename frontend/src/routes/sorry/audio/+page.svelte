@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import Photo from '~icons/heroicons/photo-20-solid';
   import Button from '$lib/components/Button.svelte';
   import type { PageData } from './$types';
@@ -16,15 +19,15 @@
     class="appearance-none rounded-lg border bg-transparent"
     placeholder="12345"
     name="challenge"
-    title="Type the numbers you hear in the audio file"
+    title={$t("Type the numbers you hear in the audio file")}
   />
 
   <div class="flex w-full justify-between">
-    <a href={`/sorry${$page.url.search}`} title="Get a visual challenge"
+    <a href={`/sorry${$page.url.search}`} title={$t("Get a visual challenge")}
       ><Photo class="h-8 w-8" /></a
     >
 
-    <Button title="Verify challenge" type="submit" kind="accent">VERIFY</Button>
+    <Button title={$t("Verify challenge")} type="submit" kind="accent">{$t("VERIFY")}</Button>
   </div>
 </Captcha>
 

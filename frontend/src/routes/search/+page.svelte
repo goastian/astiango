@@ -1,4 +1,9 @@
 <script lang="ts">
+  import { localizedHref, languageParameter } from '../../../../packages/i18n';
+
+  import { getI18n } from "$lib/i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import OpticSelector from '$lib/components/OpticSelector.svelte';
   import Searchbar from '$lib/components/Searchbar.svelte';
   import type { PageData } from './$types';
@@ -124,10 +129,10 @@
   const prettyprintCount = (count: Count): string => {
     return match(count)
       .with({ _type: 'exact' }, () => {
-        return count.value.toLocaleString();
+        return count.value.toLocaleString($formatLocale);
       })
       .with({ _type: 'approximate' }, () => {
-        return `~${count.value.toLocaleString()}`;
+        return `~${count.value.toLocaleString($formatLocale)}`;
       })
       .exhaustive();
   };
@@ -141,8 +146,8 @@
   <noscript>
     <meta http-equiv="refresh" content="0;url=/search?{encodedQueryForRedirect}" />
     <div>
-      You are being redirected to <a href="/search?{encodedQueryForRedirect}" class="underline"
-        >a page that doesn't require javascript.</a
+      {$t("You are being redirected to")} <a href={localizedHref(`/search?${encodedQueryForRedirect}`, $locale)} class="underline"
+        >{$t("a page that doesn't require javascript.")}</a
       >
     </div>
   </noscript>
@@ -153,18 +158,18 @@
     <div class="qwant-search-wrap">
       <Searchbar {query} bind:this={searchbarElem} />
     </div>
-    <nav class="result-tabs" aria-label="Search result types">
-      <a class="active" href="/search?q={encodeURIComponent(query)}">All</a>
-      <a href="/search?q={encodeURIComponent(query)}&type=images">Images</a>
-      <a href="/search?q={encodeURIComponent(query)}&type=videos">Videos</a>
-      <a href="/search?q={encodeURIComponent(query)}&type=news">News</a>
-      <a href="/search?q={encodeURIComponent(query)}&type=discussions">Discussions</a>
+    <nav class="result-tabs" aria-label={$t("Search result types")}>
+      <a class="active" href={localizedHref(`/search?q=${encodeURIComponent(query)}`, $locale)}>{$t("All")}</a>
+      <a href={localizedHref(`/search?q=${encodeURIComponent(query)}&type=images`, $locale)}>{$t("Images")}</a>
+      <a href={localizedHref(`/search?q=${encodeURIComponent(query)}&type=videos`, $locale)}>{$t("Videos")}</a>
+      <a href={localizedHref(`/search?q=${encodeURIComponent(query)}&type=news`, $locale)}>{$t("News")}</a>
+      <a href={localizedHref(`/search?q=${encodeURIComponent(query)}&type=discussions`, $locale)}>{$t("Discussions")}</a>
     </nav>
     <div class="result-tools">
       <div class="result-count">
           {#if results}
-            Found <strong>{prettyprintCount(results.numHits)}</strong> results in
-            <strong>{((results.searchDurationMs ?? 0) / 1000).toFixed(2)}s</strong>
+            {$t("Found")} <strong>{prettyprintCount(results.numHits)}</strong> {$t("results in")}
+            <strong>{$t("{p0}s", { p0: ((results.searchDurationMs ?? 0) / 1000).toLocaleString($formatLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) })}</strong>
           {/if}
       </div>
       <div class="result-selects">
@@ -203,29 +208,29 @@
         />
       {/if}
     {:catch}
-      <section class="preview-results" aria-label="Search result preview">
-        <p class="preview-label">Search result preview</p>
+      <section class="preview-results" aria-label={$t("Search result preview")}>
+        <p class="preview-label">{$t("Search result preview")}</p>
         <article>
-          <p class="preview-url">astian.org</p>
-          <a href="https://astian.org">AstianGO — private, open search</a>
-          <p>Search the web through an independent index, without behavioural profiling or a personal data marketplace.</p>
+          <p class="preview-url">{$t("astian.org")}</p>
+          <a href="https://astian.org">{$t("AstianGO — private, open search")}</a>
+          <p>{$t("Search the web through an independent index, without behavioural profiling or a personal data marketplace.")}</p>
         </article>
         <article>
-          <p class="preview-url">github.com / goastian / astiango</p>
-          <a href="https://github.com/goastian/astiango">AstianGO source code</a>
-          <p>Explore the open-source search engine, its crawler and the infrastructure that powers its own index.</p>
+          <p class="preview-url">{$t("github.com / goastian / astiango")}</p>
+          <a href="https://github.com/goastian/astiango">{$t("AstianGO source code")}</a>
+          <p>{$t("Explore the open-source search engine, its crawler and the infrastructure that powers its own index.")}</p>
         </article>
         <article>
-          <p class="preview-url">astian.org / midori-browser</p>
-          <a href="https://astian.org/midori-browser/">Midori Browser</a>
-          <p>A lightweight browser from Astian, designed as a companion for a calmer and more private web.</p>
+          <p class="preview-url">{$t("astian.org / midori-browser")}</p>
+          <a href="https://astian.org/midori-browser/">{$t("Midori Browser")}</a>
+          <p>{$t("A lightweight browser from Astian, designed as a companion for a calmer and more private web.")}</p>
         </article>
       </section>
-      <aside class="preview-panel" aria-label="AstianGO overview">
-        <span class="panel-kicker">About this result</span>
+      <aside class="preview-panel" aria-label={$t("AstianGO overview")}>
+        <span class="panel-kicker">{$t("About this result")}</span>
         <h2>AstianGO</h2>
-        <p>A private, open and transparent search engine with an independent crawler and index.</p>
-        <a href="/about">Learn about AstianGO →</a>
+        <p>{$t("A private, open and transparent search engine with an independent crawler and index.")}</p>
+        <a href={localizedHref(`/about`, $locale)}>{$t("Learn about AstianGO →")}</a>
       </aside>
     {/await}
   {/if}

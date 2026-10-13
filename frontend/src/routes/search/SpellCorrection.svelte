@@ -1,4 +1,9 @@
 <script lang="ts">
+  import { localizedHref, languageParameter } from '../../../../packages/i18n';
+
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import type { HighlightedSpellCorrection } from '$lib/api';
 
   export let spellCorrection: HighlightedSpellCorrection;
@@ -11,10 +16,10 @@
 </script>
 
 <div>
-  Did you mean:{' '}
+  {$t("Did you mean:{p0}", { p0: ' ' })}
   <a
     class="font-medium"
-    href="/search?q={encodeURIComponent(spellCorrection.raw)}"
+    href={localizedHref(`/search?q=${encodeURIComponent(spellCorrection.raw)}`, $locale)}
     bind:this={link}
   >
     {#each spellCorrection.highlighted as frag}

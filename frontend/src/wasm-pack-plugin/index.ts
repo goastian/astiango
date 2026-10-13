@@ -10,6 +10,7 @@ export default function wasmPack(config: WasmPackConfig): Plugin {
 
   return {
     name: 'wasm-pack',
+    apply: 'serve',
     buildStart() {
       for (const crate of config.crates) {
         const lib = path.resolve(normalizePath(crate));

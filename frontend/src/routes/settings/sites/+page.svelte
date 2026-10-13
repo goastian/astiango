@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import { api } from '$lib/api';
   import Button from '$lib/components/Button.svelte';
   import Site from '$lib/components/Site.svelte';
@@ -102,8 +105,8 @@
 <div class="flex flex-col space-y-10">
   {#each sections as { title, description, section }}
     <div class="space-y-2">
-      <h1 class="text-2xl font-medium">{title}</h1>
-      <div class="text-sm">{description}</div>
+      <h1 class="text-2xl font-medium">{$t(title)}</h1>
+      <div class="text-sm">{$t(description)}</div>
       <div class="flex flex-wrap gap-x-5 gap-y-3" id="sites-list">
         {#each $ranked[section] as site, index (`${index}-${site}`)}
           <div animate:flip={{ duration: 150 }}>
@@ -129,7 +132,7 @@
         on:change={importOpticFile}
         hidden
       />
-      <label for="optic-import"> Import from optic </label>
+      <label for="optic-import"> {$t("Import from optic")} </label>
     </Button>
   </div>
 </div>

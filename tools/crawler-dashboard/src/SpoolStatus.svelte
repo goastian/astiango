@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { getI18n } from "./i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import Icon from "./Icon.svelte";
   import type { SpoolStats } from "./types";
   let { stats, readError, stale }: { stats?: SpoolStats; readError: boolean; stale: boolean } = $props();
-  const number = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 });
+  const number = $derived(new Intl.NumberFormat($formatLocale, { maximumFractionDigits: 2 }));
   const display = (value: number) => number.format(value);
   const mib = (value: number) => display(value / 1024 / 1024) + " MiB";
   const groups = $derived(stats ? [
@@ -33,20 +36,18 @@
 </script>
 {#if stats}
   <details class="panel spool-panel">
-    <summary><strong>Spool durable y segmentos</strong>
-      <span class="spool-summary">{display(stats.records_durable)} páginas durables · {display(stats.segments_pending)} pendientes de S3</span>
-      <span class="spool-toggle">Detalles <Icon name="chevron" size={16} /></span>
+    <summary><strong>{$t("Spool durable y segmentos")}</strong>
+      <span class="spool-summary">{$t("{p0} páginas durables · {p1} pendientes de S3", { p0: display(stats.records_durable), p1: display(stats.segments_pending) })}</span>
+      <span class="spool-toggle">{$t("Detalles")} <Icon name="chevron" size={16} /></span>
     </summary>
     <div class="spool-details">
-      <p>El ACK confirma datos y registro de recuperación sincronizados en disco local. La publicación S3 tiene su propia cola durable.
-        Estos totales incluyen los segmentos recuperados; las páginas de esta ejecución permanecen en el resumen superior.</p>
-      {#if readError || stale}<p class="spool-notice">Se conserva la última lectura disponible del spool.</p>{/if}
-      {#if stats.last_error}<p class="spool-notice">Última incidencia: {stats.last_error}</p>{/if}
-      <div class="spool-groups">{#each groups as group}<section aria-label={group.title}><h3>{group.title}</h3>
-        <dl>{#each group.values as [label, value]}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}</dl>
+      <p>{$t("El ACK confirma datos y registro de recuperación sincronizados en disco local. La publicación S3 tiene su propia cola durable. Estos totales incluyen los segmentos recuperados; las páginas de esta ejecución permanecen en el resumen superior.")}</p>
+      {#if readError || stale}<p class="spool-notice">{$t("Se conserva la última lectura disponible del spool.")}</p>{/if}
+      {#if stats.last_error}<p class="spool-notice">{$t("Última incidencia: {p0}", { p0: stats.last_error })}</p>{/if}
+      <div class="spool-groups">{#each groups as group}<section aria-label={$t(group.title)}><h3>{$t(group.title)}</h3>
+        <dl>{#each group.values as [label, value]}<div><dt>{$t(label)}</dt><dd>{$t(value)}</dd></div>{/each}</dl>
       </section>{/each}</div>
-      <p>Una cuota llena detiene la admisión. Las referencias de revisitas, 304, consumidores, outbox y backups
-        impiden borrar segmentos necesarios. El buffer indicado pertenece al uploader; no representa todo el RSS.</p>
+      <p>{$t("Una cuota llena detiene la admisión. Las referencias de revisitas, 304, consumidores, outbox y backups impiden borrar segmentos necesarios. El buffer indicado pertenece al uploader; no representa todo el RSS.")}</p>
     </div>
   </details>
 {/if}

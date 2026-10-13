@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { getI18n } from "./i18n";
+  const { t, locale, formatLocale } = getI18n();
+
   import Icon from "./Icon.svelte";
   import type { PipelineStats } from "./types";
   let { stats, readError, stale }: { stats?: PipelineStats; readError: boolean; stale: boolean } = $props();
-  const number = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 });
+  const number = $derived(new Intl.NumberFormat($formatLocale, { maximumFractionDigits: 2 }));
   const display = (value: number | undefined) => value == null ? "—" : number.format(value);
   const stages = $derived(stats ? [
     { title: "Admisión de páginas", value: stats.admission },
@@ -15,39 +18,34 @@
 </script>
 {#if stats}
   <details class="panel pipeline-panel">
-    <summary><strong>Pipeline y contrapresión</strong>
-      <span class="pipeline-summary">{stats.runtime_lag_samples ? `Lag p99 ${display(stats.runtime_lag_p99_us / 1000)} ms` : "Esperando muestras de lag"} · {stats.accepting ? "Admisión abierta" : "Drenando"}</span>
-      <span class="pipeline-toggle">Detalles <Icon name="chevron" size={16} /></span>
+    <summary><strong>{$t("Pipeline y contrapresión")}</strong>
+      <span class="pipeline-summary">{stats.runtime_lag_samples ? $t("Lag p99 {p0} ms", { p0: display(stats.runtime_lag_p99_us / 1000) }) : $t("Esperando muestras de lag")} · {stats.accepting ? $t("Admisión abierta") : $t("Drenando")}</span>
+      <span class="pipeline-toggle">{$t("Detalles")} <Icon name="chevron" size={16} /></span>
     </summary>
     <div class="pipeline-details">
-      <p>HTTP continúa en tareas async; el parseo y la compresión/escritura usan trabajadores limitados.
-        Las cuotas incluyen trabajos encolados y en ejecución. Los bytes corresponden a entradas reservadas;
-        el RSS también incluye DOM, buffers, conexiones y estado de la frontera. Un trabajo bloqueante iniciado
-        conserva sus recursos hasta terminar.</p>
-      {#if readError || stale}<p class="pipeline-notice">Se conserva la última lectura disponible del pipeline.</p>{/if}
-      <dl class="pipeline-lag"><div><dt>Lag p99 del temporizador</dt><dd>{stats.runtime_lag_samples ? `${display(stats.runtime_lag_p99_us / 1000)} ms` : "—"}</dd></div>
-        <div><dt>Lag máximo observado</dt><dd>{stats.runtime_lag_samples ? `${display(stats.runtime_lag_max_us / 1000)} ms` : "—"}</dd></div>
-        <div><dt>Muestras en la ventana</dt><dd>{display(stats.runtime_lag_window_samples)}</dd></div>
-        <div><dt>Intervalo de muestreo</dt><dd>{display(stats.runtime_sample_interval_ms)} ms</dd></div></dl>
-      <div class="pipeline-groups">{#each stages as stage}<section aria-label={stage.title}>
-        <h3>{stage.title}</h3><dl>
-          <div><dt>Trabajadores</dt><dd>{stage.value.workers ? display(stage.value.workers) : "—"}</dd></div>
-          <div><dt>Trabajos reservados / límite</dt><dd>{display(stage.value.items)} / {display(stage.value.max_items)}</dd></div>
-          <div><dt>Bytes reservados / límite</dt><dd>{display(stage.value.bytes)} / {display(stage.value.max_bytes)} B</dd></div>
-          <div><dt>En ejecución / en cola</dt><dd>{display(stage.value.running)} / {display(stage.value.queued)}</dd></div>
-          <div><dt>Pico de trabajos / bytes</dt><dd>{display(stage.value.peak_items)} / {display(stage.value.peak_bytes)} B</dd></div>
-          <div><dt>Esperas por presupuesto</dt><dd>{display(stage.value.admission_waits)}</dd></div>
-          <div><dt>Espera por presupuesto</dt><dd>{display(stage.value.admission_wait_us / 1000)} ms</dd></div>
-          <div><dt>Espera en cola</dt><dd>{display(stage.value.queue_wait_us / 1000)} ms</dd></div>
-          <div><dt>Trabajo bloqueante</dt><dd>{display(stage.value.work_us / 1000)} ms</dd></div>
-          <div><dt>Trabajos completados / fallidos</dt><dd>{display(stage.value.completed)} / {display(stage.value.failed)}</dd></div>
-          <div><dt>Cancelados antes de ejecutar</dt><dd>{display(stage.value.cancelled)}</dd></div>
-          <div><dt>Timeouts / entradas superiores al límite</dt><dd>{display(stage.value.queue_timeouts)} / {display(stage.value.input_rejections)}</dd></div>
+      <p>{$t("HTTP continúa en tareas async; el parseo y la compresión/escritura usan trabajadores limitados. Las cuotas incluyen trabajos encolados y en ejecución. Los bytes corresponden a entradas reservadas; el RSS también incluye DOM, buffers, conexiones y estado de la frontera. Un trabajo bloqueante iniciado conserva sus recursos hasta terminar.")}</p>
+      {#if readError || stale}<p class="pipeline-notice">{$t("Se conserva la última lectura disponible del pipeline.")}</p>{/if}
+      <dl class="pipeline-lag"><div><dt>{$t("Lag p99 del temporizador")}</dt><dd>{stats.runtime_lag_samples ? `${display(stats.runtime_lag_p99_us / 1000)} ms` : "—"}</dd></div>
+        <div><dt>{$t("Lag máximo observado")}</dt><dd>{stats.runtime_lag_samples ? `${display(stats.runtime_lag_max_us / 1000)} ms` : "—"}</dd></div>
+        <div><dt>{$t("Muestras en la ventana")}</dt><dd>{display(stats.runtime_lag_window_samples)}</dd></div>
+        <div><dt>{$t("Intervalo de muestreo")}</dt><dd>{display(stats.runtime_sample_interval_ms)} ms</dd></div></dl>
+      <div class="pipeline-groups">{#each stages as stage}<section aria-label={$t(stage.title)}>
+        <h3>{$t(stage.title)}</h3><dl>
+          <div><dt>{$t("Trabajadores")}</dt><dd>{stage.value.workers ? display(stage.value.workers) : "—"}</dd></div>
+          <div><dt>{$t("Trabajos reservados / límite")}</dt><dd>{display(stage.value.items)} / {display(stage.value.max_items)}</dd></div>
+          <div><dt>{$t("Bytes reservados / límite")}</dt><dd>{display(stage.value.bytes)} / {display(stage.value.max_bytes)} B</dd></div>
+          <div><dt>{$t("En ejecución / en cola")}</dt><dd>{display(stage.value.running)} / {display(stage.value.queued)}</dd></div>
+          <div><dt>{$t("Pico de trabajos / bytes")}</dt><dd>{display(stage.value.peak_items)} / {display(stage.value.peak_bytes)} B</dd></div>
+          <div><dt>{$t("Esperas por presupuesto")}</dt><dd>{display(stage.value.admission_waits)}</dd></div>
+          <div><dt>{$t("Espera por presupuesto")}</dt><dd>{display(stage.value.admission_wait_us / 1000)} ms</dd></div>
+          <div><dt>{$t("Espera en cola")}</dt><dd>{display(stage.value.queue_wait_us / 1000)} ms</dd></div>
+          <div><dt>{$t("Trabajo bloqueante")}</dt><dd>{display(stage.value.work_us / 1000)} ms</dd></div>
+          <div><dt>{$t("Trabajos completados / fallidos")}</dt><dd>{display(stage.value.completed)} / {display(stage.value.failed)}</dd></div>
+          <div><dt>{$t("Cancelados antes de ejecutar")}</dt><dd>{display(stage.value.cancelled)}</dd></div>
+          <div><dt>{$t("Timeouts / entradas superiores al límite")}</dt><dd>{display(stage.value.queue_timeouts)} / {display(stage.value.input_rejections)}</dd></div>
         </dl>
       </section>{/each}</div>
-      <p>La ventana conserva las últimas 1.024 muestras del temporizador. El objetivo &lt;100 ms se verifica en el banco
-        dimensionado. Batch limita cada segmento en memoria a {display(stats.batch_segment_bytes)} B y
-        {display(stats.batch_segment_items)} registros; el spool conserva los datos durables.</p>
+      <p>{$t("La ventana conserva las últimas 1.024 muestras del temporizador. El objetivo <100 ms se verifica en el banco dimensionado. Batch limita cada segmento en memoria a {p0} B y {p1} registros; el spool conserva los datos durables.", { p0: display(stats.batch_segment_bytes), p1: display(stats.batch_segment_items) })}</p>
     </div>
   </details>
 {/if}

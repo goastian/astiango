@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getI18n } from "$lib/i18n";
+  const { t, locale } = getI18n();
+
   import ThemeSelect from '$lib/components/ThemeSelect.svelte';
   import PostSearchSelect from './PostSearchSelect.svelte';
   import SafeSearchSelect from './SafeSearchSelect.svelte';
@@ -55,14 +58,14 @@
 
 <div class="[&_a]:font-medium [&_a]:underline">
   <div class="space-y-3">
-    <h1 class="text-2xl font-medium">Preferences</h1>
+    <h1 class="text-2xl font-medium">{$t("Preferences")}</h1>
     <div class="flex flex-col space-y-5">
       {#each settings as setting}
         <fieldset class="flex flex-col pr-1 sm:flex-row sm:justify-between">
-          <legend class="sr-only">{setting.title}</legend>
+          <legend class="sr-only">{$t(setting.title)}</legend>
           <div class="flex flex-col pr-5">
-            <h2 class="text-lg">{setting.title}</h2>
-            <p class="text-sm">{setting.description}</p>
+            <h2 class="text-lg">{$t(setting.title)}</h2>
+            <p class="text-sm">{$t(setting.description)}</p>
           </div>
           <div class="flex flex-col pr-5 sm:flex-row sm:justify-between sm:space-y-0">
             <div>
