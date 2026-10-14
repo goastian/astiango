@@ -4,6 +4,7 @@
   import TimeChart from "./TimeChart.svelte";
   import Pagination from "./Pagination.svelte";
   import type { IndexingResponse, Snapshot } from "./types";
+  import { consumerActivity } from "./work-status";
   const { t, formatLocale } = getI18n();
   let { response, crawler, now, readError = "", paused = false, mode = "overview" }: {
     response: IndexingResponse | null; crawler?: Snapshot; now: number; readError?: string; paused?: boolean; mode?: string;
@@ -30,6 +31,7 @@
   }
   const snapshot = $derived(response?.snapshot);
   const totals = $derived(snapshot?.totals);
+  const activity = $derived(consumerActivity(snapshot,crawler));
   const format = $derived(new Intl.NumberFormat($formatLocale, { maximumFractionDigits: 1 }));
   const date = $derived(new Intl.DateTimeFormat($formatLocale, { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
   const number = (value?: number | null) => value == null ? "—" : format.format(value);
@@ -62,8 +64,8 @@
 
 <div class="indexing-content">
   <section class="panel indexing-health" aria-label={$t("Indexing service")}>
-    <div><h2>{$t("Indexing service")}</h2><p>{snapshot ? $t(reasons[snapshot.reason] ?? snapshot.reason) : $t("Indexing state is unavailable.")}</p></div>
-    <span class:warning={unavailable || snapshot?.phase === "blocked"}>{unavailable ? $t("State unavailable or stale") : snapshot ? $t(states[snapshot.phase] ?? snapshot.phase) : "—"}</span>
+    <div><h2>{$t("Indexing service")}</h2><p>{snapshot ? $t(activity.detail) : $t("Indexing state is unavailable.")}</p></div>
+    <span class:warning={unavailable || activity.warning}>{unavailable ? $t("State unavailable or stale") : snapshot ? $t(activity.label) : "—"}</span>
     {#if snapshot}<small>{$t("Last sample")} {date.format(new Date(snapshot.updated_at))} · PID {snapshot.pid}</small>{/if}
   </section>
   {#if unavailable || paused}<div class="notice" role="status">{$t(paused ? "Showing the last available sample." : "State unavailable or stale")}</div>{/if}

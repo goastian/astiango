@@ -1433,5 +1433,14 @@
   "Before": "之前",
   "After": "之后",
   "Written bytes": "写入字节",
-  "Versioned durability and relationship labels add work; gains depend on the cohort.": "版本保存和关系信息增加工作；性能变化取决于测试数据。"
+  "Versioned durability and relationship labels add work; gains depend on the cohort.": "版本保存和关系信息增加工作；性能变化取决于测试数据。",
+  "Output quota reached": "已达到输出配额",
+  "Recovery required": "需要恢复",
+  "Retained inputs need recovery": "保留的输入需要恢复",
+  "Producer blocked": "生产端受阻",
+  "Crawler segment quota reached": "爬虫已达到分段配额",
+  "Caught up": "已处理完可用输入",
+  "All eligible sealed segments consumed": "所有符合条件的已封存分段均已处理",
+  "Retained segments": "保留的分段",
+  "Inspect storage": "检查存储"
 }

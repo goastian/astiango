@@ -2,12 +2,13 @@
   import { getI18n } from "./i18n";
   import TimeChart from "./TimeChart.svelte";
   import Pagination from "./Pagination.svelte";
-  import type { WebgraphResponse } from "./types";
+  import type { WebgraphResponse, Snapshot } from "./types";
+  import { consumerActivity } from "./work-status";
   const { t, formatLocale } = getI18n();
-  let { response, now, error = "", mode = "overview" }: { response: WebgraphResponse | null; now: number; error?: string; mode?: string } = $props();
+  let { response, crawler, now, error = "", mode = "overview" }: { response: WebgraphResponse | null; crawler?: Snapshot; now: number; error?: string; mode?: string } = $props();
   const snapshot = $derived(response?.snapshot);
   const totals = $derived(snapshot?.totals);
-  const retryWait = $derived(snapshot?.phase === "idle" && (totals?.pending ?? 0)>0);
+  const activity = $derived(consumerActivity(snapshot,crawler));
   const current = $derived(snapshot?.scope === "current_version_graph");
   const generation = $derived(snapshot?.generation);
   const runtime = $derived(snapshot?.runtime);
@@ -41,8 +42,8 @@
 
 <div class="graph-view">
   <section class="graph-health">
-    <div><h2>{$t("Webgraph")}</h2><span>{$t(snapshot ? retryWait ? "Deferred inputs retain their captures" : reasons[snapshot.reason] ?? snapshot.reason : "Webgraph state is unavailable.")}</span></div>
-    <span class="state" class:warning={!alive || snapshot?.phase === "blocked"}>{$t(alive && snapshot ? retryWait ? "Awaiting retry" : names[snapshot.phase] ?? snapshot.phase : "State unavailable or stale")}</span>
+    <div><h2>{$t("Webgraph")}</h2><span>{$t(snapshot ? activity.detail : "Webgraph state is unavailable.")}</span></div>
+    <span class="state" class:warning={!alive || activity.warning}>{$t(alive && snapshot ? activity.label : "State unavailable or stale")}</span>
   </section>
   {#if snapshot && totals}
     {#if mode === "configuration"}

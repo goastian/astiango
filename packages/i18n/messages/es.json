@@ -1433,5 +1433,14 @@
   "Before": "Antes",
   "After": "Después",
   "Written bytes": "Bytes escritos",
-  "Versioned durability and relationship labels add work; gains depend on the cohort.": "La durabilidad versionada y las etiquetas de relaciones añaden trabajo; las ganancias dependen de la cohorte."
+  "Versioned durability and relationship labels add work; gains depend on the cohort.": "La durabilidad versionada y las etiquetas de relaciones añaden trabajo; las ganancias dependen de la cohorte.",
+  "Output quota reached": "Cuota de salida alcanzada",
+  "Recovery required": "Recuperación necesaria",
+  "Retained inputs need recovery": "Hay entradas conservadas que necesitan recuperación",
+  "Producer blocked": "Productor bloqueado",
+  "Crawler segment quota reached": "Cuota de segmentos del crawler alcanzada",
+  "Caught up": "Al día",
+  "All eligible sealed segments consumed": "Todos los segmentos cerrados elegibles fueron consumidos",
+  "Retained segments": "Segmentos conservados",
+  "Inspect storage": "Revisar almacenamiento"
 }

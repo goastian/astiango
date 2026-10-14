@@ -269,6 +269,7 @@ export interface IndexingShard {
   id: string; file: string; sha256: string; state: string; records: number; input_bytes: number;
   documents: number; segments: number; cursor: number; elapsed_seconds: number; cpu_seconds: number;
   peak_rss_bytes: number; error: string | null; completed_at: string | null;
+  attempts?: number; next_eligible_at?: number;
 }
 export interface IndexingSnapshot {
   schema_version: 1; component: "indexer"; run_id: string; pid: number; started_at: string; updated_at: string;
@@ -291,6 +292,7 @@ export interface WebgraphInput {
   id: string; file: string; sha256: string; records: number; input_bytes: number; sealed_at: number;
   state: string; edges: number; scores: number; score_state: string; elapsed_seconds: number;
   peak_rss_bytes: number; error: string | null;
+  attempts?: number; next_at?: number;
 }
 export interface WebgraphResponse {
   snapshot: {

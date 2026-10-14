@@ -7,6 +7,7 @@
   import Icon from "./Icon.svelte";
   import Sidebar from "./Sidebar.svelte";
   import SystemOverview from "./SystemOverview.svelte";
+  import { consumerActivity } from "./work-status";
   import Pagination from "./Pagination.svelte";
   import { resolveView, views } from "./navigation";
   import BenchmarkPanel from "./BenchmarkPanel.svelte";
@@ -55,7 +56,6 @@
   const webgraphLive = $derived(!!webgraph && !webgraphError && webgraph.meta.process_alive === true && now-Date.parse(webgraph.snapshot.updated_at) <= 10_000 && webgraph.snapshot.phase !== "stopped");
   const selectedResponse = $derived(webgraphView ? webgraph : indexingView ? indexing : response);
   const componentName = $derived(webgraphView ? "Webgraph" : indexingView ? "Indexing" : "Crawler");
-  const componentStates: Record<string, string> = { indexing:"Indexing", extracting:"Extracting links", centrality:"Calculating scores", publishing:"Preparing generation", idle:"Waiting", blocked:"Backpressure", draining:"Draining", stopped:"Stopped" };
   let mobileMenu: HTMLDialogElement;
   let menuOpen = $state(false);
   let sitePage = $state(1);
@@ -71,7 +71,23 @@
     window.location.hash = "/crawler/sites";
   }
   let lastRead = $state<string | null>(null);
-  let abortController: AbortController | null = null;
+  type ReadingRequest = { controller: AbortController; startedAt: number };
+  const readings = new Map<string, ReadingRequest>();
+  let unmounted = false;
+  let serverClockAt: number | null = null;
+  let serverClockObservedAt = 0;
+
+  function readingNow() {
+    return serverClockAt === null ? Date.now() : serverClockAt + performance.now() - serverClockObservedAt;
+  }
+
+  function synchronizeClock(readAt: string | undefined) {
+    const at = Date.parse(readAt ?? "");
+    if (!Number.isFinite(at)) return;
+    serverClockAt = at;
+    serverClockObservedAt = performance.now();
+    now = at;
+  }
 
   const number = $derived(new Intl.NumberFormat($formatLocale));
   const clock = $derived(new Intl.DateTimeFormat($formatLocale, {
@@ -191,7 +207,7 @@
               : phases[snapshot.phase],
   );
   const selectedLive = $derived(webgraphView ? webgraphLive : indexingView ? indexingLive : live);
-  const selectedStatus = $derived(webgraphView || indexingView ? paused ? "Showing the last available sample." : !selectedLive ? "State unavailable or stale" : (webgraphView && webgraph?.snapshot.phase === "idle" && webgraph.snapshot.totals.pending>0 ? "Awaiting retry" : componentStates[selectedResponse?.snapshot.phase ?? ""] ?? componentName) : statusText);
+  const selectedStatus = $derived(webgraphView || indexingView ? paused ? "Showing the last available sample." : !selectedLive ? "State unavailable or stale" : consumerActivity(webgraphView ? webgraph?.snapshot : indexing?.snapshot,snapshot).label : statusText);
   const elapsed = $derived(
     snapshot
       ? Math.max(
@@ -341,34 +357,63 @@
       return undefined;
     }
   }
-  async function refresh() {
-    if (loading) return;
+  async function refreshComponent(
+    key: string,
+    read: (signal: AbortSignal) => Promise<any>,
+    receive: (value: any) => void,
+    failed: (reason: any) => void,
+    force = false,
+  ) {
+    if (unmounted) return;
+    const previous = readings.get(key);
+    // Recover requests suspended by browser sleep/back-forward cache without
+    // letting an older completion overwrite a newer sample.
+    if (previous && !force && performance.now() - previous.startedAt < 9000) return;
+    previous?.controller.abort();
+    const request = { controller: new AbortController(), startedAt: performance.now() };
+    readings.set(key, request);
     loading = true;
-    abortController = new AbortController();
-    const timeout = window.setTimeout(() => abortController?.abort(), 8000);
-    const read = async (path: string) => {
-      const result = await fetch(path, { cache: "no-store", signal: abortController?.signal });
+    const current = () => !unmounted && readings.get(key) === request;
+    const timeout = window.setTimeout(() => request.controller.abort(), 8000);
+    try {
+      const value = await read(request.controller.signal);
+      if (current()) receive(value);
+    } catch (reason) {
+      if (current()) failed(reason);
+    } finally {
+      window.clearTimeout(timeout);
+      if (readings.get(key) === request) readings.delete(key);
+      loading = readings.size > 0;
+    }
+  }
+
+  async function refresh(force = false) {
+    const read = async (path: string, signal: AbortSignal) => {
+      const result = await fetch(path, { cache: "no-store", signal });
       const data = await result.json();
       if (!result.ok) throw new Error(data.error);
       return data;
     };
-    try {
-      const [crawl, index, graph] = await Promise.allSettled([read("/api/status"), read("/api/indexing"), read("/webgraph-live.json").catch(() => read("/api/webgraph"))]);
-      if (crawl.status === "fulfilled") {
-        response = crawl.value;
-        lastRead = new Date().toISOString();
+    // One request per component; a stalled channel cannot suspend the others.
+    await Promise.allSettled([
+      refreshComponent("crawler", signal => read("/api/status", signal), value => {
+        synchronizeClock(value.meta?.read_at);
+        response = value;
+        lastRead = new Date(readingNow()).toISOString();
         error = "";
-      } else {
-        error = crawl.reason?.name === "AbortError" ? "La lectura del estado agotó el tiempo de espera." : crawl.reason?.message || "No se pudo consultar el estado del crawler.";
-      }
-      if (index.status === "fulfilled") { indexing = index.value; indexingError = ""; }
-      else { indexingError = "Indexing state is unavailable."; }
-      if (graph.status === "fulfilled") { webgraph = graph.value; webgraphError = ""; }
-      else { webgraphError = "Webgraph state is unavailable."; }
-    } finally {
-      window.clearTimeout(timeout);
-      loading = false;
-    }
+      }, reason => {
+        error = reason?.name === "AbortError" ? "La lectura del estado agotó el tiempo de espera." : reason?.message || "No se pudo consultar el estado del crawler.";
+      }, force),
+      refreshComponent("indexer", signal => read("/api/indexing", signal), value => {
+        synchronizeClock(value.meta?.read_at);
+        indexing = value;
+        indexingError = "";
+      }, () => { indexingError = "Indexing state is unavailable."; }, force),
+      refreshComponent("graph", signal => read("/webgraph-live.json", signal).catch(() => read("/api/webgraph", signal)), value => {
+        webgraph = value;
+        webgraphError = "";
+      }, () => { webgraphError = "Webgraph state is unavailable."; }, force),
+    ]);
   }
   function togglePolling() {
     paused = !paused;
@@ -388,21 +433,29 @@
     window.addEventListener("hashchange", navigate);
     void refresh();
     const polling = window.setInterval(() => {
-      if (!paused && !document.hidden) void refresh();
+      if (!paused) void refresh();
     }, 2000);
     const ticking = window.setInterval(() => {
-      now = Date.now();
+      now = readingNow();
     }, 1000);
     const onVisible = () => {
-      if (!document.hidden && !paused) void refresh();
+      if (!document.hidden && !paused) void refresh(true);
     };
     document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    window.addEventListener("online", onVisible);
     return () => {
+      unmounted = true;
       window.clearInterval(polling);
       window.clearInterval(ticking);
-      abortController?.abort();
+      for (const request of readings.values()) request.controller.abort();
+      readings.clear();
       window.removeEventListener("hashchange", navigate);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+      window.removeEventListener("online", onVisible);
     };
   });
 </script>
@@ -425,7 +478,7 @@
       <div class="header-main">
         <div class="view-heading"><h1 id="view-title" tabindex="-1">{$t(currentView?.label ?? "Vista no encontrada")}</h1><p>{$t(currentView?.description ?? "La dirección no corresponde a una vista disponible.")}</p></div>
         <div class="header-actions">
-          <button class="button primary" onclick={refresh} disabled={loading} aria-label={$t("Actualizar estado ahora")}><Icon name="refresh" />{$t("Actualizar")}</button>
+          <button class="button primary" onclick={() => void refresh(true)} aria-busy={loading} aria-label={$t("Actualizar estado ahora")}><Icon name="refresh" />{$t("Actualizar")}</button>
           <button class="button" onclick={togglePolling} aria-pressed={paused}><Icon name={paused ? "play" : "pause"} />{paused ? $t("Reanudar lectura") : $t("Pausar lectura")}</button>
           <button class="button" onclick={exportReport} disabled={!selectedResponse}><Icon name="download" />{$t("Descargar informe")}</button>
         </div>
@@ -441,9 +494,9 @@
         <div class="notice" role="status"><strong>{paused && !error && !offline ? $t("Actualización pausada.") : $t("Lectura no actualizada.")}</strong> {$t(error) || (offline ? $t("El proceso del crawler ya no está activo.") : paused ? $t("El crawler continúa de forma independiente.") : $t("El estado visible no se ha actualizado. Esta lectura no permite concluir que el crawler esté detenido."))} {#if snapshot}{$t("Se conserva el último estado recibido.")}{/if}</div>
       {/if}
       {#if view === "overview" || view === "components"}
-        <SystemOverview {snapshot} {indexing} {indexingLive} {webgraph} {webgraphLive} connected={live} status={statusText} inventory={view === "components"} />
+        <SystemOverview {snapshot} {indexing} {indexingLive} {webgraph} {webgraphLive} connected={live} status={statusText} readingPaused={paused} inventory={view === "components"} />
       {:else if webgraphView}
-        <WebgraphStatus response={webgraph} {now} error={webgraphError} mode={view === "webgraph-inputs" ? "inputs" : view === "webgraph-centrality" ? "centrality" : view === "webgraph-generations" ? "generations" : view === "webgraph-configuration" ? "configuration" : "overview"} />
+        <WebgraphStatus response={webgraph} crawler={snapshot} {now} error={webgraphError} mode={view === "webgraph-inputs" ? "inputs" : view === "webgraph-centrality" ? "centrality" : view === "webgraph-generations" ? "generations" : view === "webgraph-configuration" ? "configuration" : "overview"} />
       {:else if view === "indexing-generations"}
         <GenerationStatus {now} {paused} />
       {:else if indexingView}

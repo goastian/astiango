@@ -51,6 +51,7 @@ pub struct Config {
     pub writer_bytes: usize,
     pub cache_bytes: usize,
     pub memory_budget_bytes: usize,
+    pub max_dom_bytes: usize,
     pub max_links_per_document: usize,
     pub edge_bytes_per_document: usize,
     pub buckets: u64,
@@ -76,6 +77,7 @@ impl Default for Config {
             writer_bytes: 24 * 1024 * 1024,
             cache_bytes: 4 * 1024 * 1024,
             memory_budget_bytes: 512 * 1024 * 1024,
+            max_dom_bytes: 4 * 1024 * 1024,
             max_links_per_document: 200_000,
             edge_bytes_per_document: 64 * 1024 * 1024,
             buckets: 64,
@@ -100,16 +102,19 @@ impl Config {
             (1024 * 1024..=64 * 1024 * 1024).contains(&self.cache_bytes)
                 && (1..=128).contains(&self.buckets)
                 && self.max_links_per_document > 0
+                && self.max_dom_bytes > 0
+                && self.max_dom_bytes <= self.consumer.decoded_bytes
                 && self.edge_bytes_per_document > 0,
             "invalid graph cache/partition/link budget"
         );
         let reserve = self
-            .consumer
-            .decoded_bytes
+            .max_dom_bytes
             .saturating_mul(64)
+            .saturating_add(self.consumer.decoded_bytes.saturating_mul(2))
             .saturating_add(self.consumer.record_bytes)
             .saturating_add(self.writer_bytes * 2)
             .saturating_add(self.cache_bytes)
+            .saturating_add(self.edge_bytes_per_document)
             .saturating_add(16 * 1024 * 1024);
         anyhow::ensure!(
             reserve <= self.memory_budget_bytes,
@@ -543,6 +548,28 @@ fn process_record(
             )?;
         }
         let tx = ledger.db.begin_write()?;
+        // A valid retained payload can have a terminal exclusion (MIME, status,
+        // or extraction quota). A 304 does not turn it into an indexable graph
+        // document, and must not strand every later record in this segment.
+        let reference_source = format!("reference:{}", reference.fetch_id);
+        let original_decision = tx.open_table(RECORDS)?
+            .get((reference_source.as_str(), 0))?
+            .map(|row| serde_json::from_slice::<Decision>(row.value()))
+            .transpose()?;
+        if tx.open_table(CAPTURES)?.get(reference.fetch_id.as_str())?.is_none() {
+            if let Some(original) = original_decision.filter(|d| {
+                matches!(d.outcome.as_str(), "omitted_mime" | "omitted_status" | "quota")
+            }) {
+                decision.outcome = "revalidated_omitted".into();
+                decision.reason = Some(format!(
+                    "referenced capture {}: {}; retained for reprojection",
+                    reference.fetch_id, original.outcome
+                ));
+                decide(&tx, &decision)?;
+                tx.commit()?;
+                return Ok(());
+            }
+        }
         let current = get::<Current>(&tx, CURRENT, &url)?
             .context("deferred: graph original has no current version")?;
         let doc = get::<Document>(&tx, DOCS, &current.version)?
@@ -623,6 +650,15 @@ fn process_record(
     } else if nofollow {
         doc.state = "nofollow".into();
         decision.outcome = "nofollow".into();
+    } else if record.response.body.len() > c.max_dom_bytes {
+        decision.outcome = "quota".into();
+        decision.reason = Some(format!(
+            "decoded HTML exceeds DOM budget {}; original capture retained, previous version unchanged",
+            c.max_dom_bytes
+        ));
+        decide(&tx, &decision)?;
+        tx.commit()?;
+        return Ok(());
     } else {
         let html = {
             let _span = metrics::Span::new(1);
@@ -640,6 +676,7 @@ fn process_record(
             let mut error = None;
             let mut quota = false;
             let mut visited = 0usize;
+            let mut unsupported_links = 0u64;
             html.visit_anchor_links(|link| {
                 visited += 1;
                 if visited % 128 == 0 && CANCELLED.load(Ordering::Relaxed) {
@@ -653,6 +690,13 @@ fn process_record(
                 // The acquisition contract admits HTTP(S) resources. Non-fetchable
                 // schemes remain in the retained HTML, outside the graph projection.
                 if !matches!(link.destination.scheme(), "http" | "https") {
+                    return true;
+                }
+                // Credential-bearing anchor URLs are outside the acquisition
+                // identity contract. Preserve the HTML and continue extracting
+                // the other links instead of failing the entire source segment.
+                if !link.destination.username().is_empty() || link.destination.password().is_some() {
+                    unsupported_links += 1;
                     return true;
                 }
                 let parsed = (|| -> Result<StoredEdge> {
@@ -721,6 +765,11 @@ fn process_record(
                 .open_table(HOSTS)?
                 .range((id.as_str(), "")..=(id.as_str(), "\u{10ffff}"))?
                 .count() as u64;
+            if unsupported_links > 0 {
+                decision.reason = Some(format!(
+                    "{unsupported_links} credential-bearing links omitted; original capture retained"
+                ));
+            }
         }
     }
     {
