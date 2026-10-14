@@ -1349,5 +1349,7 @@
   "Last processed URL": "Zuletzt verarbeitete URL",
   "New current URLs": "Neue aktuelle URLs",
   "Loading": "Wird geladen",
-  "No results": "Keine Ergebnisse"
+  "No results": "Keine Ergebnisse",
+  "Index resource pressure": "Ressourcendruck im Index",
+  "Pending input budget": "Budget für ausstehende Eingaben"
 }

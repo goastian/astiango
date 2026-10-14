@@ -72,6 +72,21 @@ impl Html {
         self.clean_text = Some(text);
     }
 
+    pub fn text_snapshot(&self) -> (Option<String>, Option<String>, Option<Lang>) {
+        (self.all_text.clone(), self.clean_text.clone(), self.lang)
+    }
+
+    pub fn restore_text(&mut self, data: &(Option<String>, Option<String>, Option<Lang>)) {
+        self.all_text = data.0.clone(); self.clean_text = data.1.clone(); self.lang = data.2;
+    }
+
+    pub fn preserve_url_identity(&mut self, value: &str) -> Result<()> {
+        let mut url = Url::parse(value)?; url.set_fragment(None);
+        if self.base_url == self.url { self.base_url = url.clone(); }
+        self.url = url;
+        Ok(())
+    }
+
     pub fn parse_without_text(html: &str, url: &str) -> Result<Self> {
         let root = kuchiki::parse_html().one(html);
 

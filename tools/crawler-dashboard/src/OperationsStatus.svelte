@@ -6,6 +6,10 @@
   type Evidence = {
     report: { updated_at: string; reader?: { scans: Record<string, { median: Measurement }>; improvements?: Record<string, number> };
       postgres?: { passed: boolean; no_quorum_no_ack: boolean; replicated_payload_bytes: number; discovery_outbox_restart?: boolean; manual_failover?: { manual_rto_seconds: number } };
+      distributed_complete?: { passed: boolean; robots_downloads_after_restart: number; fetch_drain_seconds: number; commit_drain_seconds: number };
+      distributed_policy?: { passed: boolean; shared_crawl_delay_seconds: number; hot_origin_yields: boolean };
+      redundant_control?: { passed: boolean; controllers: number; controller_loss_rto_seconds: number; no_dcs_quorum_no_primary: boolean; local_data_directory_loss_rebuilt: boolean };
+      specialized_production?: { passed: boolean; added_text_bytes: number; cohort: { url: string }[]; results: { state: string }[]; index_consumer: { indexed: number; duplicates: number; noindex: number }[] | null };
       worker_drain?: { passed: boolean };
       quick_checks?: { passed: boolean; elapsed_seconds: number };
       local_failover?: { passed: boolean; rto_seconds: number; one_partition_rebalanced: boolean };
@@ -98,6 +102,35 @@
       {#if evidence.report.replication_recovery}<div><dt>{$t("Recovery HTTP requests")}</dt><dd>{number.format(evidence.report.replication_recovery.recovery_http_requests)}</dd></div>{/if}
       {#if evidence.report.pdf_extraction}<div><dt>{$t("Isolated PDF extraction")}</dt><dd>{number.format(evidence.report.pdf_extraction.median_elapsed_ms)} ms</dd></div>{/if}
     </dl>
+  {/if}
+  {#if evidence?.report.distributed_complete}
+    <h3>{$t("Distributed acquisition")}</h3>
+    <dl>
+      <div><dt>{$t("Verificación")}</dt><dd>{$t(evidence.report.distributed_complete.passed ? "Verified" : "Pending verification")}</dd></div>
+      <div><dt>{$t("Robots downloads after restart")}</dt><dd>{number.format(evidence.report.distributed_complete.robots_downloads_after_restart)}</dd></div>
+      <div><dt>{$t("Fetch / commit drain")}</dt><dd>{number.format(evidence.report.distributed_complete.fetch_drain_seconds)} / {number.format(evidence.report.distributed_complete.commit_drain_seconds)} s</dd></div>
+      {#if evidence.report.distributed_policy}<div><dt>{$t("Shared crawl delay")}</dt><dd>{number.format(evidence.report.distributed_policy.shared_crawl_delay_seconds)} s</dd></div>{/if}
+    </dl>
+  {/if}
+  {#if evidence?.report.redundant_control}
+    <h3>{$t("Redundant control plane")}</h3>
+    <dl>
+      <div><dt>{$t("Controllers")}</dt><dd>{number.format(evidence.report.redundant_control.controllers)}</dd></div>
+      <div><dt>{$t("Controller recovery")}</dt><dd>{number.format(evidence.report.redundant_control.controller_loss_rto_seconds)} s</dd></div>
+      <div><dt>{$t("No quorum, no acknowledgment")}</dt><dd>{$t(evidence.report.redundant_control.no_dcs_quorum_no_primary ? "Verified" : "Pending verification")}</dd></div>
+      <div><dt>{$t("Lost data directory recovery")}</dt><dd>{$t(evidence.report.redundant_control.local_data_directory_loss_rebuilt ? "Verified" : "Pending verification")}</dd></div>
+    </dl>
+    <p>{$t("Same-host laboratory. Independent disk failure remains unverified.")}</p>
+  {/if}
+  {#if evidence?.report.specialized_production}
+    <h3>{$t("Specialized extraction")}</h3>
+    <dl>
+      <div><dt>{$t("Archived real-web cohort")}</dt><dd>{number.format(evidence.report.specialized_production.cohort.length)}</dd></div>
+      <div><dt>{$t("Additional extracted text")}</dt><dd>{number.format(evidence.report.specialized_production.added_text_bytes)} B</dd></div>
+      <div><dt>{$t("Completed / quota failures")}</dt><dd>{number.format(evidence.report.specialized_production.results.filter(row => row.state === "committed").length)} / {number.format(evidence.report.specialized_production.results.filter(row => row.state === "failed").length)}</dd></div>
+      {#if evidence.report.specialized_production.index_consumer}<div><dt>{$t("Derived documents indexed")}</dt><dd>{number.format(evidence.report.specialized_production.index_consumer[0].indexed)}</dd></div>{/if}
+    </dl>
+    <p>{$t("Isolated offline JavaScript. Network subresources stay blocked; global coverage is not estimated.")}</p>
   {/if}
   {#if evidence?.soak}
     <h3>{$t("Continuous operation")}</h3>

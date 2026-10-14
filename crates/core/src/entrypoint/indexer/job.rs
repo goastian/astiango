@@ -81,7 +81,9 @@ impl Job {
         let mut has_host_centrality = false;
         let mut has_page_centrality = false;
         let mut has_backlinks = false;
-        while let Some(chunk) = consumer.next_batch(self.settings.batch_size)? {
+        loop {
+            let chunk = { let _span = super::metrics::Span::new(0); consumer.next_batch(self.settings.batch_size)? };
+            let Some(chunk) = chunk else { break; };
             let mut batch = Vec::new();
             let mut keys = Vec::new();
             let mut batch_keys = std::collections::HashSet::new();
@@ -113,7 +115,7 @@ impl Job {
                 committed_keys.push(keys[*position].clone());
             }
             let payload = consumer.payload(chunk.next_record, false, committed_keys.clone())?;
-            index.commit_with_payload(&payload)?;
+            { let _span = super::metrics::Span::new(5); index.commit_with_payload(&payload)?; }
             exact.commit(&committed_keys)?;
             consumer.confirm(chunk.next_record, false)?;
         }
@@ -129,7 +131,7 @@ impl Job {
         if !has_backlinks && worker.page_webgraph().is_some() {
             warn!("no backlinks found in {}", name);
         }
-        index.inverted_index.merge_into_max_segments(1)?;
+        { let _span = super::metrics::Span::new(6); index.inverted_index.merge_into_max_segments(1)?; }
         index.commit_with_payload(&payload)?;
         info!("{} done", name);
         Ok(index)

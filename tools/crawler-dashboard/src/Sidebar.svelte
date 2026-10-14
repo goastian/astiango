@@ -14,7 +14,7 @@
     <span><strong>AstianGO</strong><small>{$t("Centro de control")}</small></span>
   </a>
   <nav aria-label={$t("Navegación principal")}>
-    {#each ["Sistema", "Crawler", "Herramientas"] as group}
+    {#each ["Sistema", "Crawler", "Indexing", "Herramientas"] as group}
       <div class="nav-group">
         <span class="nav-group-label">{$t(group)}</span>
         {#each views.filter(view => view.group === group) as view}

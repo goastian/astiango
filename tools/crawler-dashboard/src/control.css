@@ -130,3 +130,13 @@ main > .transport-panel:first-child, main > .body-panel:first-child, main > .ext
 
 .sidebar-language { margin: auto 18px 14px; padding-top: 20px; }
 .sidebar-status { margin-top: 0; }
+
+/* Operator typography and spacing. */
+.view-heading h1 { font-size: 25px; letter-spacing: -.5px; }
+.header-main { padding-top: 20px; }
+.report-controls { margin: 16px 0; }
+main { padding-top: 22px; }
+.nav-group-label { font-size: 11px; }
+.nav-group a { font-size: 13px; }
+.button { font-size: 12px; }
+.indexing-cards strong { font-variant-numeric: tabular-nums; }

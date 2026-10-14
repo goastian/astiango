@@ -1349,5 +1349,7 @@
   "Last processed URL": "Last processed URL",
   "New current URLs": "New current URLs",
   "Loading": "Loading",
-  "No results": "No results"
+  "No results": "No results",
+  "Index resource pressure": "Index resource pressure",
+  "Pending input budget": "Pending input budget"
 }

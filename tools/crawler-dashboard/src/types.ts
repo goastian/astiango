@@ -264,3 +264,25 @@ export interface StatusResponse {
   snapshot: Snapshot;
   meta: { read_at: string; modified_at: string; process_alive: boolean | null };
 }
+
+export interface IndexingShard {
+  id: string; file: string; sha256: string; state: string; records: number; input_bytes: number;
+  documents: number; segments: number; cursor: number; elapsed_seconds: number; cpu_seconds: number;
+  peak_rss_bytes: number; error: string | null; completed_at: string | null;
+}
+export interface IndexingSnapshot {
+  schema_version: 1; component: "indexer"; run_id: string; pid: number; started_at: string; updated_at: string;
+  phase: string; reason: string;
+  source: { spool: string; sealed: number; open: number; oversized: number; available: number; scan_errors: number };
+  configuration: { workers: number; cpu_affinity: number; priority: number; memory_guard_bytes: number; max_output_bytes: number; max_shards: number; admission_seconds: number; batch_bytes: number; signals: string };
+  totals: { shards_completed: number; shards_failed: number; shards_deferred?: number; shards_pending: number; source_records_completed: number; indexed_documents: number; records_without_document: number; source_bytes_completed: number; elapsed_seconds: number; cpu_seconds: number; output_bytes: number };
+  worker: { pid: number; input: string; records_committed: number; records_total: number; elapsed_seconds: number; peak_rss_bytes: number; rss_bytes?: number; cpu_percent?: number; open_fds?: number; read_bytes?: number; written_bytes?: number } | null;
+  history?: Array<{ at: string; documents: number; rss_mib: number; cpu_percent: number }>;
+  runtime?: { stage: string; error?: string | null; stages?: Record<string, { wall_ms: number; cpu_ms: number }>; outcomes?: Record<string, number>; current_url?: string; documents?: number };
+  shards: IndexingShard[]; recent_events: Array<{ at: string; kind: string; message: string }>;
+  publication: { search_visible: boolean; cross_shard_dedup: boolean; gc_enabled: boolean };
+}
+export interface IndexingResponse {
+  snapshot: IndexingSnapshot;
+  meta: { read_at: string; modified_at: string; process_alive: boolean | null; cache: { reads: number; hits: number } };
+}

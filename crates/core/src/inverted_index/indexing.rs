@@ -57,11 +57,80 @@ impl InvertedIndex {
     }
 
     pub fn insert(&self, webpage: &Webpage) -> Result<()> {
+        let _span = crate::entrypoint::indexer::metrics::Span::new(4);
         self.writer
             .as_ref()
             .expect("writer has not been prepared")
             .add_document(webpage.as_tantivy(self)?)?;
         Ok(())
+    }
+
+    pub fn prepare_document(&self, webpage: &Webpage) -> Result<tantivy::schema::TantivyDocument> {
+        let _span = crate::entrypoint::indexer::metrics::Span::new(4);
+        webpage.as_tantivy(self)
+    }
+
+    pub fn add_prepared_document(&self, document: tantivy::schema::TantivyDocument) -> Result<()> {
+        self.writer
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("writer not prepared"))?
+            .add_document(document)?;
+        Ok(())
+    }
+
+    pub fn preview_documents(
+        &self,
+        query: &str,
+    ) -> Result<impl Iterator<Item = Result<(String, String, String)>>> {
+        use tantivy::schema::Value;
+        use tantivy::tokenizer::TokenStream;
+        let schema = self.schema_ref();
+        let title = schema.get_field("title")?;
+        let body = schema.get_field("stemmed_body")?;
+        let url = schema.get_field("url")?;
+        let mut analyzer = self
+            .tantivy_index
+            .tokenizers()
+            .get("tokenizer")
+            .ok_or_else(|| anyhow::anyhow!("missing index tokenizer"))?;
+        let mut stream = analyzer.token_stream(query);
+        let mut terms = Vec::new();
+        while stream.advance() {
+            anyhow::ensure!(terms.len() < 16, "preview query exceeds term budget");
+            let text = &stream.token().text;
+            let fields = [title, schema.get_field("body")?]
+                .into_iter()
+                .map(|field| {
+                    (
+                        tantivy::query::Occur::Should,
+                        Box::new(tantivy::query::TermQuery::new(
+                            tantivy::Term::from_field_text(field, text),
+                            tantivy::schema::IndexRecordOption::Basic,
+                        )) as Box<dyn tantivy::query::Query>,
+                    )
+                })
+                .collect();
+            terms.push((
+                tantivy::query::Occur::Must,
+                Box::new(tantivy::query::BooleanQuery::new(fields))
+                    as Box<dyn tantivy::query::Query>,
+            ));
+        }
+        anyhow::ensure!(!terms.is_empty(), "preview query has no terms");
+        let query = tantivy::query::BooleanQuery::new(terms);
+        let searcher = self.reader.searcher();
+        let hits = searcher.search(&query, &tantivy::collector::TopDocs::with_limit(1000))?;
+        Ok(hits.into_iter().map(move |(_, address)| {
+            let document: tantivy::schema::TantivyDocument = searcher.doc(address)?;
+            let text = |field| {
+                document
+                    .get_first(field)
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            Ok((text(url), text(title), text(body)))
+        }))
     }
 
     pub fn commit(&mut self) -> Result<()> {

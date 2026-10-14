@@ -15,6 +15,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 pub mod derived;
+pub mod metrics;
+pub mod fixture;
+pub mod pipeline;
 pub mod indexable_webpage;
 pub mod job;
 pub mod worker;
@@ -126,6 +129,7 @@ pub fn run(config: &config::IndexerConfig) -> Result<()> {
 }
 
 pub fn merge(indexes: Vec<IndexPointer>) -> Result<Index> {
+    let _span=metrics::Span::new(6);
     anyhow::ensure!(!indexes.is_empty(), "cannot merge an empty index list");
     let num_indexes = indexes.len();
     let mut it = indexes.into_iter();

@@ -126,55 +126,61 @@ impl Webgraph {
             }
         };
 
-        edges
-            .into_iter()
-            .map(|edges| {
-                edges
-                    .into_iter()
-                    .filter(|e| !e.label.is_empty())
-                    .filter(|e| {
-                        let label = e.label.to_lowercase();
-                        let stopwords = [
-                            "click",
-                            "click here",
-                            "here",
-                            "link",
-                            "website",
-                            "webpage",
-                            "page",
-                            "site",
-                            "url",
-                            "web",
-                            "visit",
-                            "more",
-                            "info",
-                            "information",
-                            "read",
-                            "read more",
-                        ];
-
-                        !stopwords.contains(&label.as_str())
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect()
+        edges.into_iter().map(useful_backlinks).collect()
     }
 }
 
+fn useful_backlinks(edges: Vec<SmallEdgeWithLabel>) -> Vec<SmallEdgeWithLabel> {
+    edges
+        .into_iter()
+        .filter(|e| !e.label.is_empty())
+        .filter(|e| {
+            let label = e.label.to_lowercase();
+            let stopwords = [
+                "click",
+                "click here",
+                "here",
+                "link",
+                "website",
+                "webpage",
+                "page",
+                "site",
+                "url",
+                "web",
+                "visit",
+                "more",
+                "info",
+                "information",
+                "read",
+                "read more",
+            ];
+
+            !stopwords.contains(&label.as_str())
+        })
+        .collect::<Vec<_>>()
+}
+
 impl Webgraph {
-    async fn new(config: &IndexerGraphConfig) -> Self {
-        match config {
-            IndexerGraphConfig::Local { path } => Self::Local(
-                webgraph::WebgraphBuilder::new(path, 0u64.into())
-                    .open()
-                    .expect("webgraph should open"),
-            ),
+    async fn new(config: &IndexerGraphConfig, strict: bool) -> Result<Self> {
+        Ok(match config {
+            IndexerGraphConfig::Local { path } => {
+                Self::Local(webgraph::WebgraphBuilder::new(path, 0u64.into()).open()?)
+            }
             IndexerGraphConfig::Remote { gossip } => {
                 let cluster = crate::start_gossip_cluster_thread(gossip.clone(), None);
                 let remote = RemoteWebgraph::new(cluster).await;
                 #[cfg(not(feature = "dev"))]
                 {
-                    remote.await_ready().await;
+                    if strict {
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(20),
+                            remote.await_ready(),
+                        )
+                        .await
+                        .map_err(|_| anyhow::anyhow!("webgraph readiness timeout"))?;
+                    } else {
+                        remote.await_ready().await;
+                    }
                 }
                 Self::Remote(remote)
             }
@@ -182,11 +188,20 @@ impl Webgraph {
                 let remote = RemoteWebgraph::new(cluster.clone()).await;
                 #[cfg(not(feature = "dev"))]
                 {
-                    remote.await_ready().await;
+                    if strict {
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(20),
+                            remote.await_ready(),
+                        )
+                        .await
+                        .map_err(|_| anyhow::anyhow!("webgraph readiness timeout"))?;
+                    } else {
+                        remote.await_ready().await;
+                    }
                 }
                 Self::Remote(remote)
             }
-        }
+        })
     }
 }
 
@@ -206,48 +221,61 @@ pub struct IndexingWorker {
 
 impl IndexingWorker {
     pub async fn new(config: Config) -> Self {
+        Self::open(config, false)
+            .await
+            .expect("indexing worker configuration failed")
+    }
+
+    pub async fn try_new(config: Config) -> Result<Self> {
+        Self::open(config, true).await
+    }
+
+    async fn open(config: Config, strict: bool) -> Result<Self> {
         let host_centrality_rank_store = speedy_kv::Db::open_or_create(
             Path::new(&config.host_centrality_store_path).join("harmonic_rank"),
-        )
-        .unwrap();
+        )?;
 
-        Self {
+        Ok(Self {
             host_centrality_store: speedy_kv::Db::open_or_create(
                 Path::new(&config.host_centrality_store_path).join("harmonic"),
-            )
-            .unwrap(),
+            )?,
             host_centrality_rank_store,
             page_centrality_store: config
                 .page_centrality_store_path
                 .as_ref()
-                .map(|p| speedy_kv::Db::open_or_create(Path::new(&p).join("harmonic")).unwrap()),
-            page_centrality_rank_store: config.page_centrality_store_path.as_ref().map(|p| {
-                speedy_kv::Db::open_or_create(Path::new(&p).join("harmonic_rank")).unwrap()
-            }),
+                .map(|p| speedy_kv::Db::open_or_create(Path::new(&p).join("harmonic")))
+                .transpose()?,
+            page_centrality_rank_store: config
+                .page_centrality_store_path
+                .as_ref()
+                .map(|p| speedy_kv::Db::open_or_create(Path::new(&p).join("harmonic_rank")))
+                .transpose()?,
             page_webgraph: match config.page_webgraph.as_ref() {
-                Some(graph) => Some(Webgraph::new(graph).await),
+                Some(graph) => Some(Webgraph::new(graph, strict).await?),
                 None => None,
             },
             safety_classifier: config
                 .safety_classifier_path
                 .as_ref()
-                .map(|path| safety_classifier::Model::open(path).unwrap()),
+                .map(|path| safety_classifier::Model::open(path))
+                .transpose()?,
             job_settings: None,
             rake: RakeModel::default(),
-            dual_encoder: config.dual_encoder.as_ref().map(|dual_encoder| {
-                let model =
-                    DualEncoderModel::open(&dual_encoder.model_path).unwrap_or_else(|err| {
-                        panic!("failed to open dual encoder model: {}", err);
-                    });
+            dual_encoder: config
+                .dual_encoder
+                .as_ref()
+                .map(|dual_encoder| {
+                    let model = DualEncoderModel::open(&dual_encoder.model_path)?;
 
-                DualEncoder {
-                    model,
-                    page_centrality_rank_threshold: dual_encoder.page_centrality_rank_threshold,
-                }
-            }),
+                    Ok::<_, anyhow::Error>(DualEncoder {
+                        model,
+                        page_centrality_rank_threshold: dual_encoder.page_centrality_rank_threshold,
+                    })
+                })
+                .transpose()?,
             dedup: config.dedup,
             consumer: config.consumer,
-        }
+        })
     }
 
     pub(super) fn page_centrality_store(&self) -> Option<&speedy_kv::Db<NodeID, f64>> {
@@ -267,6 +295,7 @@ impl IndexingWorker {
     }
 
     fn prepare(&self, page: &IndexableWebpage) -> Result<Webpage> {
+        let _span = super::metrics::Span::new(1);
         let html = match Html::parse_without_text(&page.body, &page.url) {
             Ok(html) => html,
             Err(err) => {
@@ -325,6 +354,7 @@ impl IndexingWorker {
     }
 
     fn parse_text(&self, page: &mut Webpage) -> Result<()> {
+        let _span = super::metrics::Span::new(2);
         page.html.parse_text();
 
         if page.html.empty_all_text() {
@@ -471,6 +501,136 @@ impl IndexingWorker {
         }
     }
 
+    pub async fn prepare_one(
+        &self,
+        page: &IndexableWebpage,
+        cache: &mut TextCache,
+    ) -> Result<Webpage> {
+        self.prepare_one_with_text(page, cache, None).await
+    }
+
+    pub async fn prepare_one_with_text(
+        &self,
+        page: &IndexableWebpage,
+        cache: &mut TextCache,
+        text: Option<String>,
+    ) -> Result<Webpage> {
+        let mut webpage = self.prepare(page)?;
+        webpage.html.preserve_url_identity(&page.url)?;
+        webpage.fetch_time_ms = page.fetch_time_ms;
+        {
+            let _span = super::metrics::Span::new(3);
+            let host = Node::from(webpage.html.url()).into_host().id();
+            webpage.node_id = Some(host);
+            webpage.host_centrality = self.host_centrality_store.get(&host)?.unwrap_or_default();
+            if !webpage.host_centrality.is_finite() {
+                webpage.host_centrality = 0.;
+            }
+            webpage.host_centrality_rank = self
+                .host_centrality_rank_store
+                .get(&host)?
+                .unwrap_or(u64::MAX);
+            if self
+                .job_settings
+                .and_then(|s| s.host_centrality_threshold)
+                .is_some_and(|min| webpage.host_centrality < min)
+            {
+                anyhow::bail!("low host_centrality value");
+            }
+            if let Some(store) = &self.page_centrality_store {
+                webpage.page_centrality = store
+                    .get(&Node::from(webpage.html.url()).id())?
+                    .unwrap_or_default();
+            }
+            webpage.page_centrality_rank = if let Some(store) = &self.page_centrality_rank_store {
+                store
+                    .get(&Node::from(webpage.html.url()).id())?
+                    .unwrap_or(u64::MAX)
+            } else {
+                u64::MAX
+            };
+        }
+        {
+            let _span = super::metrics::Span::new(2);
+            cache.extract(&page.body, &mut webpage.html);
+            if let Some(text) = text {
+                webpage.html.set_clean_text(text);
+            }
+            anyhow::ensure!(!webpage.html.empty_all_text(), "empty all text");
+            if let Some(minimum) = self.job_settings.and_then(|s| s.minimum_clean_words) {
+                anyhow::ensure!(
+                    webpage
+                        .html
+                        .clean_text()
+                        .is_some_and(|s| s.split_whitespace().count() >= minimum),
+                    "too few clean words"
+                );
+            }
+        }
+        {
+            let _span = super::metrics::Span::new(3);
+            self.set_keywords(&mut webpage);
+            self.set_safety_classification(&mut webpage);
+            let mut signal = SignalComputer::new(None);
+            signal.set_current_timestamp(Utc::now().timestamp().max(0) as usize);
+            webpage.pre_computed_score = signal.precompute_score(&webpage);
+            if let Some(encoder) = &self.dual_encoder {
+                if encoder
+                    .page_centrality_rank_threshold
+                    .is_none_or(|max| webpage.page_centrality_rank <= max)
+                {
+                    let title = webpage.html.title().unwrap_or_default();
+                    webpage.title_embedding = Some(
+                        encoder
+                            .model
+                            .embed(&[title])?
+                            .to_dtype(candle_core::DType::BF16)?
+                            .get(0)?,
+                    );
+                    let keywords = webpage.keywords.join("\n");
+                    webpage.keyword_embedding = Some(
+                        encoder
+                            .model
+                            .embed(&[keywords])?
+                            .to_dtype(candle_core::DType::BF16)?
+                            .get(0)?,
+                    );
+                }
+            }
+            if let Some(graph) = self.page_webgraph() {
+                let query = webgraph::query::BacklinksWithLabelsQuery::new(
+                    Node::from(webpage.html.url()).id(),
+                )
+                .with_limit(MAX_BACKLINKS);
+                let edges = match graph {
+                    Webgraph::Local(graph) => graph.search(&query)?,
+                    Webgraph::Remote(graph) => tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        graph.batch_search(vec![query]),
+                    )
+                    .await
+                    .map_err(|_| anyhow::anyhow!("webgraph query timeout"))??
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("missing webgraph response"))?,
+                };
+                let backlinks = useful_backlinks(edges);
+                webpage.set_backlinks(backlinks.clone());
+                let mut grouper =
+                    BacklinkGrouper::new(self.host_centrality_rank_store.len() as u64);
+                for backlink in backlinks {
+                    let from = self
+                        .host_centrality_rank_store
+                        .get(&backlink.from)?
+                        .unwrap_or(u64::MAX);
+                    grouper.add(backlink, from);
+                }
+                webpage.set_grouped_backlinks(grouper.groups());
+            }
+        }
+        Ok(webpage)
+    }
+
     pub async fn prepare_webpages(&self, batch: &[IndexableWebpage]) -> Vec<Webpage> {
         self.prepare_webpages_with_positions(batch)
             .await
@@ -500,6 +660,7 @@ impl IndexingWorker {
                 continue;
             }
 
+            let signal_span = super::metrics::Span::new(3);
             self.set_page_centralities(&mut webpage);
             self.set_keywords(&mut webpage);
             self.set_safety_classification(&mut webpage);
@@ -507,6 +668,7 @@ impl IndexingWorker {
             signal_computer.set_current_timestamp(Utc::now().timestamp().max(0) as usize);
             webpage.pre_computed_score = signal_computer.precompute_score(&webpage);
 
+            drop(signal_span);
             positions.push(position);
             res.push(webpage);
         }
@@ -716,5 +878,59 @@ mod tests {
 
         assert!(webpages[0].title_embedding.is_none());
         assert!(webpages[1].title_embedding.is_some());
+    }
+}
+
+pub struct TextCache {
+    entries: std::collections::VecDeque<(
+        String,
+        (Option<String>, Option<String>, Option<whatlang::Lang>),
+        usize,
+    )>,
+    bytes: usize,
+    limit: usize,
+    pub hits: u64,
+}
+impl TextCache {
+    pub fn new(limit: usize) -> Self {
+        Self {
+            entries: Default::default(),
+            bytes: 0,
+            limit,
+            hits: 0,
+        }
+    }
+    fn extract(&mut self, body: &str, html: &mut Html) {
+        let key = crate::capture::sha256(body.as_bytes());
+        if let Some((_, text, _)) = self
+            .entries
+            .iter()
+            .find(|(candidate, _, _)| candidate == &key)
+        {
+            html.restore_text(text);
+            self.hits += 1;
+            return;
+        }
+        html.parse_text();
+        if self.limit == 0 {
+            return;
+        }
+        let text = html.text_snapshot();
+        let bytes = text.0.as_ref().map_or(0, String::capacity)
+            + text.1.as_ref().map_or(0, String::capacity)
+            + key.capacity()
+            + 128;
+        if bytes > self.limit {
+            return;
+        }
+        while self.bytes + bytes > self.limit || self.entries.len() >= 64 {
+            if let Some((_, _, previous)) = self.entries.pop_front() {
+                self.bytes -= previous;
+            } else {
+                break;
+            }
+        }
+        self.entries.push_back((key, text, bytes));
+        self.bytes += bytes;
     }
 }

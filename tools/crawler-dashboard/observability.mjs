@@ -1,6 +1,6 @@
 import { open, stat } from "node:fs/promises";
 
-export function snapshotCache(path, maximumBytes = 16 * 1024 * 1024) {
+export function snapshotCache(path, maximumBytes = 16 * 1024 * 1024, validate = snapshot => snapshot.schema_version === 1 && Array.isArray(snapshot.sites) && snapshot.counters) {
   let cached;
   let pending;
   const counters = { requests: 0, reads: 0, hits: 0, failures: 0 };
@@ -17,7 +17,7 @@ export function snapshotCache(path, maximumBytes = 16 * 1024 * 1024) {
         if (info.size > maximumBytes) throw new Error("Snapshot exceeds size limit");
         const source = await file.readFile("utf8");
         const snapshot = JSON.parse(source);
-        if (snapshot.schema_version !== 1 || !Array.isArray(snapshot.sites) || !snapshot.counters) {
+        if (!validate(snapshot)) {
           const error = new Error("Unsupported crawler snapshot");
           error.code = "STATE_SCHEMA";
           throw error;

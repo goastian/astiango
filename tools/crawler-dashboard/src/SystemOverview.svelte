@@ -2,11 +2,11 @@
   import { getI18n } from "./i18n";
   const { t, locale, formatLocale } = getI18n();
 
-  import type { Snapshot } from "./types";
+  import type { Snapshot, IndexingResponse } from "./types";
   import Icon from "./Icon.svelte";
   import { componentCatalog } from "./navigation";
-  let { snapshot, connected, status, inventory = false }: {
-    snapshot?: Snapshot; connected: boolean; status: string; inventory?: boolean;
+  let { snapshot, connected, status, indexing = null, indexingLive = false, inventory = false }: {
+    snapshot?: Snapshot; connected: boolean; status: string; indexing?: IndexingResponse | null; indexingLive?: boolean; inventory?: boolean;
   } = $props();
   const format = $derived(new Intl.NumberFormat($formatLocale));
   const number = (value?: number) => value === undefined ? "—" : format.format(value);
@@ -23,18 +23,23 @@
     <article class="panel"><span>{$t("URLs pendientes")}</span><strong>{number(snapshot?.frontier_db?.pending_urls)}</strong><small>{$t("Cola durable")}</small></article>
     <article class="panel"><span>{$t("Capturas durables")}</span><strong>{number(snapshot?.spool?.records_durable)}</strong><small>{$t("Incluye ejecuciones anteriores")}</small></article>
   </section>
+  <section class="system-spotlight panel" aria-label={$t("Indexing service")}>
+    <div class="spotlight-icon"><Icon name="index" size={28} /></div>
+    <div><span class="eyebrow">{$t("Document ingestion")}</span><h2>{$t("Indexing")}</h2><p>{$t("Local index shards are built from sealed crawler captures. Publication to public search is pending.")}</p></div>
+    <a class="button primary" href="#/indexing/overview">{$t("Open indexing")} <Icon name="arrow" size={16} /></a>
+  </section>
 {/if}
 
 <section class="panel component-directory" aria-label={$t("Integración de componentes")}>
   <div class="section-heading"><h2>{inventory ? $t("Fuentes de estado") : $t("Componentes del buscador")}</h2>{#if !inventory}<a href="#/components">{$t("Ver integraciones")} <Icon name="arrow" size={15} /></a>{/if}</div>
-  <p class="directory-note">{$t("Solo el crawler tiene una fuente de estado conectada. La ausencia de integración no indica que un servicio esté detenido.")}</p>
+  <p class="directory-note">{$t("Crawler and indexing publish independent state. Components without a source have not been integrated into this panel.")}</p>
   <div class="component-rows">
     {#each componentCatalog as component}
       <article class="component-row">
         <span class="component-symbol"><Icon name={component.source ? "globe" : "components"} size={19} /></span>
         <div><h3>{$t(component.name)}</h3><p>{$t(component.purpose)}</p></div>
-        <span class="integration-state" class:source-connected={component.source && connected}>{component.source ? $t(status) : $t("Sin integración con el panel")}</span>
-        {#if component.source}<a href="#/crawler/overview" aria-label={$t("Consultar crawler")}><Icon name="arrow" size={18} /></a>{/if}
+        <span class="integration-state" class:source-connected={component.source === "indexer" ? indexingLive : component.source === "crawler" && connected}>{component.source === "indexer" ? $t(indexingLive ? "Connected" : indexing ? "State unavailable or stale" : "Indexing state is unavailable.") : component.source ? $t(status) : $t("Sin integración con el panel")}</span>
+        {#if component.source}<a href={component.source === "indexer" ? "#/indexing/overview" : "#/crawler/overview"} aria-label={$t(component.source === "indexer" ? "Open indexing" : "Consultar crawler")}><Icon name="arrow" size={18} /></a>{/if}
       </article>
     {/each}
   </div>

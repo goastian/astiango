@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { execFile } from "node:child_process";
 import { readFile, stat, mkdir, open, rename } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, extname, resolve, sep } from "node:path";
@@ -42,10 +43,13 @@ export function createDashboardServer({
   seriesPath = process.env.CRAWLER_SERIES_PATH || null,
   operationsPath = process.env.CRAWLER_OPERATIONS_PATH || resolve(appDirectory, "../../data/crawler-operations/report.json"),
   soakPath = process.env.CRAWLER_SOAK_PATH || resolve(appDirectory, "../../data/crawler-operations/soak.json"),
+  indexingPath = process.env.INDEXER_STATE_PATH || resolve(appDirectory, "../../data/indexer-shared/status.json"),
 } = {}) {
+  let previewBusy = false;
   const distRoot = resolve(distDirectory);
   const observations = snapshotCache(statePath);
   const series = resourceSeries(seriesPath);
+  const indexing = snapshotCache(indexingPath, 256 * 1024, snapshot => snapshot.schema_version === 1 && snapshot.component === "indexer" && Array.isArray(snapshot.shards) && snapshot.shards.length <= 128 && snapshot.totals && snapshot.configuration && snapshot.source && snapshot.publication);
   return createServer(async (request, response) => {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "no-referrer");
@@ -94,6 +98,42 @@ export function createDashboardServer({
         respondJson(response, 200, { report, soak });
       } catch (error) {
         respondJson(response, error.code === "ENOENT" ? 404 : 503, { code: "OPERATIONS_UNAVAILABLE", error: "Operational verification is unavailable." });
+      }
+      return;
+    }
+    if (pathname === "/api/indexing/preview") {
+      const query = new URL(request.url, "http://localhost").searchParams.get("q") || "";
+      if (!query.trim() || Buffer.byteLength(query,"utf8") > 4096) { respondJson(response, 400, { error: "Invalid preview query." }); return; }
+      if (previewBusy) { respondJson(response, 429, { error: "Preview busy; retry shortly." }); return; }
+      previewBusy = true;
+      execFile(resolve(appDirectory, "../../target/release/astiango-indexer"), [resolve(dirname(indexingPath), "current-job.toml"), "--query", query], { timeout: 5000, maxBuffer: 256 * 1024, env: { ...process.env, RUST_LOG: "error" } }, (error, stdout) => {
+        previewBusy = false;
+        if (error) { respondJson(response, 503, { error: "Local preview unavailable or ingestion busy; retry shortly." }); return; }
+        try { respondJson(response, 200, JSON.parse(stdout)); } catch { respondJson(response, 503, { error: "Invalid native preview response." }); }
+      });
+      return;
+    }
+    if (pathname === "/api/indexing" || pathname === "/api/indexing/shards") {
+      try {
+        const observation = await indexing.get();
+        const { snapshot } = observation;
+        let alive = processAlive(snapshot.pid);
+        if (alive && snapshot.start_ticks) {
+          try {
+            const proc = await readFile(`/proc/${snapshot.pid}/stat`, "utf8");
+            alive = proc.slice(proc.lastIndexOf(")") + 2).split(" ")[19] === snapshot.start_ticks;
+          } catch { alive = false; }
+        }
+        if (pathname.endsWith("/shards")) {
+          const parameters = new URL(request.url, "http://localhost").searchParams;
+          try {
+            respondJson(response, 200, { run_id: snapshot.run_id, ...paginate(snapshot.shards.map(row => ({ ...row, status: row.state })), parameters, ["id", "file", "error"]) });
+          } catch (error) { respondJson(response, 400, { error: error.message }); }
+        } else {
+          respondJson(response, 200, { snapshot, meta: { read_at: new Date().toISOString(), modified_at: observation.modifiedAt, process_alive: alive, cache: { ...indexing.counters } } });
+        }
+      } catch (error) {
+        respondJson(response, 503, { code: error.code === "ENOENT" ? "INDEXING_UNAVAILABLE" : "INDEXING_UNREADABLE", error: "Indexing state is unavailable." });
       }
       return;
     }

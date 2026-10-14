@@ -8,6 +8,9 @@ export const views = [
   { id: "performance", path: "/crawler/performance", group: "Crawler", label: "Rendimiento", icon: "chart", description: "Transporte, memoria, extracción, pipeline y publicación de métricas." },
   { id: "storage", path: "/crawler/storage", group: "Crawler", label: "Almacenamiento", icon: "storage", description: "Capturas WARC, segmentos durables, cuotas y publicación." },
   { id: "configuration", path: "/crawler/configuration", group: "Crawler", label: "Configuración", icon: "settings", description: "Parámetros activos e identidad de la ejecución. Consulta sin modificar el crawl." },
+  { id: "indexing", path: "/indexing/overview", group: "Indexing", label: "Indexing overview", icon: "index", description: "Committed documents, input progress, resources and coexistence with the crawler." },
+  { id: "indexing-shards", path: "/indexing/shards", group: "Indexing", label: "Input shards", icon: "storage", description: "Sealed segments, checkpoints and errors in the local ingestion queue." },
+  { id: "indexing-configuration", path: "/indexing/configuration", group: "Indexing", label: "Indexing configuration", icon: "settings", description: "Worker budgets, pilot limits and publication scope." },
   { id: "benchmarks", path: "/tools/benchmarks", group: "Herramientas", label: "Pruebas de capacidad", icon: "experiment", description: "Mediciones locales y comparaciones reproducibles, separadas de la operación." },
 ];
 
@@ -23,7 +26,7 @@ export function resolveView(hash: string) {
 
 export const componentCatalog = [
   { name: "Crawler", purpose: "Adquisición web, descubrimiento y captura durable.", source: "crawler" },
-  { name: "Indexación", purpose: "Procesamiento de documentos y publicación del índice.", source: null },
+  { name: "Indexación", purpose: "Procesamiento de documentos y publicación del índice.", source: "indexer" },
   { name: "Grafo web", purpose: "Enlaces, centralidad y señales para planificación.", source: null },
   { name: "Búsqueda y API", purpose: "Consultas, ranking y disponibilidad del buscador.", source: null },
   { name: "Coordinación", purpose: "Trabajos distribuidos y capacidad de los nodos.", source: null },

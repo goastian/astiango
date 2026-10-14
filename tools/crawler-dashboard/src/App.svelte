@@ -20,6 +20,7 @@
   import ResilienceStatus from "./ResilienceStatus.svelte";
   import SchedulingStatus from "./SchedulingStatus.svelte";
   import ResourceStatus from "./ResourceStatus.svelte";
+  import IndexingStatus from "./IndexingStatus.svelte";
   import OperationsStatus from "./OperationsStatus.svelte";
   import PerformanceRates from "./PerformanceRates.svelte";
   import {
@@ -28,10 +29,12 @@
     buildSiteOutcomes,
     snapshotAgeMs,
   } from "./metrics";
-  import type { StatusResponse, Site, SiteStatus } from "./types";
+  import type { StatusResponse, Site, SiteStatus, IndexingResponse } from "./types";
 
   let response = $state<StatusResponse | null>(null);
   let error = $state("");
+  let indexing = $state<IndexingResponse | null>(null);
+  let indexingError = $state("");
   let loading = $state(false);
   let paused = $state(false);
   let now = $state(Date.now());
@@ -41,6 +44,8 @@
   let selectedHost = $state("");
   let windowMinutes = $state(15);
   let view = $state(resolveView(window.location.hash));
+  const indexingView = $derived(view.startsWith("indexing"));
+  const indexingLive = $derived(!!indexing && !indexingError && indexing.meta.process_alive === true && now - Date.parse(indexing.snapshot.updated_at) <= 10_000 && indexing.snapshot.phase !== "stopped");
   let mobileMenu: HTMLDialogElement;
   let menuOpen = $state(false);
   let sitePage = $state(1);
@@ -270,14 +275,15 @@
       : value.toLocaleString($formatLocale, { maximumFractionDigits: 1 });
   }
   function exportReport() {
-    if (!response) return;
-    const blob = new Blob([JSON.stringify(response, null, 2)], {
+    const report = indexingView ? indexing : response;
+    if (!report) return;
+    const blob = new Blob([JSON.stringify(report, null, 2)], {
       type: "application/json",
     });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `crawler-${response.snapshot.run_id}-${Date.parse(response.snapshot.updated_at)}.json`;
+    link.download = `${indexingView ? "indexing" : "crawler"}-${report.snapshot.run_id}-${Date.parse(report.snapshot.updated_at)}.json`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -328,24 +334,23 @@
     loading = true;
     abortController = new AbortController();
     const timeout = window.setTimeout(() => abortController?.abort(), 8000);
-    try {
-      const result = await fetch("/api/status", {
-        cache: "no-store",
-        signal: abortController.signal,
-      });
+    const read = async (path: string) => {
+      const result = await fetch(path, { cache: "no-store", signal: abortController?.signal });
       const data = await result.json();
-      if (!result.ok)
-        throw new Error(
-          data.error || "No se pudo consultar el estado del crawler.",
-        );
-      response = data;
-      lastRead = new Date().toISOString();
-      error = "";
-    } catch (cause) {
-      error =
-        cause instanceof Error && cause.name !== "AbortError"
-          ? cause.message
-          : "La lectura del estado agotó el tiempo de espera.";
+      if (!result.ok) throw new Error(data.error);
+      return data;
+    };
+    try {
+      const [crawl, index] = await Promise.allSettled([read("/api/status"), read("/api/indexing")]);
+      if (crawl.status === "fulfilled") {
+        response = crawl.value;
+        lastRead = new Date().toISOString();
+        error = "";
+      } else {
+        error = crawl.reason?.name === "AbortError" ? "La lectura del estado agotó el tiempo de espera." : crawl.reason?.message || "No se pudo consultar el estado del crawler.";
+      }
+      if (index.status === "fulfilled") { indexing = index.value; indexingError = ""; }
+      else { indexingError = "Indexing state is unavailable."; }
     } finally {
       window.clearTimeout(timeout);
       loading = false;
@@ -408,13 +413,13 @@
         <div class="header-actions">
           <button class="button primary" onclick={refresh} disabled={loading} aria-label={$t("Actualizar estado ahora")}><Icon name="refresh" />{$t("Actualizar")}</button>
           <button class="button" onclick={togglePolling} aria-pressed={paused}><Icon name={paused ? "play" : "pause"} />{paused ? $t("Reanudar lectura") : $t("Pausar lectura")}</button>
-          <button class="button" onclick={exportReport} disabled={!snapshot}><Icon name="download" />{$t("Descargar informe")}</button>
+          <button class="button" onclick={exportReport} disabled={indexingView ? !indexing : !snapshot}><Icon name="download" />{$t("Descargar informe")}</button>
         </div>
       </div>
       <div class="report-controls">
-        <div class="execution-context"><Icon name="calendar" size={16} /><span>{$t("Ejecución desde {p0}", { p0: date(snapshot?.started_at) })}</span></div>
+        <div class="execution-context"><Icon name="calendar" size={16} /><span>{$t("Ejecución desde {p0}", { p0: date(indexingView ? indexing?.snapshot.started_at : snapshot?.started_at) })}</span></div>
         {#if view === "crawler-overview"}<label class="history-window"><span>{$t("Gráficos")}</span><select bind:value={windowMinutes} aria-label={$t("Intervalo de los gráficos")}><option value={5}>{$t("Últimos 5 minutos")}</option><option value={15}>{$t("Últimos 15 minutos")}</option><option value={60}>{$t("Última hora")}</option></select></label>{/if}
-        <div class="run-health"><span class="connection" class:live class:warning={!!error || offline || (stale && activeProcess)} role="status"><span class="status-dot"></span>{$t(statusText)}</span><span>{$t("Última lectura {p0} · cada 2 s", { p0: time(lastRead) })}</span></div>
+        <div class="run-health"><small>{$t("Crawler")}</small><span class="connection" class:live class:warning={!!error || offline || (stale && activeProcess)} role="status"><span class="status-dot"></span>{$t(statusText)}</span><span>{$t("Última lectura {p0} · cada 2 s", { p0: time(lastRead) })}</span></div>
       </div>
     </header>
     <main id="main-content" data-view={view}>
@@ -422,7 +427,9 @@
         <div class="notice" role="status"><strong>{paused && !error && !offline ? $t("Actualización pausada.") : $t("Lectura no actualizada.")}</strong> {$t(error) || (offline ? $t("El proceso del crawler ya no está activo.") : paused ? $t("El crawler continúa de forma independiente.") : $t("El estado visible no se ha actualizado. Esta lectura no permite concluir que el crawler esté detenido."))} {#if snapshot}{$t("Se conserva el último estado recibido.")}{/if}</div>
       {/if}
       {#if view === "overview" || view === "components"}
-        <SystemOverview {snapshot} connected={live} status={statusText} inventory={view === "components"} />
+        <SystemOverview {snapshot} {indexing} {indexingLive} connected={live} status={statusText} inventory={view === "components"} />
+      {:else if indexingView}
+        <IndexingStatus response={indexing} crawler={snapshot} {now} readError={indexingError} {paused} mode={view === "indexing-shards" ? "shards" : view === "indexing-configuration" ? "configuration" : "overview"} />
       {:else if view === "crawler-overview"}
     <section
       class="overview-grid"

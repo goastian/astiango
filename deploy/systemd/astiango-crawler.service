@@ -1,0 +1,33 @@
+[Unit]
+Description=AstianGO crawler
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=astiango
+Group=astiango
+WorkingDirectory=/opt/astiango
+ExecStartPre=/opt/astiango/target/release/astiango-crawler validate /etc/astiango/crawler.toml
+ExecStart=/opt/astiango/target/release/astiango-crawler run /etc/astiango/crawler.toml
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=180
+MemoryHigh=768M
+MemoryMax=1G
+CPUQuota=200%
+TasksMax=128
+LimitNOFILE=1024
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/astiango/data
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

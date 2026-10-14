@@ -49,6 +49,11 @@ struct Commit {
 }
 
 impl Consumer {
+    pub fn fingerprint(&self) -> &str { &self.state.fingerprint }
+    pub fn source_key(&self) -> &str {
+        self.path.file_stem().and_then(|name|name.to_str()).unwrap_or_default()
+    }
+
     pub fn open(source: &WarcSource, path: &str, directory: &Path, limits: Limits) -> Result<Self> {
         limits.validate()?;
         fs::create_dir_all(directory)?;
@@ -291,7 +296,7 @@ pub fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
     result
 }
 
-fn checksum(mut reader: impl Read) -> Result<String> {
+pub(crate) fn checksum(mut reader: impl Read) -> Result<String> {
     let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
     let mut buffer = [0u8; 65536];
     loop {

@@ -8,15 +8,15 @@ use crate::{capture, crawler::dedup::{Config, ExactSet}, index::Index, webpage::
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Document {
-    version: u32,
-    id: String,
-    source: capture::Metadata,
-    kind: String,
-    derived_sha256: String,
-    text: String,
-    title: String,
-    indexing_allowed: bool,
+pub(crate) struct Document {
+    pub(crate) version: u32,
+    pub(crate) id: String,
+    pub(crate) source: capture::Metadata,
+    pub(crate) kind: String,
+    pub(crate) derived_sha256: String,
+    pub(crate) text: String,
+    pub(crate) title: String,
+    pub(crate) indexing_allowed: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

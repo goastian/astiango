@@ -17,6 +17,7 @@
     components: "M4 4h6v6H4ZM14 4h6v6h-6ZM4 14h6v6H4ZM14 14h6v6h-6Z",
     sites: "M3 7h18v14H3ZM7 3h10v4M7 11h3M14 11h3M7 16h3M14 16h3",
     activity: "M3 12h4l3-7 4 14 3-7h4",
+    index: "M4 3h13l3 3v15H4ZM8 8h8M8 12h8M8 16h5",
     queue: "M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1",
     chart: "M4 3v17h17M8 15V9M13 15V5M18 15v-4",
     storage: "M3 5h18v6H3ZM3 14h18v6H3ZM17 8h1M17 17h1",

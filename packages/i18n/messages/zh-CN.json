@@ -1349,5 +1349,7 @@
   "Last processed URL": "最后处理的 URL",
   "New current URLs": "新的当前 URL",
   "Loading": "加载中",
-  "No results": "没有结果"
+  "No results": "没有结果",
+  "Index resource pressure": "索引资源压力",
+  "Pending input budget": "待处理输入预算"
 }
