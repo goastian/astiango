@@ -17,3 +17,6 @@ proptest-regressions
 .zed
 rustc-ice-*
 *.pdf
+
+# Local Python operation/build helpers
+__pycache__/

@@ -93,31 +93,65 @@ fn source_digest(path: &Path) -> Result<String> {
     visit(path, &mut digest)?;
     Ok(crate::capture::hex(digest.finish().as_ref()))
 }
+/// Read the same validated stores and grouping rule used by the planner, without admitting HTTP.
+pub fn preview_signals(path: &std::path::Path, urls: &[String]) -> Result<serde_json::Value> {
+    let bundle = crate::webgraph::signals::Bundle::load(path)?;
+    anyhow::ensure!(
+        bundle.scope != "page",
+        "host planner cannot adopt page-scope centrality"
+    );
+    let ranks = speedy_kv::Db::<NodeID, u64>::open_or_create(path.join("scores/harmonic_rank"))?;
+    let groups = HarmonicRankGroup::new(ranks.len() as u64, NUM_GROUPS as u64);
+    let mut results = Vec::new();
+    for raw in urls {
+        let url = Url::parse(raw)?;
+        let domain = crate::webgraph::signals::key(&url, &bundle.scope)?;
+        let id = Node::from(Url::parse(&format!("https://{domain}/"))?)
+            .into_host()
+            .id();
+        let rank = ranks.get(&id)?;
+        results.push(serde_json::json!({"url":raw,"identity":domain,"rank":rank,"group":rank_group(rank,&groups),"score":bundle.lookup(&url)?.0}));
+    }
+    Ok(
+        serde_json::json!({"binding":bundle.binding,"results":results,"adopted":false,"external_requests":0}),
+    )
+}
+fn rank_group(rank: Option<u64>, groups: &HarmonicRankGroup) -> usize {
+    rank.map(|rank| NUM_GROUPS - 1 - groups.group(rank) as usize)
+        .unwrap_or(NUM_GROUPS - 1)
+        .min(NUM_GROUPS - 1)
+}
 struct UrlGrouper {
     store: Arc<super::plan_store::Store>,
     harmonic_group: Arc<HarmonicRankGroup>,
     harmonic_rank: Arc<speedy_kv::Db<NodeID, u64>>,
+    signal_scope: Option<String>,
 }
 impl UrlGrouper {
     fn group(&self, url: &Url) -> usize {
-        let Some(domain) = url.icann_domain() else {
-            return NUM_GROUPS - 1;
+        self.group_checked(url).unwrap_or(NUM_GROUPS - 1)
+    }
+    fn group_checked(&self, url: &Url) -> Result<usize> {
+        let owned = self
+            .signal_scope
+            .as_ref()
+            .map(|scope| crate::webgraph::signals::key(url, scope))
+            .transpose()?;
+        let Some(domain) = owned.as_deref().or_else(|| url.icann_domain()) else {
+            return Ok(NUM_GROUPS - 1);
         };
         let Ok(domain_url) = Url::parse(&format!("https://{domain}/")) else {
-            return NUM_GROUPS - 1;
+            return Ok(NUM_GROUPS - 1);
         };
         let id = Node::from(domain_url).into_host().id();
-        self.harmonic_rank
-            .get(&id)
-            .ok()
-            .flatten()
-            .map(|rank| NUM_GROUPS - 1 - self.harmonic_group.group(rank) as usize)
-            .unwrap_or(NUM_GROUPS - 1)
-            .min(NUM_GROUPS - 1)
+        Ok(rank_group(
+            self.harmonic_rank.get(&id)?,
+            &self.harmonic_group,
+        ))
     }
     fn insert(&self, url: Url, host: NodeID) -> Result<bool> {
         self.store
-            .insert(self.group(&url) as u64, &url, host.as_u128())
+            .insert(self.group_checked(&url)? as u64, &url, host.as_u128())
     }
     fn into_groups(self) -> Vec<super::plan_store::Group> {
         (0..NUM_GROUPS as u64)
@@ -200,6 +234,20 @@ impl CrawlPlanner {
     }
 
     fn check_config(config: &CrawlPlannerConfig) -> Result<()> {
+        if let Some(path) = &config.graph_generation {
+            let bundle = crate::webgraph::signals::Bundle::load(path)?;
+            anyhow::ensure!(
+                bundle.scope != "page",
+                "planner host ranking requires host or tenant signals"
+            );
+            let scores = bundle.path.join("scores").canonicalize()?;
+            anyhow::ensure!(
+                Path::new(&config.host_harmonic_path).canonicalize()? == scores
+                    && Path::new(&config.host_centrality_rank_store_path).canonicalize()?
+                        == scores.join("harmonic_rank").canonicalize()?,
+                "planner graph/scores/ranks generation mismatch"
+            );
+        }
         config.signals.validate()?;
         anyhow::ensure!(
             config.num_job_queues > 0
@@ -367,6 +415,12 @@ impl CrawlPlanner {
             store: store.clone(),
             harmonic_group: self.harmonic_group.clone(),
             harmonic_rank: self.host_centrality_rank.clone(),
+            signal_scope: self
+                .config
+                .graph_generation
+                .as_ref()
+                .map(|path| crate::webgraph::signals::Bundle::load(path).map(|bundle| bundle.scope))
+                .transpose()?,
         };
         let mut processed = store.checkpoint("pages_processed")?;
         let mut futures = FuturesOrdered::new();
@@ -670,6 +724,7 @@ mod tests {
                 .unwrap(),
             harmonic_rank: Arc::new(rank),
             harmonic_group: Arc::new(HarmonicRankGroup::new(1000, NUM_GROUPS as u64)),
+            signal_scope: None,
         };
         assert_eq!(
             grouper.group(&Url::parse("https://news.example.org/a").unwrap()),

@@ -154,7 +154,9 @@ export function createDashboardServer({
       let generationActive = false;
       try { generationActive = !!(await generations.get()).snapshot.active; } catch {}
       previewBusy = true;
-      execFile(process.env.INDEXER_BINARY || resolve(appDirectory, "../../target/release/astiango-indexer"), [resolve(dirname(indexingPath), "current-job.toml"), generationActive ? "--generation-query" : "--query", query], { timeout: 5000, maxBuffer: 256 * 1024, env: { ...process.env, RUST_LOG: "error" } }, (error, stdout) => {
+      const previewSelector = resolve(dirname(indexingPath), "preview-reader");
+      const previewBinary = process.env.INDEXER_BINARY || await stat(previewSelector).then(() => previewSelector).catch(() => resolve(appDirectory, "../../target/release/astiango-indexer"));
+      execFile(previewBinary, [resolve(dirname(indexingPath), "current-job.toml"), generationActive ? "--generation-query" : "--query", query], { timeout: 5000, maxBuffer: 256 * 1024, env: { ...process.env, RUST_LOG: "error" } }, (error, stdout) => {
         previewBusy = false;
         if (error) { respondJson(response, 503, { error: "Local preview unavailable or ingestion busy; retry shortly." }); return; }
         try { respondJson(response, 200, JSON.parse(stdout)); } catch { respondJson(response, 503, { error: "Invalid native preview response." }); }

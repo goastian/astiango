@@ -171,7 +171,10 @@ impl EdgeStore {
     /// relation and label. Keep distinct relationships instead of pair-only dedup.
     pub(super) fn insert_versioned(&mut self, edge: Edge) -> Result<()> {
         self.prepare_writer()?;
-        self.writer.as_mut().expect("writer prepared").add_document(edge)?;
+        self.writer
+            .as_mut()
+            .expect("writer prepared")
+            .add_document(edge)?;
         Ok(())
     }
 
@@ -198,26 +201,42 @@ impl EdgeStore {
         Ok(())
     }
 
-    pub(super) fn commit_payload(&self) -> Result<Option<String>> { Ok(self.index.load_metas()?.payload) }
+    pub(super) fn commit_payload(&self) -> Result<Option<String>> {
+        Ok(self.index.load_metas()?.payload)
+    }
 
     /// Merge sealed projections without opening extra writers. The caller builds
     /// in an unselected generation; both source and destination are committed.
     pub(super) fn merge_committed(&mut self, other: Self) -> Result<()> {
-        anyhow::ensure!(self.writer.is_none() && other.writer.is_none(), "sealed merge cannot include uncommitted writers");
-        anyhow::ensure!(self.index.schema() == other.index.schema(), "incompatible graph schema");
+        anyhow::ensure!(
+            self.writer.is_none() && other.writer.is_none(),
+            "sealed merge cannot include uncommitted writers"
+        );
+        anyhow::ensure!(
+            self.index.schema() == other.index.schema(),
+            "incompatible graph schema"
+        );
         let mut meta = self.index.load_metas()?;
         let other_meta = other.index.load_metas()?;
         let ids: HashSet<_> = meta.segments.iter().map(|s| s.id()).collect();
         for segment in other_meta.segments {
-            if ids.contains(&segment.id()) { continue; }
+            if ids.contains(&segment.id()) {
+                continue;
+            }
             for file in segment.list_files() {
                 let source = other.path.join(&file);
-                if source.exists() { fs::rename(source, self.path.join(&file))?; }
+                if source.exists() {
+                    fs::rename(source, self.path.join(&file))?;
+                }
             }
             meta.segments.push(segment);
         }
-        meta.segments.sort_by_key(|a| std::cmp::Reverse(a.max_doc()));
-        fs::write(self.path.join("meta.json"), serde_json::to_vec_pretty(&meta)?)?;
+        meta.segments
+            .sort_by_key(|a| std::cmp::Reverse(a.max_doc()));
+        fs::write(
+            self.path.join("meta.json"),
+            serde_json::to_vec_pretty(&meta)?,
+        )?;
         let other_path = other.path.clone();
         drop(other);
         fs::remove_dir_all(other_path)?;

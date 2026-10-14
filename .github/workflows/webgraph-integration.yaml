@@ -1,0 +1,37 @@
+name: Webgraph integration
+permissions:
+  contents: read
+on:
+  pull_request:
+    paths: ['crates/**', 'Cargo.*', 'rust-toolchain.toml', 'configs/webgraph/**', 'configs/indexer/**', 'scripts/*webgraph*.py', 'scripts/build-ingestion.py', 'scripts/control-center-observation.py', 'scripts/configure-dashboard-preview.mjs', 'tools/crawler-dashboard/**', 'packages/i18n/**', '.github/workflows/webgraph-integration.yaml']
+  push:
+    paths: ['crates/**', 'Cargo.*', 'rust-toolchain.toml', 'configs/webgraph/**', 'configs/indexer/**', 'scripts/*webgraph*.py', 'scripts/build-ingestion.py', 'scripts/control-center-observation.py', 'scripts/configure-dashboard-preview.mjs', 'tools/crawler-dashboard/**', 'packages/i18n/**', '.github/workflows/webgraph-integration.yaml']
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CFLAGS: -std=gnu17
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.90.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.10.0'
+      - run: sudo apt-get update && sudo apt-get install -y liburing-dev libssl-dev pkg-config clang binutils
+      - run: cargo fetch --locked
+      - run: python3 scripts/build-ingestion.py --verify-rebuild
+      - run: node --check scripts/configure-dashboard-preview.mjs
+      - run: python3 scripts/webgraph-signals-integration.py
+      - run: npm ci && npm run check && npm run build
+        working-directory: tools/crawler-dashboard
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webgraph-integration-evidence
+          path: |
+            docs/webgraph-w05-w08-pruebas-*.json
+            data/artifacts/*/latest.json

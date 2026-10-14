@@ -14,9 +14,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod defaults;
 mod acquisition;
-pub use acquisition::{default_max_redirect_hops, CrawlNetworkPolicy, CrawlerConfig, HttpConfig, LocalConfig, S3Config, UserAgent, WarcSource};
+pub mod defaults;
+pub use acquisition::{
+    default_max_redirect_hops, CrawlNetworkPolicy, CrawlerConfig, HttpConfig, LocalConfig,
+    S3Config, UserAgent, WarcSource,
+};
 
 pub use web_spell::CorrectionConfig;
 
@@ -465,6 +468,8 @@ pub struct CrawlPlannerDomainBoost {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct CrawlPlannerConfig {
+    #[serde(default)]
+    pub graph_generation: Option<PathBuf>,
     #[serde(default)]
     pub signals: crate::crawler::plan_signals::Config,
     #[serde(default = "default_planner_memory")]

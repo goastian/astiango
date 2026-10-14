@@ -225,7 +225,10 @@ pub(super) fn save_prepared(ledger: &Ledger, row: &Decision, doc: &TantivyDocume
     tx.commit()?;
     Ok(())
 }
-fn decode_prepared(bytes: &[u8]) -> Result<TantivyDocument> {
+fn decode_prepared(
+    bytes: &[u8],
+    signal: Option<(&crate::webgraph::signals::Bundle, &str)>,
+) -> Result<TantivyDocument> {
     let mut decoded = Vec::new();
     flate2::read::GzDecoder::new(bytes)
         .take(128 * 1024 * 1024 + 1)
@@ -256,13 +259,38 @@ fn decode_prepared(bytes: &[u8]) -> Result<TantivyDocument> {
         "incompatible prepared document/schema version"
     );
     let mut doc = TantivyDocument::new();
-    let count = crate::schema::create_schema().num_fields() as u32;
+    let schema = crate::schema::create_schema();
+    let overlay = signal
+        .map(|(bundle, url)| -> Result<_> {
+            let prefix = if bundle.scope == "page" {
+                "page"
+            } else {
+                "host"
+            };
+            Ok((
+                schema.get_field(&format!("{prefix}_centrality"))?,
+                schema.get_field(&format!("{prefix}_centrality_rank"))?,
+                bundle.lookup(&url::Url::parse(url)?)?,
+            ))
+        })
+        .transpose()?;
+    let count = schema.num_fields() as u32;
     for (field, value) in prepared.fields {
         anyhow::ensure!(field < count, "unknown prepared field");
+        if overlay
+            .as_ref()
+            .is_some_and(|(score, rank, _)| field == score.field_id() || field == rank.field_id())
+        {
+            continue;
+        }
         doc.add_field_value(
             tantivy::schema::Field::from_field_id(field),
             &value.decode()?,
         );
+    }
+    if let Some((score, rank, (value, ordinal))) = overlay {
+        doc.add_f64(score, value);
+        doc.add_u64(rank, ordinal);
     }
     Ok(doc)
 }
@@ -773,6 +801,18 @@ pub fn prepare(
     status(root)?;
     let result = (|| -> Result<Manifest> {
         let mut signal_hashes = signals(base)?;
+        let graph_binding = policy
+            .graph_generation
+            .as_ref()
+            .map(|path| crate::webgraph::signals::Bundle::load(path))
+            .transpose()?;
+        if let Some(bundle) = &graph_binding {
+            signal_hashes["graph_generation"] = bundle.binding.clone();
+            signal_hashes["adopted"] = serde_json::json!(true);
+            signal_hashes["prepared_values"] = serde_json::json!(
+                "content preserved; centrality fields replaced from one verified generation"
+            );
+        }
         let mut contexts = BTreeMap::new();
         let tx = ledger.db.begin_read()?;
         let current = tx.open_table(CURRENT)?;
@@ -780,6 +820,11 @@ pub fn prepare(
         let mut digests: Vec<_> = (0..BUCKETS)
             .map(|_| ring::digest::Context::new(&ring::digest::SHA256))
             .collect();
+        let signal_binding_hash =
+            crate::capture::sha256(&serde_json::to_vec(&signal_hashes.get("graph_generation"))?);
+        for digest in &mut digests {
+            digest.update(signal_binding_hash.as_bytes());
+        }
         let mut documents = 0;
         let mut catalog = std::io::BufWriter::new(File::create(directory.join("catalog.jsonl"))?);
         let mut logical = ring::digest::Context::new(&ring::digest::SHA256);
@@ -881,7 +926,12 @@ pub fn prepare(
                 let bytes = prepared
                     .get(row.version.as_str())?
                     .context("prepared document lost")?;
-                let doc = decode_prepared(bytes.value())?;
+                let doc = decode_prepared(
+                    bytes.value(),
+                    graph_binding
+                        .as_ref()
+                        .map(|bundle| (bundle, row.url.as_str())),
+                )?;
                 let cost = doc.node_data.capacity() + 4096;
                 anyhow::ensure!(
                     cost <= policy.prepared_bytes,
@@ -1187,7 +1237,15 @@ pub fn status(root: &Path) -> Result<serde_json::Value> {
             entries.push(serde_json::json!({"id":m.id,"state":"ready","documents":m.documents,"created_at":m.created_at,"logical_sha256":m.logical_sha256,"elapsed_ms":m.elapsed_ms,"reused_buckets":m.reused_buckets,"rebuilt_buckets":m.rebuilt_buckets}));
         }
     }
-    let value = serde_json::json!({"version":1,"updated_at":chrono::Utc::now(),"active":selected.as_ref().map(|s|&s.active),"previous":selected.as_ref().and_then(|s|s.previous.as_ref()),"generations":entries,"artifact":build_info(),"gc_enabled":false,"public_serving_rollout":false,"last_error":if root.join("publication-error.json").exists(){Some(json::<serde_json::Value>(&root.join("publication-error.json"),65536)?)}else{None}});
+    let adoption = selected
+        .as_ref()
+        .map(|s| {
+            validate_manifest(root, &s.active, false)
+                .map(|m| m.signals.get("graph_generation").cloned())
+        })
+        .transpose()?
+        .flatten();
+    let value = serde_json::json!({"version":1,"updated_at":chrono::Utc::now(),"active":selected.as_ref().map(|s|&s.active),"previous":selected.as_ref().and_then(|s|s.previous.as_ref()),"generations":entries,"signals_adoption":adoption,"artifact":build_info(),"gc_enabled":false,"public_serving_rollout":false,"last_error":if root.join("publication-error.json").exists(){Some(json::<serde_json::Value>(&root.join("publication-error.json"),65536)?)}else{None}});
     atomic(&root.join("generations/status.json"), &value)?;
     Ok(value)
 }
@@ -1209,18 +1267,19 @@ fn serving_query(directory: &Path, query: &str) -> Result<serde_json::Value> {
         safe_search: false,
         ..Default::default()
     };
-    let pages = rt.block_on(async {
+    let (pages, signals) = rt.block_on(async {
         let initial = searcher.search_initial(&query, false).await?;
         let pointers: Vec<_> = initial
             .websites
             .iter()
             .map(|page| page.pointer().clone())
             .collect();
-        searcher.retrieve_websites(&pointers, &query.query).await
+        let signals:Vec<_>=initial.websites.iter().map(|page|serde_json::json!({"host_centrality":page.signals().get(crate::ranking::SignalEnum::from(crate::ranking::signals::HostCentrality)).map(|v|v.value),"page_centrality":page.signals().get(crate::ranking::SignalEnum::from(crate::ranking::signals::PageCentrality)).map(|v|v.value),"score":page.score()})).collect();
+        Ok::<_,anyhow::Error>((searcher.retrieve_websites(&pointers, &query.query).await?,signals))
     })?;
     let results: Vec<_> = pages.into_iter().map(|page| serde_json::json!({"url":page.url,"title":page.title.chars().take(512).collect::<String>(),"snippet":if page.body.is_empty(){page.dirty_body.chars().take(240).collect::<String>()}else{page.body.chars().take(240).collect::<String>()},"snippet_source":if page.body.is_empty(){"all_text"}else{"clean_text"},"engine_snippet":page.snippet,"region":page.region})).collect();
     Ok(
-        serde_json::json!({"version":1,"documents":documents,"results":results,"reader":"LocalSearcher"}),
+        serde_json::json!({"version":1,"documents":documents,"results":results,"reader":"LocalSearcher","ranking_signals":signals}),
     )
 }
 pub fn query(base: &IndexerConfig, query: &str) -> Result<serde_json::Value> {

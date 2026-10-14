@@ -61,6 +61,14 @@ pub struct Config {
     pub report_path: Option<PathBuf>,
     pub publish_generations: bool,
     pub max_centrality_edges: u64,
+    pub centrality_enabled: bool,
+    pub centrality_scope: String,
+    pub centrality_max_nodes: usize,
+    pub centrality_max_edges: usize,
+    pub centrality_memory_bytes: usize,
+    pub centrality_max_iterations: usize,
+    pub centrality_timeout_ms: u64,
+    pub centrality_status_path: Option<PathBuf>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -87,12 +95,33 @@ impl Default for Config {
             report_path: None,
             publish_generations: false,
             max_centrality_edges: 2000,
+            centrality_enabled: false,
+            centrality_scope: "host".into(),
+            centrality_max_nodes: 8192,
+            centrality_max_edges: 250000,
+            centrality_memory_bytes: 64 * 1024 * 1024,
+            centrality_max_iterations: 256,
+            centrality_timeout_ms: 30000,
+            centrality_status_path: None,
         }
     }
 }
 impl Config {
     pub fn validate(&self) -> Result<()> {
         self.consumer.validate()?;
+        anyhow::ensure!(
+            matches!(self.centrality_scope.as_str(), "host" | "page" | "tenant")
+                && (1..=16384).contains(&self.centrality_max_nodes)
+                && self.centrality_max_edges > 0
+                && self.centrality_max_edges <= 1000000
+                && self.centrality_memory_bytes >= 1048576
+                && self.centrality_memory_bytes <= self.memory_budget_bytes / 2
+                && self.centrality_max_iterations > 0
+                && self.centrality_max_iterations <= 16384
+                && self.centrality_timeout_ms > 0
+                && self.centrality_timeout_ms <= 600000,
+            "invalid centrality identity/CPU/memory/iteration budget"
+        );
         anyhow::ensure!(
             self.consumer.workers == 1
                 && (15 * 1024 * 1024..=64 * 1024 * 1024).contains(&self.writer_bytes),
@@ -552,13 +581,21 @@ fn process_record(
         // or extraction quota). A 304 does not turn it into an indexable graph
         // document, and must not strand every later record in this segment.
         let reference_source = format!("reference:{}", reference.fetch_id);
-        let original_decision = tx.open_table(RECORDS)?
+        let original_decision = tx
+            .open_table(RECORDS)?
             .get((reference_source.as_str(), 0))?
             .map(|row| serde_json::from_slice::<Decision>(row.value()))
             .transpose()?;
-        if tx.open_table(CAPTURES)?.get(reference.fetch_id.as_str())?.is_none() {
+        if tx
+            .open_table(CAPTURES)?
+            .get(reference.fetch_id.as_str())?
+            .is_none()
+        {
             if let Some(original) = original_decision.filter(|d| {
-                matches!(d.outcome.as_str(), "omitted_mime" | "omitted_status" | "quota")
+                matches!(
+                    d.outcome.as_str(),
+                    "omitted_mime" | "omitted_status" | "quota"
+                )
             }) {
                 decision.outcome = "revalidated_omitted".into();
                 decision.reason = Some(format!(
@@ -695,7 +732,8 @@ fn process_record(
                 // Credential-bearing anchor URLs are outside the acquisition
                 // identity contract. Preserve the HTML and continue extracting
                 // the other links instead of failing the entire source segment.
-                if !link.destination.username().is_empty() || link.destination.password().is_some() {
+                if !link.destination.username().is_empty() || link.destination.password().is_some()
+                {
                     unsupported_links += 1;
                     return true;
                 }
@@ -967,6 +1005,8 @@ pub struct Partition {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Manifest {
     #[serde(default)]
+    pub signals: Option<super::signals::Summary>,
+    #[serde(default)]
     pub artifacts: BTreeMap<String, String>,
     pub version: u32,
     #[serde(default)]
@@ -1013,7 +1053,7 @@ fn read_manifest(c: &Config, id: &str) -> Result<Manifest> {
         .take(1024 * 1024),
     )?;
     anyhow::ensure!(
-        m.version == 1 && m.state == "ready" && m.id == id,
+        matches!(m.version, 1 | 2) && m.state == "ready" && m.id == id,
         "unknown or partial graph generation"
     );
     Ok(m)
@@ -1091,7 +1131,12 @@ fn prepare_with_ledger(c: &Config, ledger: &Ledger, rebuild: bool) -> Result<Man
         .transpose()?;
     if !rebuild {
         if let Some(old) = &previous_manifest {
-            if old.logical_sha256 == logical {
+            if old.logical_sha256 == logical
+                && (!c.centrality_enabled
+                    || old.signals.as_ref().is_some_and(|s| {
+                        super::signals::contract_hash(c).is_ok_and(|hash| s.config_sha256 == hash)
+                    }))
+            {
                 let mut old = old.clone();
                 old.reused_buckets = c.buckets;
                 old.rebuilt_buckets = 0;
@@ -1258,8 +1303,9 @@ fn prepare_with_ledger(c: &Config, ledger: &Ledger, rebuild: bool) -> Result<Man
         .transpose()?
         .unwrap_or(0);
     let mut manifest = Manifest {
+        signals: None,
         artifacts: BTreeMap::new(),
-        version: 1,
+        version: if c.centrality_enabled { 2 } else { 1 },
         revision,
         id: id.clone(),
         state: "ready".into(),
@@ -1278,7 +1324,10 @@ fn prepare_with_ledger(c: &Config, ledger: &Ledger, rebuild: bool) -> Result<Man
             .unwrap_or("unpackaged")
             .into(),
     };
-    if total > 0 && total <= c.max_centrality_edges {
+    if c.centrality_enabled {
+        manifest.signals = Some(super::signals::calculate(&root, c)?);
+        manifest.scores_state = "calculated".into();
+    } else if total > 0 && total <= c.max_centrality_edges {
         calculate_scores(c, &root)?;
         manifest.scores_state = "calculated".into();
     } else if total == 0 {
@@ -1308,6 +1357,18 @@ fn prepare_with_ledger(c: &Config, ledger: &Ledger, rebuild: bool) -> Result<Man
         &c.output_path.join("publication.json"),
         &serde_json::json!({"version":1,"selector":selector,"complete":true}),
     )?;
+    {
+        let signals = &manifest.signals;
+        let state = serde_json::json!({"version":2,"updated_at":chrono::Utc::now(),"generation":manifest.id,
+            "manifest_sha256":selector.manifest_sha256,"graph_sha256":manifest.logical_sha256,
+            "signals":signals,"state":"ready","indexer_adopted":false,"planner_adopted":false});
+        consumer::atomic_json(&c.output_path.join("signals-current.json"), &state)?;
+        if let Some(path) = &c.centrality_status_path {
+            if let Err(error) = consumer::atomic_json(path, &state) {
+                tracing::warn!(%error,"signal metrics projection unavailable; durable generation remains ready");
+            }
+        }
+    }
     let tx = ledger.db.begin_write()?;
     {
         let keys = tx
@@ -1360,6 +1421,47 @@ fn verify_artifacts(root: &Path, manifest: &Manifest) -> Result<()> {
         "graph generation artifact checksum mismatch; generation retained for diagnosis"
     );
     Ok(())
+}
+pub fn rollback(c: &Config) -> Result<serde_json::Value> {
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(c.output_path.join("ingestion.lock"))?;
+    lock.try_lock_exclusive()?;
+    let current = read_selector(c)?.context("no graph generation selected")?;
+    let id = current
+        .previous
+        .clone()
+        .context("no previous graph generation")?;
+    let manifest = read_manifest(c, &id)?;
+    let root = c.output_path.join("generations").join(&id);
+    verify_artifacts(&root, &manifest)?;
+    let next = Selector {
+        version: 1,
+        active: id.clone(),
+        previous: Some(current.active),
+        manifest_sha256: consumer::checksum(File::open(root.join("manifest.json"))?)?,
+    };
+    consumer::atomic_json(
+        &c.output_path.join("publication.json"),
+        &serde_json::json!({"version":1,"selector":next,"complete":false}),
+    )?;
+    consumer::atomic_json(&c.output_path.join("graph-selector.json"), &next)?;
+    consumer::atomic_json(
+        &c.output_path.join("publication.json"),
+        &serde_json::json!({"version":1,"selector":next,"complete":true}),
+    )?;
+    {
+        let signals = &manifest.signals;
+        let state = serde_json::json!({"version":2,"generation":manifest.id,"updated_at":chrono::Utc::now(),"signals":signals,"state":"ready","manifest_sha256":next.manifest_sha256,"graph_sha256":manifest.logical_sha256});
+        consumer::atomic_json(&c.output_path.join("signals-current.json"), &state)?;
+        if let Some(path) = &c.centrality_status_path {
+            let _ = consumer::atomic_json(path, &state);
+        }
+    }
+    Ok(serde_json::json!({"active":id,"rolled_back":true}))
 }
 fn calculate_scores(c: &Config, root: &Path) -> Result<()> {
     let graph = Webgraph::open(root.join("graph"), 0u64.into())?;
@@ -1437,7 +1539,7 @@ pub fn query(c: &Config, url: &str, backlinks: bool) -> Result<serde_json::Value
     let manifest = read_manifest(c, &selector.active)?;
     let root = c.output_path.join("generations").join(&manifest.id);
     verify_artifacts(&root, &manifest)?;
-    let graph = Webgraph::open(root.join("graph"), 0u64.into())?;
+    let graph = Webgraph::open(&c.output_path, 0u64.into())?;
     let node = Node::from(Url::parse(url)?);
     let edges = if backlinks {
         graph.search(

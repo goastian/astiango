@@ -1,8 +1,10 @@
 <script lang="ts">
+  import SignalsStatus from "./SignalsStatus.svelte";
+  import type { ComponentFlow } from "./component-flow";
   import { getI18n } from "./i18n";
   import { onMount } from "svelte";
   const { t, formatLocale } = getI18n();
-  let { now, paused = false }: { now: number; paused?: boolean } = $props();
+  let { flow = null, now, paused = false }: { flow?:ComponentFlow|null; now: number; paused?: boolean } = $props();
   type Generation = { id: string; state: string; documents: number; created_at: string; logical_sha256: string; elapsed_ms: number; rebuilt_buckets: number; reused_buckets: number; error?: string };
   let data = $state<{ version: number; active: string | null; previous: string | null; generations: Generation[]; artifact?: { build_id: string; engine: string }; last_error?: {error:string}|null; updated_at: string } | null>(null);
   let error = $state("");
@@ -22,6 +24,8 @@
   const date = $derived(new Intl.DateTimeFormat($formatLocale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }));
   const states: Record<string,string> = { ready:"Ready", preparing:"Preparing", failed:"Failed", abandoned:"Interrupted", active:"Active generation" };
 </script>
+<SignalsStatus {flow} compact />
+
 
 <div class="generation-view">
   <section class="release-line panel">

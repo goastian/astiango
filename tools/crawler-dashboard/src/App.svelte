@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SignalBenchmark from "./SignalBenchmark.svelte";
   import GraphBenchmark from "./GraphBenchmark.svelte";
   import { initI18n } from "./i18n";
   const { t, locale, formatLocale } = initI18n();
@@ -6,6 +7,7 @@
   import { onMount } from "svelte";
   import Icon from "./Icon.svelte";
   import Sidebar from "./Sidebar.svelte";
+  import type { ComponentFlow } from "./component-flow";
   import SystemOverview from "./SystemOverview.svelte";
   import { consumerActivity } from "./work-status";
   import Pagination from "./Pagination.svelte";
@@ -56,6 +58,8 @@
   const webgraphLive = $derived(!!webgraph && !webgraphError && webgraph.meta.process_alive === true && now-Date.parse(webgraph.snapshot.updated_at) <= 10_000 && webgraph.snapshot.phase !== "stopped");
   const selectedResponse = $derived(webgraphView ? webgraph : indexingView ? indexing : response);
   const componentName = $derived(webgraphView ? "Webgraph" : indexingView ? "Indexing" : "Crawler");
+  let flow = $state<ComponentFlow | null>(null);
+  const usableFlow = $derived(flow && now-Date.parse(flow.updated_at)<=10000 ? {...flow,signals:flow.signals?.generation===webgraph?.snapshot.generation?.id ? flow.signals : null} : null);
   let mobileMenu: HTMLDialogElement;
   let menuOpen = $state(false);
   let sitePage = $state(1);
@@ -396,6 +400,7 @@
     };
     // One request per component; a stalled channel cannot suspend the others.
     await Promise.allSettled([
+      refreshComponent("flow", signal => read("/component-flow.json", signal), value => { flow = value; }, () => {}, force),
       refreshComponent("crawler", signal => read("/api/status", signal), value => {
         synchronizeClock(value.meta?.read_at);
         response = value;
@@ -494,13 +499,13 @@
         <div class="notice" role="status"><strong>{paused && !error && !offline ? $t("Actualización pausada.") : $t("Lectura no actualizada.")}</strong> {$t(error) || (offline ? $t("El proceso del crawler ya no está activo.") : paused ? $t("El crawler continúa de forma independiente.") : $t("El estado visible no se ha actualizado. Esta lectura no permite concluir que el crawler esté detenido."))} {#if snapshot}{$t("Se conserva el último estado recibido.")}{/if}</div>
       {/if}
       {#if view === "overview" || view === "components"}
-        <SystemOverview {snapshot} {indexing} {indexingLive} {webgraph} {webgraphLive} connected={live} status={statusText} readingPaused={paused} inventory={view === "components"} />
+        <SystemOverview flow={usableFlow} {snapshot} {indexing} {indexingLive} {webgraph} {webgraphLive} connected={live} status={statusText} readingPaused={paused} inventory={view === "components"} />
       {:else if webgraphView}
-        <WebgraphStatus response={webgraph} crawler={snapshot} {now} error={webgraphError} mode={view === "webgraph-inputs" ? "inputs" : view === "webgraph-centrality" ? "centrality" : view === "webgraph-generations" ? "generations" : view === "webgraph-configuration" ? "configuration" : "overview"} />
+        <WebgraphStatus flow={usableFlow} response={webgraph} crawler={snapshot} {now} error={webgraphError} mode={view === "webgraph-inputs" ? "inputs" : view === "webgraph-centrality" ? "centrality" : view === "webgraph-generations" ? "generations" : view === "webgraph-configuration" ? "configuration" : "overview"} />
       {:else if view === "indexing-generations"}
-        <GenerationStatus {now} {paused} />
+        <GenerationStatus flow={usableFlow} {now} {paused} />
       {:else if indexingView}
-        <IndexingStatus response={indexing} crawler={snapshot} {now} readError={indexingError} {paused} mode={view === "indexing-shards" ? "shards" : view === "indexing-configuration" ? "configuration" : "overview"} />
+        <IndexingStatus flow={usableFlow} response={indexing} crawler={snapshot} {now} readError={indexingError} {paused} mode={view === "indexing-shards" ? "shards" : view === "indexing-configuration" ? "configuration" : "overview"} />
       {:else if view === "crawler-overview"}
     <section
       class="overview-grid"
@@ -1184,7 +1189,7 @@
       {:else if view === "not-found"}
         <section class="empty-view panel"><Icon name="components" size={30} /><h2>{$t("Esta vista no está disponible")}</h2><p>{$t("Usa la navegación para abrir una función del centro de control.")}</p><a class="button primary" href="#/overview">{$t("Volver a la vista general")}</a></section>
       {/if}
-      {#if view === "benchmarks"}<GraphBenchmark /><OperationsStatus />{/if}
+      {#if view === "benchmarks"}<SignalBenchmark /><GraphBenchmark /><OperationsStatus />{/if}
       <BenchmarkPanel visible={view === "benchmarks"} />
       <footer class="page-footer"><span>AstianGO <span class="slash">/</span> {selectedResponse?.snapshot.run_id ?? $t("Sin ejecución")}</span><span>{$t("Hora de Bogotá · Estado: {p0}", { p0: time(selectedResponse?.snapshot.updated_at) })}</span></footer>
     </main>

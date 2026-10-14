@@ -42,6 +42,14 @@ struct Args {
     make_corpus: Option<PathBuf>,
     #[arg(long)]
     legacy_baseline: bool,
+    #[arg(long)]
+    compare_centrality: Option<PathBuf>,
+    #[arg(long)]
+    inspect_signals: Option<PathBuf>,
+    #[arg(long)]
+    rollback: bool,
+    #[arg(long)]
+    planner_url: Vec<String>,
 }
 extern "C" fn drain(_: libc::c_int) {
     pipeline::CANCELLED.store(true, Ordering::Relaxed);
@@ -59,7 +67,7 @@ fn main() -> anyhow::Result<()> {
     if args.build_info {
         println!(
             "{}",
-            serde_json::json!({"version":1,"build_id":option_env!("WEBGRAPH_BUILD_ID").unwrap_or("unpackaged"),"commit":option_env!("WEBGRAPH_GIT_COMMIT"),"ledger_version":1,"generation_version":1,"engine":"tantivy-fork-0.23 graph-schema-v1","identity":"C11 ledger + legacy NodeID projection","lock_sha256":option_env!("WEBGRAPH_LOCK_SHA256")})
+            serde_json::json!({"version":1,"build_id":option_env!("WEBGRAPH_BUILD_ID").unwrap_or("unpackaged"),"commit":option_env!("WEBGRAPH_GIT_COMMIT"),"ledger_version":1,"generation_version":2,"generation_versions":[1,2],"signal_version":2,"engine":"tantivy-fork-0.23 graph-schema-v1","identity":"C11 ledger + legacy NodeID projection","lock_sha256":option_env!("WEBGRAPH_LOCK_SHA256")})
         );
         return Ok(());
     }
@@ -83,7 +91,17 @@ fn main() -> anyhow::Result<()> {
     }
     let config: pipeline::Config = toml::from_str(&raw)?;
     config.validate()?;
-    let value = if args.prepare_generation {
+    let value = if let Some(path) = args.inspect_signals {
+        if args.planner_url.is_empty() {
+            astiango::webgraph::signals::Bundle::load(&path)?.binding
+        } else {
+            astiango::crawler::planner::preview_signals(&path, &args.planner_url)?
+        }
+    } else if let Some(path) = args.compare_centrality {
+        astiango::webgraph::signals::compare(&path, &config)?
+    } else if args.rollback {
+        pipeline::rollback(&config)?
+    } else if args.prepare_generation {
         let cpu = metrics::cpu_ns();
         let mut v = serde_json::to_value(pipeline::prepare(&config, args.rebuild)?)?;
         v["stages"] = serde_json::to_value(metrics::snapshot())?;

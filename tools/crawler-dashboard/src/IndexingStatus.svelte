@@ -1,13 +1,16 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getI18n } from "./i18n";
+  import WorkPulse from "./WorkPulse.svelte";
+  import SignalsStatus from "./SignalsStatus.svelte";
+  import type { ComponentFlow } from "./component-flow";
   import TimeChart from "./TimeChart.svelte";
   import Pagination from "./Pagination.svelte";
   import type { IndexingResponse, Snapshot } from "./types";
   import { consumerActivity } from "./work-status";
   const { t, formatLocale } = getI18n();
-  let { response, crawler, now, readError = "", paused = false, mode = "overview" }: {
-    response: IndexingResponse | null; crawler?: Snapshot; now: number; readError?: string; paused?: boolean; mode?: string;
+  let { flow = null, response, crawler, now, readError = "", paused = false, mode = "overview" }: {
+    flow?:ComponentFlow|null; response: IndexingResponse | null; crawler?: Snapshot; now: number; readError?: string; paused?: boolean; mode?: string;
   } = $props();
   let generation = $state<{active:string|null}|null>(null);
   onMount(() => {
@@ -63,6 +66,7 @@
 </script>
 
 <div class="indexing-content">
+  {#if mode === "overview"}<WorkPulse {flow} component="indexer" /><SignalsStatus {flow} compact />{/if}
   <section class="panel indexing-health" aria-label={$t("Indexing service")}>
     <div><h2>{$t("Indexing service")}</h2><p>{snapshot ? $t(activity.detail) : $t("Indexing state is unavailable.")}</p></div>
     <span class:warning={unavailable || activity.warning}>{unavailable ? $t("State unavailable or stale") : snapshot ? $t(activity.label) : "—"}</span>
@@ -82,7 +86,7 @@
           <div><dt>{$t("Admission interval")}</dt><dd>{snapshot.configuration.admission_seconds} s</dd></div>
           <div><dt>{$t("Worker priority")}</dt><dd>{snapshot.configuration.priority}</dd></div>
         </dl>
-        <p>{$t("Ranking models and graph signals are not configured for this local pilot.")}</p>
+        <p>{$t(flow?.indexer_adoption ? "Index adoption confirmed" : "Ranking models and graph signals are not configured for this local pilot.")}</p>
         <p>{$t("The memory guard is sampled; operating system memory quotas remain unverified.")}</p>
         <p>{$t("Input spool")}: <code>{snapshot.source.spool}</code></p>
       </section>

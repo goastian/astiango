@@ -13,5 +13,6 @@ export function consumerActivity(value: IndexingSnapshot | WebgraphResponse["sna
   if (exhausted || (!pending && failures > 0)) return { label: "Recovery required", detail: "Retained inputs need recovery", warning: true };
   if (pending > 0) return { label: "Awaiting retry", detail: "Deferred inputs retain their captures", warning: true };
   if (crawler?.phase === "backpressure") return { label: "Producer blocked", detail: crawler.resources?.reason === "spool_full" ? "Crawler segment quota reached" : "Crawler resource pressure", warning: true };
+  if (value.source.open > 0) return { label: "Keeping up", detail: "All closed input consumed; next segment is being captured", warning: false };
   return { label: "Caught up", detail: "All eligible sealed segments consumed", warning: false };
 }

@@ -1,7 +1,7 @@
 # Upgrade alongside the running legacy observer; consumers adopt generations explicitly.
 source_spool = "data/crawler-local/warc/spool"
 state_directory = "data/webgraph-ingestion"
-binary = "data/artifacts/webgraph/10eeb1ed56a3d4f8093090c1fcea953be3f6bbb6386f1662ca404e849e926baa/astiango-webgraph"
+binary = "data/artifacts/webgraph/1dc50daa53db1af063d7a4964a91978a1c1fb992bb0ee21da79f3ed5d731b909/astiango-webgraph"
 poll_seconds = 2
 scan_seconds = 10
 max_pending = 32
@@ -11,6 +11,14 @@ job_timeout_seconds = 240
 publication_seconds = 300
 
 [graph]
+centrality_enabled = true
+centrality_scope = "host"
+centrality_max_nodes = 8192
+centrality_max_edges = 250000
+centrality_memory_bytes = 67108864
+centrality_max_iterations = 256
+centrality_timeout_ms = 30000
+centrality_status_path = "tools/crawler-dashboard/dist/graph-signals-live.json"
 max_dom_bytes = 4194304
 writer_bytes = 25165824
 cache_bytes = 4194304

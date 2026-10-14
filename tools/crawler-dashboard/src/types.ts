@@ -301,7 +301,7 @@ export interface WebgraphResponse {
     configuration: { workers: number; priority: number; memory_guard_bytes: number; max_output_bytes: number; minimum_disk_free_bytes: number; max_input_bytes: number; max_pending: number; max_centrality_edges: number; job_timeout_seconds: number; binary_sha256: string };
     source: { sealed: number; open: number; oversized: number; scan_errors: number };
     totals: { inputs: number; completed: number; pending: number; failed: number; source_records: number; stored_edges: number; scored_inputs: number; output_bytes: number };
-    worker: { pid: number; input: string; stage: string; elapsed_seconds: number; rss_bytes?: number; cpu_seconds?: number; open_fds?: number } | null;
+    worker: { pid: number; input: string; stage: string; elapsed_seconds: number; rss_bytes?: number; cpu_seconds?: number; open_fds?: number; read_bytes?:number; written_bytes?:number } | null;
     runtime?: { revision: number; documents: number; current_edges: number; outcomes: Record<string, number>; cpu_ms: number; allocated_bytes: number; elapsed_ms: number; stages: Record<string, {cpu_ms: number; wall_ms: number; allocated_bytes: number}> };
     generation?: {id: string; revision: number; state: string; edges: number; documents: number; rebuilt_buckets: number; reused_buckets: number; elapsed_ms: number; logical_sha256: string; build_id: string; scores_state: string; partitions: Array<{bucket: number; edges: number; hash: string}> } | null;
     publication_error?: string | null;

@@ -46,6 +46,7 @@ pub struct Config {
     pub report_path: Option<PathBuf>,
     pub derivatives: Vec<PathBuf>,
     pub publish_generations: bool,
+    pub graph_generation: Option<PathBuf>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -63,6 +64,7 @@ impl Default for Config {
             report_path: None,
             derivatives: vec![],
             publish_generations: false,
+            graph_generation: None,
         }
     }
 }

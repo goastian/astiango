@@ -35,16 +35,17 @@ use searcher::Searcher;
 
 mod builder;
 pub mod centrality;
-pub mod metrics;
-pub mod pipeline;
 mod doc_address;
 mod edge;
+pub mod metrics;
 mod node;
+pub mod pipeline;
 pub mod query;
 pub mod remote;
 pub mod schema;
 mod searcher;
 mod shortest_path;
+pub mod signals;
 mod store;
 pub mod tokenizer;
 mod warmed_column_fields;
@@ -95,6 +96,34 @@ impl Webgraph {
     }
 
     pub fn open<P: AsRef<Path>>(path: P, shard_id: ShardId) -> Result<Self> {
+        if path.as_ref().join("graph-selector.json").is_file() {
+            let raw: serde_json::Value = serde_json::from_reader(std::io::Read::take(
+                std::fs::File::open(path.as_ref().join("graph-selector.json"))?,
+                65536,
+            ))?;
+            anyhow::ensure!(raw["version"] == 1, "unknown graph selector version");
+            let id = raw["active"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("graph selector has no active generation"))?;
+            uuid::Uuid::parse_str(id)?;
+            let generation = path.as_ref().join("generations").join(id);
+            let manifest: pipeline::Manifest =
+                serde_json::from_reader(std::fs::File::open(generation.join("manifest.json"))?)?;
+            anyhow::ensure!(
+                matches!(manifest.version, 1 | 2) && manifest.state == "ready" && manifest.id == id,
+                "unknown/partial graph generation"
+            );
+            anyhow::ensure!(
+                crate::warc::consumer::checksum(std::fs::File::open(
+                    generation.join("manifest.json")
+                )?)? == raw["manifest_sha256"].as_str().unwrap_or_default(),
+                "graph selector manifest checksum mismatch"
+            );
+            if manifest.signals.is_some() {
+                signals::Bundle::load(&generation)?;
+            }
+            return Self::open(generation.join("graph"), shard_id);
+        }
         fs::create_dir_all(&path)?;
 
         let store = EdgeStore::open(path.as_ref().join("edges"), shard_id)?;
@@ -113,10 +142,18 @@ impl Webgraph {
         Ok(())
     }
 
-    pub fn prepare_writer_with_budget(&mut self, bytes: usize) -> Result<()> { self.store.prepare_writer_with_budget(bytes) }
-    pub fn insert_versioned(&mut self, edge: Edge) -> Result<()> { self.store.insert_versioned(edge) }
-    pub fn commit_with_payload(&mut self, payload: &str) -> Result<()> { self.store.commit_with_payload(payload) }
-    pub fn commit_payload(&self) -> Result<Option<String>> { self.store.commit_payload() }
+    pub fn prepare_writer_with_budget(&mut self, bytes: usize) -> Result<()> {
+        self.store.prepare_writer_with_budget(bytes)
+    }
+    pub fn insert_versioned(&mut self, edge: Edge) -> Result<()> {
+        self.store.insert_versioned(edge)
+    }
+    pub fn commit_with_payload(&mut self, payload: &str) -> Result<()> {
+        self.store.commit_with_payload(payload)
+    }
+    pub fn commit_payload(&self) -> Result<Option<String>> {
+        self.store.commit_payload()
+    }
 
     pub fn commit(&mut self) -> Result<()> {
         self.store.commit()?;
