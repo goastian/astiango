@@ -238,6 +238,7 @@ fn calculate_centrality(graph: &Webgraph) -> BTreeMap<NodeID, f64> {
         if !has_changes {
             break;
         }
+        let _measurement = crate::webgraph::metrics::Span::new(8);
 
         let mut new_changed_nodes = U64BloomFilter::new(num_nodes, 0.05);
 

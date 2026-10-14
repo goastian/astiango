@@ -102,15 +102,17 @@ impl WebgraphWorker {
                 limits,
             )?;
             consumer.recover_commit(self.graph.commit_payload()?.as_deref())?;
-            while let Some(batch) = consumer.next_batch(64)? {
+            loop {
+                let batch={let _span=crate::webgraph::metrics::Span::new(0);consumer.next_batch(64)?};
+                let Some(batch)=batch else {break;};
                 for record in batch.records {
                     if !record.links_allowed() || record.is_revalidation() {
                         continue;
                     }
-                    let webpage = match Html::parse_without_text(
+                    let webpage = match {let _span=crate::webgraph::metrics::Span::new(1);Html::parse_without_text(
                         &record.response.body,
                         &record.request.url,
-                    ) {
+                    )} {
                         Ok(webpage) => webpage,
                         Err(err) => {
                             tracing::error!("error parsing webpage: {}", err);
@@ -138,6 +140,7 @@ impl WebgraphWorker {
                         .and_then(|store| store.get(&source.clone().into_host().id()).unwrap())
                         .unwrap_or(u64::MAX);
 
+                    let _links_span=crate::webgraph::metrics::Span::new(2);
                     let num_outgoing_hosts_from_page = webpage
                         .anchor_links()
                         .into_iter()
@@ -190,6 +193,7 @@ impl WebgraphWorker {
                 }
 
                 let payload = consumer.payload(batch.next_record, false, Vec::new())?;
+                let _span=crate::webgraph::metrics::Span::new(5);
                 self.graph.commit_with_payload(&payload)?;
                 consumer.confirm(batch.next_record, false)?;
             }
@@ -270,6 +274,7 @@ impl Webgraph {
                 })
                 .collect()
         });
+        let _merge_span=crate::webgraph::metrics::Span::new(6);
         let copies = workspace.copies(&inputs?)?;
         let mut copies = copies.into_iter();
         let first = copies

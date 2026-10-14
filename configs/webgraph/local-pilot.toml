@@ -1,0 +1,22 @@
+# Local observation cohort; scores stay separate from indexer/planner signals.
+source_spool = "data/crawler-local/warc/spool"
+state_directory = "data/webgraph-local"
+binary = "target/release/astiango"
+poll_seconds = 2
+scan_seconds = 10
+admission_seconds = 5
+max_pending = 16
+max_input_bytes = 2097152
+max_output_bytes = 2147483648
+minimum_disk_free_bytes = 8589934592
+memory_guard_bytes = 536870912
+job_timeout_seconds = 60
+max_centrality_edges = 2000
+
+[consumer]
+record_bytes = 12582912
+decoded_bytes = 8388608
+header_bytes = 65536
+batch_bytes = 16777216
+workers = 1
+stack_bytes = 8388608

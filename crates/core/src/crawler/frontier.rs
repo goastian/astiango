@@ -2330,11 +2330,58 @@ impl Frontier {
                             == Some(receipt.segment.as_str()),
                         "invalid archive reference"
                     );
+                    // Confirmed captures with their recrawl state need integrity checks,
+                    // not HTML decoding. A decoder failure must not stop recovery of a
+                    // durable commit whose original encoded bytes are still intact.
+                    let known = {
+                        let tx = self.db.begin_read()?;
+                        let commits = tx.open_table(COMMITS)?;
+                        let previous = commits.get(receipt.capture_id.as_str())?
+                            .map(|value| serde_json::from_slice::<CommitRow>(value.value()))
+                            .transpose()?;
+                        if let Some(previous) = previous {
+                            anyhow::ensure!(
+                                previous.receipt.sha256 == receipt.sha256
+                                    && previous.receipt.segment == receipt.segment
+                                    && previous.receipt.start == receipt.start
+                                    && previous.receipt.end == receipt.end
+                                    && previous.receipt.record_offset == receipt.record_offset
+                                    && previous.receipt.capture_version == receipt.capture_version,
+                                "conflicting archived receipt for {}", receipt.capture_id
+                            );
+                            let resources = tx.open_table(RECRAWL)?;
+                            let present = resources.get(previous.url.as_str())?
+                                .map(|value| serde_json::from_slice::<super::recrawl::Resource>(value.value()))
+                                .transpose()?.is_some();
+                            present
+                        } else {
+                            false
+                        }
+                    };
                     let mut data = fs::File::open(segments.join(&receipt.segment))?;
                     data.seek(std::io::SeekFrom::Start(receipt.start))?;
+                    if known {
+                        let mut range = data.take(receipt.end - receipt.start);
+                        let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+                        let mut buffer = [0u8; 65536];
+                        let mut bytes = 0u64;
+                        loop {
+                            let size = range.read(&mut buffer)?;
+                            if size == 0 { break; }
+                            digest.update(&buffer[..size]);
+                            bytes += size as u64;
+                        }
+                        anyhow::ensure!(
+                            bytes == receipt.end - receipt.start
+                                && crate::capture::hex(digest.finish().as_ref()) == receipt.sha256,
+                            "confirmed capture missing or corrupt: {}", receipt.capture_id
+                        );
+                        continue;
+                    }
                     let range = data.take(receipt.end - receipt.start);
                     let mut records = crate::warc::RecordIterator::new(range);
-                    let record = records.next().context("durable receipt has no capture")??;
+                    let record = records.next().context("durable receipt has no capture")?
+                        .with_context(|| format!("reconcile {} bytes {}..{} capture {}", receipt.segment, receipt.start, receipt.end, receipt.capture_id))?;
                     let capture = record
                         .metadata
                         .capture

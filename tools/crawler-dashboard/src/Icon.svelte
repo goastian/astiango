@@ -20,6 +20,7 @@
     index: "M4 3h13l3 3v15H4ZM8 8h8M8 12h8M8 16h5",
     queue: "M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1",
     chart: "M4 3v17h17M8 15V9M13 15V5M18 15v-4",
+    graph: "M5 5h4v4H5ZM15 4h4v4h-4ZM10 15h4v4h-4ZM9 7l6-1M7 9l4 6M17 8l-4 7",
     storage: "M3 5h18v6H3ZM3 14h18v6H3ZM17 8h1M17 17h1",
     experiment: "M9 3h6M10 3v7L4 19c-.7 1 .1 2 1 2h14c.9 0 1.7-1 1-2l-6-9V3M7 16h10",
     menu: "M4 6h16M4 12h16M4 18h16",

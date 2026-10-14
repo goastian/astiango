@@ -14,15 +14,15 @@
     <span><strong>AstianGO</strong><small>{$t("Centro de control")}</small></span>
   </a>
   <nav aria-label={$t("Navegación principal")}>
-    {#each ["Sistema", "Crawler", "Indexing", "Herramientas"] as group}
-      <div class="nav-group">
-        <span class="nav-group-label">{$t(group)}</span>
+    {#each ["Sistema", "Crawler", "Indexing", "Webgraph", "Herramientas"] as group}
+      <details class="nav-group" open={views.find(view => view.id === current)?.group === group}>
+        <summary class="nav-group-label">{$t(group)}</summary>
         {#each views.filter(view => view.group === group) as view}
           <a href={`#${view.path}`} class:nav-current={current === view.id} aria-current={current === view.id ? "page" : undefined}>
             <Icon name={view.icon} size={18} /><span>{$t(view.label)}</span>
           </a>
         {/each}
-      </div>
+      </details>
     {/each}
   </nav>
   <div class="sidebar-language"><LanguageSelect /></div>
@@ -31,3 +31,12 @@
     <div><strong>{$t("Instancia local")}</strong><small>{status}</small></div>
   </div>
 </div>
+
+<style>
+  summary { cursor: pointer; list-style: none; display: flex !important; align-items: center; justify-content: space-between; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; font-size: 16px; font-weight: 400; }
+  details[open]>summary::after { content: "−"; }
+  summary:hover { color: #326d50; }
+  summary:focus-visible { outline: 2px solid #326d50; outline-offset: 4px; }
+</style>

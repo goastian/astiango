@@ -12,6 +12,11 @@ export const views = [
   { id: "indexing-shards", path: "/indexing/shards", group: "Indexing", label: "Input shards", icon: "storage", description: "Sealed segments, checkpoints and errors in the local ingestion queue." },
   { id: "indexing-generations", path: "/indexing/generations", group: "Indexing", label: "Generations", icon: "storage", description: "Validated generations, active selector and retained rollback." },
   { id: "indexing-configuration", path: "/indexing/configuration", group: "Indexing", label: "Indexing configuration", icon: "settings", description: "Worker budgets, pilot limits and publication scope." },
+  { id: "webgraph", path: "/webgraph/overview", group: "Webgraph", label: "Webgraph overview", icon: "graph", description: "Captured inputs, stored links and graph activity." },
+  { id: "webgraph-inputs", path: "/webgraph/inputs", group: "Webgraph", label: "Graph inputs", icon: "storage", description: "Checkpoints, input budgets and retained failures." },
+  { id: "webgraph-centrality", path: "/webgraph/centrality", group: "Webgraph", label: "Centrality", icon: "chart", description: "Scores from local graph cohorts; consumer adoption is separate." },
+  { id: "webgraph-generations", path: "/webgraph/generations", group: "Webgraph", label: "Generations", icon: "storage", description: "Validated generations, active selector and retained rollback." },
+  { id: "webgraph-configuration", path: "/webgraph/configuration", group: "Webgraph", label: "Graph configuration", icon: "settings", description: "Graph worker, memory, disk and centrality budgets." },
   { id: "benchmarks", path: "/tools/benchmarks", group: "Herramientas", label: "Pruebas de capacidad", icon: "experiment", description: "Mediciones locales y comparaciones reproducibles, separadas de la operación." },
 ];
 
@@ -28,7 +33,7 @@ export function resolveView(hash: string) {
 export const componentCatalog = [
   { name: "Crawler", purpose: "Adquisición web, descubrimiento y captura durable.", source: "crawler" },
   { name: "Indexación", purpose: "Procesamiento de documentos y publicación del índice.", source: "indexer" },
-  { name: "Grafo web", purpose: "Enlaces, centralidad y señales para planificación.", source: null },
+  { name: "Grafo web", purpose: "Enlaces, centralidad y señales para planificación.", source: "webgraph" },
   { name: "Búsqueda y API", purpose: "Consultas, ranking y disponibilidad del buscador.", source: null },
   { name: "Coordinación", purpose: "Trabajos distribuidos y capacidad de los nodos.", source: null },
   { name: "Live index", purpose: "Actualización de contenido reciente y publicación.", source: null },

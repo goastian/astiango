@@ -1,4 +1,5 @@
 <script lang="ts">
+  import GraphBenchmark from "./GraphBenchmark.svelte";
   import { initI18n } from "./i18n";
   const { t, locale, formatLocale } = initI18n();
 
@@ -22,6 +23,7 @@
   import ResourceStatus from "./ResourceStatus.svelte";
   import IndexingStatus from "./IndexingStatus.svelte";
   import GenerationStatus from "./GenerationStatus.svelte";
+  import WebgraphStatus from "./WebgraphStatus.svelte";
   import OperationsStatus from "./OperationsStatus.svelte";
   import PerformanceRates from "./PerformanceRates.svelte";
   import {
@@ -30,11 +32,13 @@
     buildSiteOutcomes,
     snapshotAgeMs,
   } from "./metrics";
-  import type { StatusResponse, Site, SiteStatus, IndexingResponse } from "./types";
+  import type { StatusResponse, Site, SiteStatus, IndexingResponse, WebgraphResponse } from "./types";
 
   let response = $state<StatusResponse | null>(null);
   let error = $state("");
   let indexing = $state<IndexingResponse | null>(null);
+  let webgraph = $state<WebgraphResponse | null>(null);
+  let webgraphError = $state("");
   let indexingError = $state("");
   let loading = $state(false);
   let paused = $state(false);
@@ -47,6 +51,11 @@
   let view = $state(resolveView(window.location.hash));
   const indexingView = $derived(view.startsWith("indexing"));
   const indexingLive = $derived(!!indexing && !indexingError && indexing.meta.process_alive === true && now - Date.parse(indexing.snapshot.updated_at) <= 10_000 && indexing.snapshot.phase !== "stopped");
+  const webgraphView = $derived(view.startsWith("webgraph"));
+  const webgraphLive = $derived(!!webgraph && !webgraphError && webgraph.meta.process_alive === true && now-Date.parse(webgraph.snapshot.updated_at) <= 10_000 && webgraph.snapshot.phase !== "stopped");
+  const selectedResponse = $derived(webgraphView ? webgraph : indexingView ? indexing : response);
+  const componentName = $derived(webgraphView ? "Webgraph" : indexingView ? "Indexing" : "Crawler");
+  const componentStates: Record<string, string> = { indexing:"Indexing", extracting:"Extracting links", centrality:"Calculating scores", publishing:"Preparing generation", idle:"Waiting", blocked:"Backpressure", draining:"Draining", stopped:"Stopped" };
   let mobileMenu: HTMLDialogElement;
   let menuOpen = $state(false);
   let sitePage = $state(1);
@@ -181,6 +190,8 @@
               ? "Telemetría sin actualizar"
               : phases[snapshot.phase],
   );
+  const selectedLive = $derived(webgraphView ? webgraphLive : indexingView ? indexingLive : live);
+  const selectedStatus = $derived(webgraphView || indexingView ? paused ? "Showing the last available sample." : !selectedLive ? "State unavailable or stale" : (webgraphView && webgraph?.snapshot.phase === "idle" && webgraph.snapshot.totals.pending>0 ? "Awaiting retry" : componentStates[selectedResponse?.snapshot.phase ?? ""] ?? componentName) : statusText);
   const elapsed = $derived(
     snapshot
       ? Math.max(
@@ -276,7 +287,7 @@
       : value.toLocaleString($formatLocale, { maximumFractionDigits: 1 });
   }
   function exportReport() {
-    const report = indexingView ? indexing : response;
+    const report = selectedResponse;
     if (!report) return;
     const blob = new Blob([JSON.stringify(report, null, 2)], {
       type: "application/json",
@@ -284,7 +295,7 @@
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${indexingView ? "indexing" : "crawler"}-${report.snapshot.run_id}-${Date.parse(report.snapshot.updated_at)}.json`;
+    link.download = `${componentName.toLowerCase()}-${report.snapshot.run_id}-${Date.parse(report.snapshot.updated_at)}.json`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -342,7 +353,7 @@
       return data;
     };
     try {
-      const [crawl, index] = await Promise.allSettled([read("/api/status"), read("/api/indexing")]);
+      const [crawl, index, graph] = await Promise.allSettled([read("/api/status"), read("/api/indexing"), read("/webgraph-live.json").catch(() => read("/api/webgraph"))]);
       if (crawl.status === "fulfilled") {
         response = crawl.value;
         lastRead = new Date().toISOString();
@@ -352,6 +363,8 @@
       }
       if (index.status === "fulfilled") { indexing = index.value; indexingError = ""; }
       else { indexingError = "Indexing state is unavailable."; }
+      if (graph.status === "fulfilled") { webgraph = graph.value; webgraphError = ""; }
+      else { webgraphError = "Webgraph state is unavailable."; }
     } finally {
       window.clearTimeout(timeout);
       loading = false;
@@ -414,21 +427,23 @@
         <div class="header-actions">
           <button class="button primary" onclick={refresh} disabled={loading} aria-label={$t("Actualizar estado ahora")}><Icon name="refresh" />{$t("Actualizar")}</button>
           <button class="button" onclick={togglePolling} aria-pressed={paused}><Icon name={paused ? "play" : "pause"} />{paused ? $t("Reanudar lectura") : $t("Pausar lectura")}</button>
-          <button class="button" onclick={exportReport} disabled={indexingView ? !indexing : !snapshot}><Icon name="download" />{$t("Descargar informe")}</button>
+          <button class="button" onclick={exportReport} disabled={!selectedResponse}><Icon name="download" />{$t("Descargar informe")}</button>
         </div>
       </div>
       <div class="report-controls">
-        <div class="execution-context"><Icon name="calendar" size={16} /><span>{$t("Ejecución desde {p0}", { p0: date(indexingView ? indexing?.snapshot.started_at : snapshot?.started_at) })}</span></div>
+        <div class="execution-context"><Icon name="calendar" size={16} /><span>{$t("Ejecución desde {p0}", { p0: date(selectedResponse?.snapshot.started_at) })}</span></div>
         {#if view === "crawler-overview"}<label class="history-window"><span>{$t("Gráficos")}</span><select bind:value={windowMinutes} aria-label={$t("Intervalo de los gráficos")}><option value={5}>{$t("Últimos 5 minutos")}</option><option value={15}>{$t("Últimos 15 minutos")}</option><option value={60}>{$t("Última hora")}</option></select></label>{/if}
-        <div class="run-health"><small>{$t(indexingView ? "Indexing" : "Crawler")}</small><span class="connection" class:live={indexingView ? indexingLive : live} class:warning={indexingView ? !indexingLive || indexing?.snapshot.phase === "blocked" : !!error || offline || (stale && activeProcess)} role="status"><span class="status-dot"></span>{$t(indexingView ? paused ? "Showing the last available sample." : !indexingLive ? "State unavailable or stale" : ({indexing:"Indexing",idle:"Waiting",blocked:"Backpressure",draining:"Draining",stopped:"Stopped"}[indexing?.snapshot.phase ?? ""] ?? "Indexing") : statusText)}</span><span>{$t("Última lectura {p0} · cada 2 s", { p0: time(indexingView ? indexing?.snapshot.updated_at : lastRead) })}</span></div>
+        <div class="run-health"><small>{$t(componentName)}</small><span class="connection" class:live={selectedLive} class:warning={!selectedLive || selectedResponse?.snapshot.phase === "blocked"} role="status"><span class="status-dot"></span>{$t(selectedStatus)}</span><span>{$t("Última lectura {p0} · cada 2 s", { p0: time(selectedResponse?.snapshot.updated_at) })}</span></div>
       </div>
     </header>
     <main id="main-content" data-view={view}>
-      {#if !indexingView && (error || offline || (stale && activeProcess) || paused)}
+      {#if !indexingView && !webgraphView && (error || offline || (stale && activeProcess) || paused)}
         <div class="notice" role="status"><strong>{paused && !error && !offline ? $t("Actualización pausada.") : $t("Lectura no actualizada.")}</strong> {$t(error) || (offline ? $t("El proceso del crawler ya no está activo.") : paused ? $t("El crawler continúa de forma independiente.") : $t("El estado visible no se ha actualizado. Esta lectura no permite concluir que el crawler esté detenido."))} {#if snapshot}{$t("Se conserva el último estado recibido.")}{/if}</div>
       {/if}
       {#if view === "overview" || view === "components"}
-        <SystemOverview {snapshot} {indexing} {indexingLive} connected={live} status={statusText} inventory={view === "components"} />
+        <SystemOverview {snapshot} {indexing} {indexingLive} {webgraph} {webgraphLive} connected={live} status={statusText} inventory={view === "components"} />
+      {:else if webgraphView}
+        <WebgraphStatus response={webgraph} {now} error={webgraphError} mode={view === "webgraph-inputs" ? "inputs" : view === "webgraph-centrality" ? "centrality" : view === "webgraph-generations" ? "generations" : view === "webgraph-configuration" ? "configuration" : "overview"} />
       {:else if view === "indexing-generations"}
         <GenerationStatus {now} {paused} />
       {:else if indexingView}
@@ -1116,9 +1131,9 @@
       {:else if view === "not-found"}
         <section class="empty-view panel"><Icon name="components" size={30} /><h2>{$t("Esta vista no está disponible")}</h2><p>{$t("Usa la navegación para abrir una función del centro de control.")}</p><a class="button primary" href="#/overview">{$t("Volver a la vista general")}</a></section>
       {/if}
-      {#if view === "benchmarks"}<OperationsStatus />{/if}
+      {#if view === "benchmarks"}<GraphBenchmark /><OperationsStatus />{/if}
       <BenchmarkPanel visible={view === "benchmarks"} />
-      <footer class="page-footer"><span>AstianGO <span class="slash">/</span> {(indexingView ? indexing?.snapshot.run_id : snapshot?.run_id) ?? $t("Sin ejecución")}</span><span>{$t("Hora de Bogotá · Estado: {p0}", { p0: time(indexingView ? indexing?.snapshot.updated_at : snapshot?.updated_at) })}</span></footer>
+      <footer class="page-footer"><span>AstianGO <span class="slash">/</span> {selectedResponse?.snapshot.run_id ?? $t("Sin ejecución")}</span><span>{$t("Hora de Bogotá · Estado: {p0}", { p0: time(selectedResponse?.snapshot.updated_at) })}</span></footer>
     </main>
   </div>
 </div>

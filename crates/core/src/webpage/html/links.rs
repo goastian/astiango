@@ -382,6 +382,62 @@ impl Html {
         links
     }
 
+    /// Stream the same anchor semantics as `anchor_links`, in closing-tag order.
+    /// The callback can stop before materializing an unbounded link collection.
+    pub fn visit_anchor_links(&self, mut visit: impl FnMut(Link) -> bool) -> u64 {
+        if self.is_no_follow() { return 0; }
+        let mut open_links = Vec::new();
+        let mut location = Location::empty();
+        let icann_domain = self.url().icann_domain();
+        let mut visited = 0;
+        for edge in self.root.traverse() {
+            match edge {
+                NodeEdge::Start(node) => {
+                    if let Some(element) = node.as_element() {
+                        if &element.name.local == "a" { open_links.push((String::new(), element.attributes.clone())); }
+                        else if &element.name.local == "footer" { location |= Location::FOOTER; }
+                        else if &element.name.local == "nav" { location |= Location::NAVIGATION; }
+                    }
+                }
+                NodeEdge::End(node) => {
+                    if let Some(element) = node.as_element() {
+                        if &element.name.local == "a" {
+                            if let Some((text, attributes)) = open_links.pop() {
+                                if let Some(dest) = attributes.borrow().get("href") {
+                                    if let Ok(destination) = Url::parse_with_base_url(self.base_url(), dest) {
+                                        let mut rel = RelFlags::from_html(&destination, &attributes.borrow(), &location);
+                                        if icann_domain == destination.icann_domain() { rel |= RelFlags::SAME_ICANN_DOMAIN; }
+                                        visited += 1;
+                                        if !visit(Link { source:self.url().clone(), destination, rel, text:text.trim().to_string() }) { return visited; }
+                                    }
+                                }
+                            }
+                        } else if &element.name.local == "footer" { location.remove(Location::FOOTER); }
+                        else if &element.name.local == "nav" { location.remove(Location::NAVIGATION); }
+                    }
+                    if let Some(text) = node.as_text() {
+                        let raw_text = text.borrow();
+                        let text = raw_text.trim();
+                        if !text.is_empty() {
+                            for (link_text, _) in &mut open_links { link_text.push('\n'); link_text.push_str(text); }
+                        }
+                    }
+                }
+            }
+        }
+        while let Some((text, attributes)) = open_links.pop() {
+            if let Some(dest) = attributes.borrow().get("href") {
+                if let Ok(destination) = Url::parse_with_base_url(self.base_url(), dest) {
+                    let mut rel = RelFlags::from_html(&destination, &attributes.borrow(), &location);
+                    if icann_domain == destination.icann_domain() { rel |= RelFlags::SAME_ICANN_DOMAIN; }
+                    visited += 1;
+                    if !visit(Link { source:self.url().clone(), destination, rel, text:text.trim().to_string() }) { break; }
+                }
+            }
+        }
+        visited
+    }
+
     fn links_tag(&self) -> Vec<Link> {
         let mut links = Vec::new();
 

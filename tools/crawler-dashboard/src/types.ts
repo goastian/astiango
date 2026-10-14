@@ -286,3 +286,26 @@ export interface IndexingResponse {
   snapshot: IndexingSnapshot;
   meta: { read_at: string; modified_at: string; process_alive: boolean | null; cache: { reads: number; hits: number } };
 }
+
+export interface WebgraphInput {
+  id: string; file: string; sha256: string; records: number; input_bytes: number; sealed_at: number;
+  state: string; edges: number; scores: number; score_state: string; elapsed_seconds: number;
+  peak_rss_bytes: number; error: string | null;
+}
+export interface WebgraphResponse {
+  snapshot: {
+    schema_version: 1; component: "webgraph"; run_id: string; pid: number; started_at: string; updated_at: string;
+    phase: string; reason: string; scope: string; signals_adopted: boolean;
+    configuration: { workers: number; priority: number; memory_guard_bytes: number; max_output_bytes: number; minimum_disk_free_bytes: number; max_input_bytes: number; max_pending: number; max_centrality_edges: number; job_timeout_seconds: number; binary_sha256: string };
+    source: { sealed: number; open: number; oversized: number; scan_errors: number };
+    totals: { inputs: number; completed: number; pending: number; failed: number; source_records: number; stored_edges: number; scored_inputs: number; output_bytes: number };
+    worker: { pid: number; input: string; stage: string; elapsed_seconds: number; rss_bytes?: number; cpu_seconds?: number; open_fds?: number } | null;
+    runtime?: { revision: number; documents: number; current_edges: number; outcomes: Record<string, number>; cpu_ms: number; allocated_bytes: number; elapsed_ms: number; stages: Record<string, {cpu_ms: number; wall_ms: number; allocated_bytes: number}> };
+    generation?: {id: string; revision: number; state: string; edges: number; documents: number; rebuilt_buckets: number; reused_buckets: number; elapsed_ms: number; logical_sha256: string; build_id: string; scores_state: string; partitions: Array<{bucket: number; edges: number; hash: string}> } | null;
+    publication_error?: string | null;
+    inputs: WebgraphInput[]; latest_input: string | null; scored_input?: string | null;
+    top_scores: Array<{ host: string; score: number }>;
+    history: Array<{ at: string; edges: number; rss_mib: number; completed: number }>;
+  };
+  meta: { process_alive: boolean | null; read_at: string };
+}

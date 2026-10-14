@@ -88,9 +88,17 @@ impl Html {
     }
 
     pub fn parse_without_text(html: &str, url: &str) -> Result<Self> {
-        let root = kuchiki::parse_html().one(html);
+        Self::parse_link_document(html, Url::parse(url)?.normalize())
+    }
 
-        let url = Url::parse(url)?.normalize();
+    /// Graph ledgers retain C11 identity, including signed queries and escapes.
+    /// Historical NodeID projection remains separate from this exact URL.
+    pub fn parse_for_graph(html: &str, url: &str) -> Result<Self> {
+        Self::parse_link_document(html, Url::parse(&crate::capture::url_key(&Url::parse(url)?)?)?)
+    }
+
+    fn parse_link_document(html: &str, url: Url) -> Result<Self> {
+        let root = kuchiki::parse_html().one(html);
 
         let mut res = Self {
             root,

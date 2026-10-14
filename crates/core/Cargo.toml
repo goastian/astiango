@@ -218,3 +218,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crawler_standalone)'] }
 [[bin]]
 name = "astiango-indexer"
 path = "src/bin/indexer.rs"
+
+[[bin]]
+name = "astiango-webgraph"
+path = "src/bin/webgraph.rs"

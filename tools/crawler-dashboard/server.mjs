@@ -44,6 +44,8 @@ export function createDashboardServer({
   operationsPath = process.env.CRAWLER_OPERATIONS_PATH || resolve(appDirectory, "../../data/crawler-operations/report.json"),
   soakPath = process.env.CRAWLER_SOAK_PATH || resolve(appDirectory, "../../data/crawler-operations/soak.json"),
   indexingPath = process.env.INDEXER_STATE_PATH || resolve(appDirectory, "../../data/indexer-shared/status.json"),
+  webgraphPath = process.env.WEBGRAPH_STATE_PATH || resolve(appDirectory, "../../data/webgraph-local/status.json"),
+  webgraphLedgerPath = process.env.WEBGRAPH_LEDGER_STATE_PATH || resolve(appDirectory, "../../data/webgraph-ingestion/status.json"),
 } = {}) {
   let previewBusy = false;
   const distRoot = resolve(distDirectory);
@@ -51,6 +53,11 @@ export function createDashboardServer({
   const series = resourceSeries(seriesPath);
   const generations = snapshotCache(resolve(dirname(indexingPath), "index/generations/status.json"), 256 * 1024, value => value.version === 1 && Array.isArray(value.generations) && value.generations.length <= 32);
   const indexing = snapshotCache(indexingPath, 256 * 1024, snapshot => snapshot.schema_version === 1 && snapshot.component === "indexer" && Array.isArray(snapshot.shards) && snapshot.shards.length <= 128 && snapshot.totals && snapshot.configuration && snapshot.source && snapshot.publication);
+  const webgraph = snapshotCache(webgraphPath, 256 * 1024, snapshot => snapshot.schema_version === 1 && snapshot.component === "webgraph" && Array.isArray(snapshot.inputs) && snapshot.inputs.length <= 64 && snapshot.totals && snapshot.configuration);
+  const graphLedger = snapshotCache(webgraphLedgerPath, 256 * 1024, value => {
+    const snapshot = value.snapshot ?? value;
+    return snapshot.schema_version === 1 && snapshot.component === "webgraph" && snapshot.scope === "current_version_graph" && Array.isArray(snapshot.inputs) && snapshot.inputs.length <= 64 && snapshot.totals && snapshot.configuration;
+  });
   return createServer(async (request, response) => {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "no-referrer");
@@ -99,6 +106,37 @@ export function createDashboardServer({
         respondJson(response, 200, { report, soak });
       } catch (error) {
         respondJson(response, error.code === "ENOENT" ? 404 : 503, { code: "OPERATIONS_UNAVAILABLE", error: "Operational verification is unavailable." });
+      }
+      return;
+    }
+    if (pathname === "/api/webgraph" || pathname === "/api/webgraph/inputs") {
+      try {
+        let observation;
+        let reader = graphLedger;
+        try { observation = await graphLedger.get(); }
+        catch (error) {
+          if (error.code !== "ENOENT") throw error;
+          reader = webgraph;
+          observation = await webgraph.get();
+        }
+        const snapshot = observation.snapshot.snapshot ?? observation.snapshot;
+        let alive = processAlive(snapshot.pid);
+        if (alive && snapshot.start_ticks) {
+          try {
+            const proc = await readFile(`/proc/${snapshot.pid}/stat`, "utf8");
+            alive = proc.slice(proc.lastIndexOf(")") + 2).split(" ")[19] === snapshot.start_ticks;
+          } catch { alive = false; }
+        }
+        if (pathname.endsWith("/inputs")) {
+          try {
+            const parameters = new URL(request.url, "http://localhost").searchParams;
+            respondJson(response, 200, { run_id: snapshot.run_id, ...paginate(snapshot.inputs.map(row => ({ ...row, status: row.state })), parameters, ["id", "file", "error"]) });
+          } catch (error) { respondJson(response, 400, { error: error.message }); }
+        } else {
+          respondJson(response, 200, { snapshot, meta: { read_at: new Date().toISOString(), modified_at: observation.modifiedAt, process_alive: alive, cache: { ...reader.counters } } });
+        }
+      } catch (error) {
+        respondJson(response, 503, { code: "WEBGRAPH_UNAVAILABLE", error: "Webgraph state is unavailable." });
       }
       return;
     }

@@ -1,0 +1,31 @@
+# Upgrade alongside the running legacy observer; consumers adopt generations explicitly.
+source_spool = "data/crawler-local/warc/spool"
+state_directory = "data/webgraph-ingestion"
+binary = "data/artifacts/webgraph/71850636974dfa0f1d9b12b091ed754bf5b5e40c2b0acef0eb0d53620ff60fad/astiango-webgraph"
+poll_seconds = 2
+scan_seconds = 10
+max_pending = 32
+max_input_bytes = 268435456
+memory_guard_bytes = 536870912
+job_timeout_seconds = 240
+publication_seconds = 300
+
+[graph]
+writer_bytes = 25165824
+cache_bytes = 4194304
+memory_budget_bytes = 536870912
+max_links_per_document = 200000
+edge_bytes_per_document = 67108864
+buckets = 64
+max_output_bytes = 8589934592
+disk_reserve_bytes = 8589934592
+temporary_bytes = 1073741824
+max_centrality_edges = 2000
+
+[consumer]
+record_bytes = 41943040
+decoded_bytes = 4194304
+header_bytes = 65536
+batch_bytes = 16777216
+workers = 1
+stack_bytes = 8388608

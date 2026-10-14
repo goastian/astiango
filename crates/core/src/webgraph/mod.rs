@@ -35,6 +35,8 @@ use searcher::Searcher;
 
 mod builder;
 pub mod centrality;
+pub mod metrics;
+pub mod pipeline;
 mod doc_address;
 mod edge;
 mod node;
@@ -112,11 +114,19 @@ impl Webgraph {
     }
 
     pub fn prepare_writer_with_budget(&mut self, bytes: usize) -> Result<()> { self.store.prepare_writer_with_budget(bytes) }
+    pub fn insert_versioned(&mut self, edge: Edge) -> Result<()> { self.store.insert_versioned(edge) }
     pub fn commit_with_payload(&mut self, payload: &str) -> Result<()> { self.store.commit_with_payload(payload) }
     pub fn commit_payload(&self) -> Result<Option<String>> { self.store.commit_payload() }
 
     pub fn commit(&mut self) -> Result<()> {
         self.store.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn merge_committed(&mut self, other: Webgraph) -> Result<()> {
+        let folder = other.path.clone();
+        self.store.merge_committed(other.store)?;
+        fs::remove_dir_all(folder)?;
         Ok(())
     }
 

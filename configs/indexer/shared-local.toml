@@ -10,7 +10,7 @@ max_output_bytes = 17179869184
 minimum_disk_free_bytes = 8589934592
 memory_guard_bytes = 536870912
 max_input_bytes = 16777216
-job_timeout_seconds = 90
+job_timeout_seconds = 240
 batch_size = 16
 
 [consumer]
