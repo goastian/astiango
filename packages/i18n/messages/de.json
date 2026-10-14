@@ -1442,5 +1442,7 @@
   "Caught up": "Auf aktuellem Stand",
   "All eligible sealed segments consumed": "Alle verarbeitbaren abgeschlossenen Segmente verarbeitet",
   "Retained segments": "Aufbewahrte Segmente",
-  "Inspect storage": "Speicher prüfen"
+  "Inspect storage": "Speicher prüfen",
+  "Awaiting seal": "Wartet auf Segmentabschluss",
+  "Crawler is filling an open segment": "Crawler schreibt ein offenes Segment"
 }

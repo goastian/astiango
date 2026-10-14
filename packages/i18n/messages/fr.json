@@ -1442,5 +1442,7 @@
   "Caught up": "À jour",
   "All eligible sealed segments consumed": "Tous les segments clôturés admissibles ont été traités",
   "Retained segments": "Segments conservés",
-  "Inspect storage": "Examiner le stockage"
+  "Inspect storage": "Examiner le stockage",
+  "Awaiting seal": "En attente de clôture",
+  "Crawler is filling an open segment": "Le crawler remplit un segment ouvert"
 }

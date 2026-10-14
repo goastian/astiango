@@ -1442,5 +1442,7 @@
   "Caught up": "Caught up",
   "All eligible sealed segments consumed": "All eligible sealed segments consumed",
   "Retained segments": "Retained segments",
-  "Inspect storage": "Inspect storage"
+  "Inspect storage": "Inspect storage",
+  "Awaiting seal": "Awaiting seal",
+  "Crawler is filling an open segment": "Crawler is filling an open segment"
 }

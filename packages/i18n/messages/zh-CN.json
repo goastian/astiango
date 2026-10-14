@@ -1442,5 +1442,7 @@
   "Caught up": "已处理完可用输入",
   "All eligible sealed segments consumed": "所有符合条件的已封存分段均已处理",
   "Retained segments": "保留的分段",
-  "Inspect storage": "检查存储"
+  "Inspect storage": "检查存储",
+  "Awaiting seal": "等待分段封存",
+  "Crawler is filling an open segment": "爬虫正在写入未封存的分段"
 }
