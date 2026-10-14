@@ -21,6 +21,7 @@ use std::{
 };
 
 pub static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub mod generations;
 const SOURCES: TableDefinition<&str, &[u8]> = TableDefinition::new("sources.v1");
 const DECISIONS: TableDefinition<&str, &[u8]> = TableDefinition::new("decisions.v1");
 const CURRENT: TableDefinition<&str, &[u8]> = TableDefinition::new("current.v1");
@@ -44,6 +45,7 @@ pub struct Config {
     pub disk_reserve_bytes: u64,
     pub report_path: Option<PathBuf>,
     pub derivatives: Vec<PathBuf>,
+    pub publish_generations: bool,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -60,6 +62,7 @@ impl Default for Config {
             disk_reserve_bytes: 256 * 1024 * 1024,
             report_path: None,
             derivatives: vec![],
+            publish_generations: false,
         }
     }
 }
@@ -131,6 +134,10 @@ pub struct Decision {
     #[serde(default)]
     pub indexed_document_sha256: Option<String>,
     pub metadata: Option<crate::capture::Metadata>,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub source_reference: Option<crate::crawler::recrawl::PayloadReference>,
 }
 struct Ledger {
     db: Database,
@@ -149,6 +156,36 @@ impl Ledger {
             tx.open_table(COUNTS)?;
             tx.open_table(OUTBOX)?;
             tx.open_table(VERSIONS)?;
+            tx.open_table(generations::PREPARED)?;
+            tx.open_table(generations::INPUTS)?;
+            tx.open_table(generations::CONTEXTS)?;
+            tx.open_table(generations::PREPARED_CONTEXTS)?;
+            tx.commit()?;
+        }
+        // The original decision can be noindex or an unsupported document. A 304
+        // references that durable capture even when it has no searchable document.
+        if db
+            .begin_read()?
+            .open_table(PAYLOADS)?
+            .get("decision-authority-v1")?
+            .is_none()
+        {
+            let read = db.begin_read()?;
+            let tx = db.begin_write()?;
+            {
+                let mut payloads = tx.open_table(PAYLOADS)?;
+                for entry in read.open_table(DECISIONS)?.iter()? {
+                    let (_, value) = entry?;
+                    let row: Decision = serde_json::from_slice(value.value())?;
+                    if ["indexed", "noindex", "excluded"].contains(&row.outcome.as_str())
+                        && row.prior_payload.is_none()
+                    {
+                        payloads
+                            .insert(format!("{}:{}", row.url, row.payload_sha256).as_str(), ())?;
+                    }
+                }
+                payloads.insert("decision-authority-v1", ())?;
+            }
             tx.commit()?;
         }
         Ok(Self { db })
@@ -262,6 +299,15 @@ impl Ledger {
                 counts.insert("pending", pending.saturating_sub(1))?;
                 let count = counts.get(row.outcome.as_str())?.map_or(0, |v| v.value());
                 counts.insert(row.outcome.as_str(), count + 1)?;
+                if row.source_reference.is_some() {
+                    let count = counts.get("reference_inputs")?.map_or(0, |v| v.value());
+                    counts.insert("reference_inputs", count + 1)?;
+                }
+                if ["indexed", "noindex", "excluded"].contains(&row.outcome.as_str())
+                    && row.prior_payload.is_none()
+                {
+                    payloads.insert(format!("{}:{}", row.url, row.payload_sha256).as_str(), ())?;
+                }
                 if row.outcome == "indexed" || row.outcome == "noindex" {
                     let previous = current
                         .get(row.url.as_str())?
@@ -300,7 +346,9 @@ impl Ledger {
         table
             .iter()?
             .filter_map(|row| match row {
-                Ok((key, value)) if key.value() != "active_documents" => {
+                Ok((key, value))
+                    if !["active_documents", "reference_inputs"].contains(&key.value()) =>
+                {
                     Some(Ok((key.value().into(), value.value())))
                 }
                 Ok(_) => None,
@@ -317,6 +365,7 @@ pub struct Report {
     pub current_url: Option<String>,
     pub documents: u64,
     pub stored_versions: u64,
+    pub recovered_reference_inputs: u64,
     pub outcomes: BTreeMap<String, u64>,
     pub stages: BTreeMap<String, metrics::Measurement>,
     pub cache_hits: u64,
@@ -452,6 +501,8 @@ fn decision(record: &WarcRecord, source: &str, ordinal: u64, kind: &str) -> Resu
             .as_ref()
             .and_then(|m| m.revalidation.as_ref().map(|r| r.payload_sha256.clone())),
         metadata: meta,
+        dependencies: vec![],
+        source_reference: None,
     })
 }
 fn commit(
@@ -476,8 +527,22 @@ fn commit(
     if let Some(consumer) = consumer.as_deref() {
         value["input_key"] = consumer.source_key().into();
     }
-    value["decision_ids"] =
-        serde_json::to_value(rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>())?;
+    value["decision_ids"] = serde_json::to_value(
+        rows.iter()
+            .flat_map(|r| {
+                r.dependencies
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(r.id.clone()))
+            })
+            .collect::<Vec<_>>(),
+    )?;
+    anyhow::ensure!(
+        value["decision_ids"]
+            .as_array()
+            .is_some_and(|ids| ids.len() <= 128),
+        "commit exceeds decision envelope budget"
+    );
     let payload = serde_json::to_string(&value)?;
     {
         let _span = metrics::Span::new(5);
@@ -493,6 +558,71 @@ fn commit(
     rows.clear();
     Ok(())
 }
+pub(super) fn read_reference(
+    source: &crate::config::WarcSource,
+    reference: &crate::crawler::recrawl::PayloadReference,
+    limits: crate::warc::stream::Limits,
+) -> Result<(WarcRecord, String, String)> {
+    use std::io::{Seek, SeekFrom};
+    anyhow::ensure!(
+        reference.version == 1
+            && reference.segment.len() <= 256
+            && reference.segment.ends_with(".warc.gz")
+            && Path::new(&reference.segment).components().count() == 1
+            && Path::new(&reference.segment)
+                .components()
+                .all(|p| matches!(p, std::path::Component::Normal(_))),
+        "unsafe/unknown original capture reference"
+    );
+    let crate::config::WarcSource::Local(local) = source else {
+        anyhow::bail!(
+            "referenced body requires a local retained capture; remote acquisition deferred"
+        )
+    };
+    let directory = Path::new(&local.folder).canonicalize()?;
+    let path = directory.join(&reference.segment).canonicalize()?;
+    anyhow::ensure!(
+        path.parent() == Some(directory.as_path()),
+        "capture reference escapes source directory"
+    );
+    let mut file = File::open(&path)?;
+    anyhow::ensure!(
+        reference.record_end > reference.record_offset
+            && reference.record_end <= file.metadata()?.len()
+            && reference.record_end - reference.record_offset <= limits.record_bytes as u64 * 2,
+        "capture reference byte range exceeds budget"
+    );
+    file.seek(SeekFrom::Start(reference.record_offset))?;
+    let member_sha = crate::warc::consumer::checksum(
+        (&mut file).take(reference.record_end - reference.record_offset),
+    )?;
+    file.seek(SeekFrom::Start(reference.record_offset))?;
+    let input =
+        Box::new(file.take(reference.record_end - reference.record_offset)) as Box<dyn Read>;
+    let mut records = crate::warc::RecordIterator::with_limits(input, limits);
+    let record = records
+        .next()
+        .context("original capture reference is empty")??;
+    let meta = record
+        .metadata
+        .capture
+        .as_ref()
+        .context("original capture has no identity metadata")?;
+    anyhow::ensure!(
+        meta.fetch_id == reference.fetch_id
+            && meta.payload_sha256 == reference.payload_sha256
+            && crate::capture::url_key(&url::Url::parse(&record.request.url)?)?
+                == crate::capture::url_key(&url::Url::parse(&reference.url)?)?
+            && !record.is_revalidation(),
+        "original capture identity/digest mismatch or recursive reference"
+    );
+    let identity = format!(
+        "reference-v1:{}:{member_sha}",
+        crate::warc::publication::Workspace::key(source, &reference.segment)?
+    );
+    Ok((record, identity, member_sha))
+}
+
 async fn ingest_record(
     record: WarcRecord,
     mut row: Decision,
@@ -503,6 +633,7 @@ async fn ingest_record(
     cache: &mut TextCache,
     staged_versions: &mut std::collections::HashSet<String>,
     text: Option<String>,
+    source: &crate::config::WarcSource,
 ) -> Result<(Decision, Option<tantivy::schema::TantivyDocument>)> {
     let mut document = None;
     let prior = staged.get(&row.url).cloned().or(ledger.current(&row.url)?);
@@ -517,14 +648,71 @@ async fn ingest_record(
         row.reason = "robots_directive".into();
         staged.insert(row.url.clone(), row.clone());
     } else if record.is_revalidation() {
-        let known = if let Some(hash) = &row.prior_payload {
+        let mut known = if let Some(hash) = &row.prior_payload {
             ledger.payload_known(&row.url, hash)?
                 || staged.values().any(|r| {
-                    r.url == row.url && &r.payload_sha256 == hash && r.planned == "indexed"
+                    r.url == row.url
+                        && &r.payload_sha256 == hash
+                        && ["indexed", "noindex", "excluded"].contains(&r.planned.as_str())
                 })
         } else {
             false
         };
+        if !known {
+            if let Some(reference) = record
+                .metadata
+                .capture
+                .as_ref()
+                .and_then(|m| m.revalidation.as_ref())
+            {
+                match read_reference(source, reference, worker.consumer) {
+                    Ok((original, identity, member_sha)) => {
+                        let mut recovered = decision(&original, &identity, 0, "html-v1")?;
+                        recovered.id = crate::capture::sha256(
+                            format!("{}:offset:{}", identity, reference.record_offset).as_bytes(),
+                        );
+                        recovered.source_reference = Some(reference.clone());
+                        if !ledger.decided(&recovered.id)? {
+                            let (recovered, prepared) = Box::pin(ingest_record(
+                                original,
+                                recovered,
+                                index,
+                                ledger,
+                                staged,
+                                worker,
+                                cache,
+                                staged_versions,
+                                None,
+                                source,
+                            ))
+                            .await?;
+                            anyhow::ensure!(
+                                recovered.dependencies.is_empty(),
+                                "recursive revalidation reference rejected"
+                            );
+                            ledger.plan(std::slice::from_ref(&recovered))?;
+                            row.dependencies.push(recovered.id);
+                            document = prepared;
+                        }
+                        let tx = ledger.db.begin_write()?;
+                        {
+                            let bytes = serde_json::to_vec(
+                                &serde_json::json!({"version":1,"kind":"warc_record_reference","reference":reference,"member_sha256":member_sha}),
+                            )?;
+                            tx.open_table(generations::INPUTS)?
+                                .insert(identity.as_str(), bytes.as_slice())?;
+                        }
+                        tx.commit()?;
+                        known = true;
+                    }
+                    Err(error) => {
+                        row.reason = format!("reference_unavailable: {error}");
+                        ledger.plan(&[row])?;
+                        anyhow::bail!("deferred: original capture reference unavailable: {error}");
+                    }
+                }
+            }
+        }
         row.planned = if known { "revalidated" } else { "deferred" }.into();
         row.reason = if known {
             "prior_payload_reference"
@@ -602,6 +790,12 @@ async fn ingest_record(
             }
         }
     }
+    // The DOM and Webpage have been dropped before serializing replay data.
+    if row.planned == "indexed" {
+        if let Some(doc) = &document {
+            generations::save_prepared(ledger, &row, doc)?;
+        }
+    }
     Ok((row, document))
 }
 
@@ -636,6 +830,7 @@ pub fn run(base: &IndexerConfig, policy: &Config) -> Result<Report> {
         .inverted_index
         .prepare_writer_with_budget(policy.writer_bytes)?;
     let ledger = Ledger::open(&root.join("ledger.redb"))?;
+    generations::initialize_context(&ledger, base)?;
     if let Some(payload) = index.inverted_index.commit_payload()? {
         ledger.apply(&payload)?;
     }
@@ -646,6 +841,7 @@ pub fn run(base: &IndexerConfig, policy: &Config) -> Result<Report> {
         current_url: None,
         documents: ledger.documents()?,
         stored_versions: index.inverted_index.num_documents(),
+        recovered_reference_inputs: 0,
         outcomes: ledger.counts()?,
         stages: metrics::snapshot(),
         cache_hits: 0,
@@ -686,7 +882,8 @@ pub fn run(base: &IndexerConfig, policy: &Config) -> Result<Report> {
                 }
             }
             let source = format!("{key}:{}", consumer.fingerprint());
-            let mut rows = Vec::new();
+            generations::save_input(&ledger, &source, &base.warc_source, &path)?;
+            let mut rows: Vec<Decision> = Vec::new();
             let mut staged = HashMap::new();
             let mut staged_versions = std::collections::HashSet::new();
             let mut queued_bytes = 0usize;
@@ -739,7 +936,28 @@ pub fn run(base: &IndexerConfig, policy: &Config) -> Result<Report> {
                         &mut cache,
                         &mut staged_versions,
                         None,
+                        &base.warc_source,
                     ))?;
+                    if rows.iter().map(|r| 1 + r.dependencies.len()).sum::<usize>()
+                        + 1
+                        + row.dependencies.len()
+                        > 128
+                    {
+                        commit(
+                            &mut index,
+                            &ledger,
+                            Some(&mut consumer),
+                            &mut rows,
+                            ordinal - 1,
+                            false,
+                        )?;
+                        queued_bytes = 0;
+                        staged.retain(|_, saved| {
+                            saved.id == row.id || row.dependencies.contains(&saved.id)
+                        });
+                        staged_versions =
+                            staged.values().map(|saved| saved.version.clone()).collect();
+                    }
                     if let Some(document) = document {
                         let bytes = document.node_data.capacity() + 4096;
                         anyhow::ensure!(
@@ -756,7 +974,9 @@ pub fn run(base: &IndexerConfig, policy: &Config) -> Result<Report> {
                                 false,
                             )?;
                             queued_bytes = 0;
-                            staged.retain(|_, saved| saved.id == row.id);
+                            staged.retain(|_, saved| {
+                                saved.id == row.id || row.dependencies.contains(&saved.id)
+                            });
                             staged_versions.clear();
                             staged_versions.insert(row.version.clone());
                         }
@@ -884,6 +1104,7 @@ pub fn run(base: &IndexerConfig, policy: &Config) -> Result<Report> {
                     &mut cache,
                     &mut std::collections::HashSet::new(),
                     Some(doc.text),
+                    &base.warc_source,
                 ))?;
                 row.metadata = Some(doc.source);
                 if !allowed {
@@ -940,6 +1161,12 @@ pub fn run(base: &IndexerConfig, policy: &Config) -> Result<Report> {
     report.documents = ledger.documents()?;
     report.stored_versions = index.inverted_index.num_documents();
     report.outcomes = ledger.counts()?;
+    report.recovered_reference_inputs = ledger
+        .db
+        .begin_read()?
+        .open_table(COUNTS)?
+        .get("reference_inputs")?
+        .map_or(0, |v| v.value());
     report.stages = metrics::snapshot();
     report.cache_hits = cache.hits;
     report.elapsed_ms = started.elapsed().as_secs_f64() * 1000.;
@@ -1016,7 +1243,7 @@ pub fn audit(base: &IndexerConfig) -> Result<serde_json::Value> {
         .context("ingestion busy; retry audit")?;
     let ledger = Ledger::open(&root.join("ledger.redb"))?;
     let tx = ledger.db.begin_read()?;
-    let mut rows = Vec::new();
+    let mut rows: Vec<Decision> = Vec::new();
     for entry in tx.open_table(DECISIONS)?.iter()?.take(128) {
         let (_, value) = entry?;
         rows.push(serde_json::from_slice::<Decision>(value.value())?);

@@ -59,7 +59,7 @@ pub fn parse_duration<'de, D: serde::de::Deserializer<'de>>(
     Ok(ret)
 }
 
-#[derive(Debug, serde::Deserialize, Clone)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct IndexerConfig {
     #[serde(default)]
     pub consumer: crate::warc::stream::Limits,
@@ -92,7 +92,7 @@ pub enum IndexerGraphConfig {
     Remote { gossip: GossipConfig },
 }
 
-#[derive(Debug, serde::Deserialize, Clone)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct IndexerDualEncoderConfig {
     pub model_path: String,
 

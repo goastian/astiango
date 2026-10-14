@@ -278,7 +278,7 @@ export interface IndexingSnapshot {
   totals: { shards_completed: number; shards_failed: number; shards_deferred?: number; shards_pending: number; source_records_completed: number; indexed_documents: number; records_without_document: number; source_bytes_completed: number; elapsed_seconds: number; cpu_seconds: number; output_bytes: number };
   worker: { pid: number; input: string; records_committed: number; records_total: number; elapsed_seconds: number; peak_rss_bytes: number; rss_bytes?: number; cpu_percent?: number; open_fds?: number; read_bytes?: number; written_bytes?: number } | null;
   history?: Array<{ at: string; documents: number; rss_mib: number; cpu_percent: number }>;
-  runtime?: { stage: string; error?: string | null; stages?: Record<string, { wall_ms: number; cpu_ms: number }>; outcomes?: Record<string, number>; current_url?: string; documents?: number };
+  runtime?: { recovered_reference_inputs?: number; stage: string; error?: string | null; stages?: Record<string, { wall_ms: number; cpu_ms: number }>; outcomes?: Record<string, number>; current_url?: string; documents?: number };
   shards: IndexingShard[]; recent_events: Array<{ at: string; kind: string; message: string }>;
   publication: { search_visible: boolean; cross_shard_dedup: boolean; gc_enabled: boolean };
 }

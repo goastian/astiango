@@ -21,6 +21,7 @@
   import SchedulingStatus from "./SchedulingStatus.svelte";
   import ResourceStatus from "./ResourceStatus.svelte";
   import IndexingStatus from "./IndexingStatus.svelte";
+  import GenerationStatus from "./GenerationStatus.svelte";
   import OperationsStatus from "./OperationsStatus.svelte";
   import PerformanceRates from "./PerformanceRates.svelte";
   import {
@@ -419,15 +420,17 @@
       <div class="report-controls">
         <div class="execution-context"><Icon name="calendar" size={16} /><span>{$t("Ejecución desde {p0}", { p0: date(indexingView ? indexing?.snapshot.started_at : snapshot?.started_at) })}</span></div>
         {#if view === "crawler-overview"}<label class="history-window"><span>{$t("Gráficos")}</span><select bind:value={windowMinutes} aria-label={$t("Intervalo de los gráficos")}><option value={5}>{$t("Últimos 5 minutos")}</option><option value={15}>{$t("Últimos 15 minutos")}</option><option value={60}>{$t("Última hora")}</option></select></label>{/if}
-        <div class="run-health"><small>{$t("Crawler")}</small><span class="connection" class:live class:warning={!!error || offline || (stale && activeProcess)} role="status"><span class="status-dot"></span>{$t(statusText)}</span><span>{$t("Última lectura {p0} · cada 2 s", { p0: time(lastRead) })}</span></div>
+        <div class="run-health"><small>{$t(indexingView ? "Indexing" : "Crawler")}</small><span class="connection" class:live={indexingView ? indexingLive : live} class:warning={indexingView ? !indexingLive || indexing?.snapshot.phase === "blocked" : !!error || offline || (stale && activeProcess)} role="status"><span class="status-dot"></span>{$t(indexingView ? paused ? "Showing the last available sample." : !indexingLive ? "State unavailable or stale" : ({indexing:"Indexing",idle:"Waiting",blocked:"Backpressure",draining:"Draining",stopped:"Stopped"}[indexing?.snapshot.phase ?? ""] ?? "Indexing") : statusText)}</span><span>{$t("Última lectura {p0} · cada 2 s", { p0: time(indexingView ? indexing?.snapshot.updated_at : lastRead) })}</span></div>
       </div>
     </header>
     <main id="main-content" data-view={view}>
-      {#if error || offline || (stale && activeProcess) || paused}
+      {#if !indexingView && (error || offline || (stale && activeProcess) || paused)}
         <div class="notice" role="status"><strong>{paused && !error && !offline ? $t("Actualización pausada.") : $t("Lectura no actualizada.")}</strong> {$t(error) || (offline ? $t("El proceso del crawler ya no está activo.") : paused ? $t("El crawler continúa de forma independiente.") : $t("El estado visible no se ha actualizado. Esta lectura no permite concluir que el crawler esté detenido."))} {#if snapshot}{$t("Se conserva el último estado recibido.")}{/if}</div>
       {/if}
       {#if view === "overview" || view === "components"}
         <SystemOverview {snapshot} {indexing} {indexingLive} connected={live} status={statusText} inventory={view === "components"} />
+      {:else if view === "indexing-generations"}
+        <GenerationStatus {now} {paused} />
       {:else if indexingView}
         <IndexingStatus response={indexing} crawler={snapshot} {now} readError={indexingError} {paused} mode={view === "indexing-shards" ? "shards" : view === "indexing-configuration" ? "configuration" : "overview"} />
       {:else if view === "crawler-overview"}
@@ -1115,7 +1118,7 @@
       {/if}
       {#if view === "benchmarks"}<OperationsStatus />{/if}
       <BenchmarkPanel visible={view === "benchmarks"} />
-      <footer class="page-footer"><span>AstianGO <span class="slash">/</span> {snapshot?.run_id ?? $t("Sin ejecución")}</span><span>{$t("Hora de Bogotá · Estado: {p0}", { p0: time(snapshot?.updated_at) })}</span></footer>
+      <footer class="page-footer"><span>AstianGO <span class="slash">/</span> {(indexingView ? indexing?.snapshot.run_id : snapshot?.run_id) ?? $t("Sin ejecución")}</span><span>{$t("Hora de Bogotá · Estado: {p0}", { p0: time(indexingView ? indexing?.snapshot.updated_at : snapshot?.updated_at) })}</span></footer>
     </main>
   </div>
 </div>

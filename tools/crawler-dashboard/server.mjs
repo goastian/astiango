@@ -49,6 +49,7 @@ export function createDashboardServer({
   const distRoot = resolve(distDirectory);
   const observations = snapshotCache(statePath);
   const series = resourceSeries(seriesPath);
+  const generations = snapshotCache(resolve(dirname(indexingPath), "index/generations/status.json"), 256 * 1024, value => value.version === 1 && Array.isArray(value.generations) && value.generations.length <= 32);
   const indexing = snapshotCache(indexingPath, 256 * 1024, snapshot => snapshot.schema_version === 1 && snapshot.component === "indexer" && Array.isArray(snapshot.shards) && snapshot.shards.length <= 128 && snapshot.totals && snapshot.configuration && snapshot.source && snapshot.publication);
   return createServer(async (request, response) => {
     response.setHeader("X-Content-Type-Options", "nosniff");
@@ -101,12 +102,21 @@ export function createDashboardServer({
       }
       return;
     }
+    if (pathname === "/api/indexing/generations") {
+      try {
+        const value = await generations.get();
+        respondJson(response, 200, value.snapshot);
+      } catch (error) { respondJson(response, error.code === "ENOENT" ? 404 : 503, { error: "Generation status unavailable" }); }
+      return;
+    }
     if (pathname === "/api/indexing/preview") {
       const query = new URL(request.url, "http://localhost").searchParams.get("q") || "";
       if (!query.trim() || Buffer.byteLength(query,"utf8") > 4096) { respondJson(response, 400, { error: "Invalid preview query." }); return; }
       if (previewBusy) { respondJson(response, 429, { error: "Preview busy; retry shortly." }); return; }
+      let generationActive = false;
+      try { generationActive = !!(await generations.get()).snapshot.active; } catch {}
       previewBusy = true;
-      execFile(resolve(appDirectory, "../../target/release/astiango-indexer"), [resolve(dirname(indexingPath), "current-job.toml"), "--query", query], { timeout: 5000, maxBuffer: 256 * 1024, env: { ...process.env, RUST_LOG: "error" } }, (error, stdout) => {
+      execFile(process.env.INDEXER_BINARY || resolve(appDirectory, "../../target/release/astiango-indexer"), [resolve(dirname(indexingPath), "current-job.toml"), generationActive ? "--generation-query" : "--query", query], { timeout: 5000, maxBuffer: 256 * 1024, env: { ...process.env, RUST_LOG: "error" } }, (error, stdout) => {
         previewBusy = false;
         if (error) { respondJson(response, 503, { error: "Local preview unavailable or ingestion busy; retry shortly." }); return; }
         try { respondJson(response, 200, JSON.parse(stdout)); } catch { respondJson(response, 503, { error: "Invalid native preview response." }); }

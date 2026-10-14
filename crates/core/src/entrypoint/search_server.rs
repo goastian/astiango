@@ -172,7 +172,8 @@ impl SearchService {
         let gossip_addr = config.gossip_addr;
         let gossip_seed_nodes = config.gossip_seed_nodes.clone().unwrap_or_default();
 
-        let mut search_index = Index::open(&config.index_path)?;
+        let generation_path = crate::entrypoint::indexer::pipeline::generations::serving_path(std::path::Path::new(&config.index_path))?;
+        let mut search_index = Index::open(&generation_path)?;
         search_index
             .inverted_index
             .set_snippet_config(config.snippet.clone());

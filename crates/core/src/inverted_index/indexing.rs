@@ -133,6 +133,20 @@ impl InvertedIndex {
         }))
     }
 
+    /// Iterate stored content with one document resident at a time.
+    pub fn stored_content(&self) -> Result<impl Iterator<Item = Result<(String, String, String)>>> {
+        use tantivy::schema::Value;
+        let schema = self.schema_ref();
+        let fields = [schema.get_field("url")?, schema.get_field("title")?, schema.get_field("stemmed_body")?];
+        let searcher = self.reader.searcher();
+        let counts: Vec<_> = searcher.segment_readers().iter().map(|s| s.max_doc()).collect();
+        Ok(counts.into_iter().enumerate().flat_map(|(segment, count)| (0..count).map(move |doc| tantivy::DocAddress::new(segment as u32, doc))).map(move |address| {
+            let doc: tantivy::schema::TantivyDocument = searcher.doc(address)?;
+            let text = |field| doc.get_first(field).and_then(|v| v.as_str()).unwrap_or_default().to_owned();
+            Ok((text(fields[0]), text(fields[1]), text(fields[2])))
+        }))
+    }
+
     pub fn commit(&mut self) -> Result<()> {
         self.prepare_writer()?;
         self.writer

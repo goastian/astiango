@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { getI18n } from "./i18n";
   import TimeChart from "./TimeChart.svelte";
   import Pagination from "./Pagination.svelte";
@@ -7,6 +8,11 @@
   let { response, crawler, now, readError = "", paused = false, mode = "overview" }: {
     response: IndexingResponse | null; crawler?: Snapshot; now: number; readError?: string; paused?: boolean; mode?: string;
   } = $props();
+  let generation = $state<{active:string|null}|null>(null);
+  onMount(() => {
+    const read = async () => { if (paused) return; try { const response = await fetch("/api/indexing/generations"); if (response.ok) generation = await response.json(); } catch {} };
+    read(); const timer = setInterval(read,3000); return () => clearInterval(timer);
+  });
   let page = $state(1);
   let filter = $state("all");
   let query = $state("");
@@ -90,7 +96,7 @@
           <a href="#/indexing/shards"><span>{$t("Sealed segments")}</span><strong>{number(snapshot.source.sealed)}</strong></a>
           <span class="flow-arrow">→</span><div><span>{$t("Source records committed")}</span><strong>{number(totals.source_records_completed)}</strong></div>
           <span class="flow-arrow">→</span><div><span>{$t(snapshot.publication.cross_shard_dedup ? "Active documents" : "Documents committed")}</span><strong>{number(totals.indexed_documents)}</strong></div>
-          <span class="flow-arrow">→</span><div class="pending-step"><span>{$t("Publication status")}</span><strong>{$t("Pending")}</strong></div>
+          <span class="flow-arrow">→</span><a class="pending-step" href="#/indexing/generations"><span>{$t("Local serving selector")}</span><strong>{$t(generation?.active ? "Ready" : "Pending")}</strong></a>
         </section>
         <section class="chart-grid">
           <article class="panel chart-main"><header><h2>{$t("Documents per minute")}</h2><span>{$t("Last 10 minutes")}</span></header><TimeChart points={throughput} label="Documents per minute" /></article>
@@ -101,7 +107,7 @@
           <header><h2>{$t(snapshot.worker ? "Active worker" : "Last processed URL")}</h2><span class:working={!!snapshot.worker}>{snapshot.worker ? $t(stageNames[snapshot.runtime?.stage ?? ""] ?? states[snapshot.runtime?.stage ?? ""] ?? "Indexing") : $t(reasons[snapshot.reason] ?? snapshot.reason)}</span></header>
           <div class="console-path"><code>{snapshot.runtime?.current_url ?? snapshot.worker?.input ?? snapshot.recent_events.at(-1)?.message ?? "—"}</code></div>
           {#if snapshot.worker}<progress value={snapshot.worker.records_committed} max={Math.max(1,snapshot.worker.records_total)}></progress><small>{snapshot.worker.records_committed} / {snapshot.worker.records_total} · {number(snapshot.worker.elapsed_seconds)} s</small>{/if}
-          <div class="work-footer"><span>{$t("CPU milliseconds per document")} <b>{number(cpuPerDocument)}</b></span><span>{$t("Output and retained work")} <b>{bytes(totals.output_bytes)}</b></span><a href="#/indexing/shards">{$t("Inspect shards")} →</a></div>
+          <div class="work-footer">{#if snapshot.runtime?.recovered_reference_inputs}<span>{$t("Recovered references")} <b>{number(snapshot.runtime.recovered_reference_inputs)}</b></span>{/if}<span>{$t("CPU milliseconds per document")} <b>{number(cpuPerDocument)}</b></span><span>{$t("Output and retained work")} <b>{bytes(totals.output_bytes)}</b></span><a href="#/indexing/shards">{$t("Inspect shards")} →</a></div>
         </section>
         <section class="panel coexist-strip"><h2>{$t("Crawler and indexer coexistence")}</h2><span>{$t("Crawler CPU")} <b>{number(crawler?.resources?.process_cpu_percent)} %</b></span><span>{$t("Crawler memory")} <b>{bytes(crawler?.resources?.rss_bytes)}</b></span><span>{$t("Spool usage")} <b>{bytes(crawler?.spool?.spool_bytes)}</b></span><span>{$t("Input scan errors")} <b>{number(snapshot.source.scan_errors)}</b></span></section>
         {#if stages.length}<section class="diagnostic-grid">
@@ -110,7 +116,7 @@
         </section>{/if}
         {#if snapshot.publication.cross_shard_dedup}<section class="panel preview"><header><h2>{$t("Local search preview")}</h2><small>{$t("Public search publication pending")}</small></header><form onsubmit={event=>{event.preventDefault();searchPreview();}}><input bind:value={previewQuery} aria-label={$t("Search")} placeholder={$t("Search indexed documents")} maxlength="4096" required /><button type="submit">{$t("Search")}</button></form><p aria-live="polite">{previewState ? $t(previewState) : ""}</p>{#each preview as result}<article><strong>{result.title}</strong><code>{result.url}</code><p>{result.snippet}</p></article>{/each}</section>{/if}
         {#if snapshot.runtime?.error}<p class="notice" role="status">{snapshot.runtime.error}</p>{/if}
-        <details class="panel"><summary>{$t("Decisions and publication")}</summary><p>{$t("Public search publication pending")}</p></details>
+        <a class="generation-link" href="#/indexing/generations">{$t("Generation catalog")} →</a>
       {:else}
         <section class="panel"><h2>{$t("Input shards")}</h2>
           <div class="filters"><label>{$t("Search")}: <input bind:value={query} placeholder={$t("Segment or error")} /></label>
@@ -141,7 +147,7 @@
   progress { width: 100%; height: 6px; accent-color: #256a55; margin-top: 18px; }
   .work-footer, .coexist-strip { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; font-size: 12px; }
   .work-footer { margin-top: 18px; } .work-footer a { margin-left: auto; } b { font-weight: 600; margin-left: 8px; }
-  .working { color: #217454; } details.panel { padding: 14px 24px; font-size: 12px; color: #68776c; }
+  .working { color: #217454; } .generation-link {font-size:13px;color:#367b62;justify-self:start;}
   .indexing-content { display: grid; gap: 20px; min-width: 0; }
   .panel { padding: 22px 24px; min-width: 0; }
   .indexing-health { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }

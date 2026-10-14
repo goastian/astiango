@@ -33,6 +33,22 @@ struct Args {
     query: Option<String>,
     #[arg(long)]
     audit: bool,
+    #[arg(long)]
+    prepare_generation: bool,
+    #[arg(long)]
+    source_directory: Option<PathBuf>,
+    #[arg(long)]
+    validate_query: Option<String>,
+    #[arg(long)]
+    promote: Option<String>,
+    #[arg(long)]
+    rollback: bool,
+    #[arg(long)]
+    repair_publication: bool,
+    #[arg(long)]
+    generation_query: Option<String>,
+    #[arg(long)]
+    build_info: bool,
 }
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -44,6 +60,10 @@ fn main() -> anyhow::Result<()> {
         libc::signal(libc::SIGINT, cancel as *const () as usize);
     }
     let args = Args::parse();
+    if args.build_info {
+        println!("{}", pipeline::generations::build_info());
+        return Ok(());
+    }
     if let Some(path) = args.make_corpus {
         println!("{}", indexer::fixture::create(&path)?);
         return Ok(());
@@ -87,6 +107,47 @@ fn main() -> anyhow::Result<()> {
     );
     let config: astiango::config::IndexerConfig = value.try_into()?;
     policy.validate(&config)?;
+    let operations = [
+        args.audit,
+        args.query.is_some(),
+        args.prepare_generation,
+        args.promote.is_some(),
+        args.rollback,
+        args.repair_publication,
+        args.generation_query.is_some(),
+        args.legacy,
+    ];
+    anyhow::ensure!(
+        operations.into_iter().filter(|v| *v).count() <= 1,
+        "choose one indexer operation"
+    );
+    anyhow::ensure!(
+        args.prepare_generation
+            || (args.source_directory.is_none() && args.validate_query.is_none()),
+        "generation options require --prepare-generation"
+    );
+    let result = if args.prepare_generation {
+        Some(pipeline::generations::prepare(
+            &config,
+            &policy,
+            args.source_directory.as_deref(),
+            args.validate_query.as_deref(),
+        )?)
+    } else if let Some(id) = args.promote {
+        Some(pipeline::generations::promote(&config, &id, false)?)
+    } else if args.rollback {
+        Some(pipeline::generations::promote(&config, "", true)?)
+    } else if args.repair_publication {
+        Some(pipeline::generations::repair(&config)?)
+    } else if let Some(query) = args.generation_query {
+        Some(pipeline::generations::query(&config, &query)?)
+    } else {
+        None
+    };
+    if let Some(result) = result {
+        println!("{}", result);
+        return Ok(());
+    }
     let output = std::path::Path::new(&config.output_path);
     if args.legacy {
         anyhow::ensure!(
@@ -126,10 +187,22 @@ fn main() -> anyhow::Result<()> {
             serde_json::json!({"version":1,"mode":"legacy","documents":index.inverted_index.num_documents(),"elapsed_ms":start.elapsed().as_secs_f64()*1000.,"cpu_ms":(metrics::cpu_ns()-cpu) as f64/1e6,"allocated_bytes":metrics::ALLOCATED.load(Ordering::Relaxed)-allocated,"stages":metrics::snapshot()})
         );
     } else {
-        println!(
-            "{}",
-            serde_json::to_string(&pipeline::run(&config, &policy)?)?
-        );
+        let report = pipeline::run(&config, &policy)?;
+        println!("{}", serde_json::to_string(&report)?);
+        if policy.publish_generations {
+            let publication = (|| -> anyhow::Result<()> {
+                let manifest = pipeline::generations::prepare(&config, &policy, None, None)?;
+                let id = manifest["id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("missing generation ID"))?;
+                pipeline::generations::promote(&config, id, false)?;
+                Ok(())
+            })();
+            if let Err(error) = publication {
+                pipeline::generations::record_publication_error(&config, &error.to_string())?;
+                tracing::error!(%error, "ingestion committed; generation publication retained for retry");
+            }
+        }
     }
     Ok(())
 }

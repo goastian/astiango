@@ -10,6 +10,7 @@ export const views = [
   { id: "configuration", path: "/crawler/configuration", group: "Crawler", label: "Configuración", icon: "settings", description: "Parámetros activos e identidad de la ejecución. Consulta sin modificar el crawl." },
   { id: "indexing", path: "/indexing/overview", group: "Indexing", label: "Indexing overview", icon: "index", description: "Committed documents, input progress, resources and coexistence with the crawler." },
   { id: "indexing-shards", path: "/indexing/shards", group: "Indexing", label: "Input shards", icon: "storage", description: "Sealed segments, checkpoints and errors in the local ingestion queue." },
+  { id: "indexing-generations", path: "/indexing/generations", group: "Indexing", label: "Generations", icon: "storage", description: "Validated generations, active selector and retained rollback." },
   { id: "indexing-configuration", path: "/indexing/configuration", group: "Indexing", label: "Indexing configuration", icon: "settings", description: "Worker budgets, pilot limits and publication scope." },
   { id: "benchmarks", path: "/tools/benchmarks", group: "Herramientas", label: "Pruebas de capacidad", icon: "experiment", description: "Mediciones locales y comparaciones reproducibles, separadas de la operación." },
 ];

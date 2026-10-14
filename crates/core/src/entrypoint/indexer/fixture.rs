@@ -214,6 +214,50 @@ pub fn create(path: &Path) -> Result<serde_json::Value> {
         url: url.into(),
     });
     crate::warc::capture::write(&mut b, &revalidation, PayloadType::Html, 3, false)?;
+    let mut reference_only = Vec::new();
+    crate::warc::capture::write(
+        &mut reference_only,
+        &revalidation,
+        PayloadType::Html,
+        3,
+        false,
+    )?;
+    fs::write(path.join("contract-reference-only.warc.gz"), reference_only)?;
+    let noindex_original=captured("https://index.fixture/reference-noindex",b"<html><head><title>Excluded reference</title><meta name=robots content=noindex></head><body>reference exclusion content remains archived</body></html>",145,false);
+    let mut original_bytes = Vec::new();
+    crate::warc::capture::write(
+        &mut original_bytes,
+        &noindex_original,
+        PayloadType::Html,
+        3,
+        false,
+    )?;
+    fs::write(
+        path.join("noindex-reference-original.warc.gz"),
+        &original_bytes,
+    )?;
+    let mut noindex_reference =
+        captured("https://index.fixture/reference-noindex", b"", 146, false);
+    noindex_reference.metadata.response.status = 304;
+    noindex_reference.metadata.revalidation = Some(crate::crawler::recrawl::PayloadReference {
+        version: 1,
+        fetch_id: noindex_original.metadata.fetch_id.clone(),
+        segment: "noindex-reference-original.warc.gz".into(),
+        record_offset: 0,
+        record_end: original_bytes.len() as u64,
+        payload_sha256: noindex_original.metadata.payload_sha256.clone(),
+        payload_bytes: noindex_original.payload.len(),
+        url: noindex_original.metadata.response.url.clone(),
+    });
+    let mut noindex_bytes = Vec::new();
+    crate::warc::capture::write(
+        &mut noindex_bytes,
+        &noindex_reference,
+        PayloadType::Html,
+        3,
+        false,
+    )?;
+    fs::write(path.join("noindex-reference-only.warc.gz"), noindex_bytes)?;
     let mut latin=captured("https://index.fixture/charset",b"<html><title>Charset</title><body><p>Espa\xf1ol idioma documento verificable</p></body></html>",140,false);
     latin.metadata.charset = "windows-1252".into();
     latin

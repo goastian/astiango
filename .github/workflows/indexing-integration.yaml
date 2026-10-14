@@ -1,0 +1,30 @@
+name: Indexing integration
+permissions:
+  contents: read
+on:
+  pull_request:
+    paths: ['crates/**', 'Cargo.*', 'rust-toolchain.toml', 'configs/indexer/**', 'scripts/*indexer*.py', 'tools/crawler-dashboard/**', 'packages/i18n/**', '.github/workflows/indexing-integration.yaml']
+  push:
+    paths: ['crates/**', 'Cargo.*', 'rust-toolchain.toml', 'configs/indexer/**', 'scripts/*indexer*.py', 'tools/crawler-dashboard/**', 'packages/i18n/**', '.github/workflows/indexing-integration.yaml']
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CFLAGS: -std=gnu17
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.90.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.10.0'
+      - run: sudo apt-get update && sudo apt-get install -y liburing-dev libssl-dev pkg-config clang binutils
+      - run: cargo fetch --locked
+      - run: python3 scripts/build-indexer.py --verify-rebuild
+      - run: target/release/astiango-indexer --make-corpus data/indexer-bench/corpus-v3
+      - run: python3 scripts/indexer-generations-bench.py
+      - run: npm ci && npm run check && npm run build
+        working-directory: tools/crawler-dashboard
