@@ -156,6 +156,7 @@ pub struct JobExecutor<S: DatumSink> {
     client: RobotClient,
     has_gotten_429_response: bool,
     request_identity: Option<Url>,
+    cross_origin_redirects: bool,
     politeness_factor: u32,
     crawled_urls: Arc<HashSet<Url>>,
     crawled_sitemaps: HashSet<Site>,
@@ -203,6 +204,7 @@ impl<S: DatumSink> JobExecutor<S> {
             wander_prioritiser: WanderPrioritiser::new(),
             has_gotten_429_response: false,
             request_identity: None,
+            cross_origin_redirects: false,
             job,
         }
     }
@@ -279,6 +281,11 @@ impl<S: DatumSink> JobExecutor<S> {
         self.outcome.record(url, outcome);
     }
 
+    pub fn with_cross_origin_redirects(mut self) -> Self {
+        self.cross_origin_redirects = true;
+        self
+    }
+
     pub async fn run(mut self) -> JobOutcome {
         tracing::info!("Processing job: {:?}", self.job.domain);
         if let Some(observer) = &self.observer {
@@ -293,7 +300,8 @@ impl<S: DatumSink> JobExecutor<S> {
         {
             let seeds = self.seed_urls.clone();
             for url in &seeds {
-                let sitemaps = self.client.robots_txt_manager().sitemaps(url).await;
+                let target = self.writer.redirect_continuation(url).await.ok().flatten().map(|c| c.url).unwrap_or_else(|| url.clone());
+                let sitemaps = self.client.robots_txt_manager().sitemaps(&target).await;
                 if let Err(error) = self.writer.discovered_urls(Vec::new(), sitemaps).await {
                     self.record(
                         url.clone(),
@@ -456,7 +464,7 @@ impl<S: DatumSink> JobExecutor<S> {
                 reason: reason.into(),
             })
         };
-        if !self.job.domain.covers(url) {
+        if !self.job.domain.covers(url) && !self.cross_origin_redirects {
             return skipped("outside_job_domain");
         }
         if self.crawled_urls.contains(url) {
@@ -468,8 +476,15 @@ impl<S: DatumSink> JobExecutor<S> {
         if let Err(error) = super::robot_client::validate_network_url(self.network_policy, url) {
             return UrlVisit::Stop(self.error_outcome(error));
         }
+        let target = if self.cross_origin_redirects {
+            match self.writer.redirect_continuation(url).await {
+                Ok(Some(continuation)) => continuation.url,
+                Ok(None) => url.clone(),
+                Err(error) => return UrlVisit::Stop(FetchOutcome::StorageFailure { message: error.to_string() }),
+            }
+        } else { url.clone() };
         let access = self
-            .cancellable(async { Ok(self.client.robots_txt_manager().access(url).await) })
+            .cancellable(async { Ok(self.client.robots_txt_manager().access(&target).await) })
             .await;
         match access {
             Err(_) => UrlVisit::Stop(FetchOutcome::Cancelled),

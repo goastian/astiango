@@ -1,0 +1,157 @@
+# Explicit single-document acquisition profile for the specialized queue.
+# Inicio aleatorio desde una lista pública real; descubre dominios por sus enlaces.
+# scripts/crawler-local.py bootstrap genera este archivo una sola vez.
+seeds_file = "data/crawler-small-profile/seeds.txt"
+output_path = "data/crawler-small-profile/warc"
+status_path = "data/crawler-small-profile/status.json"
+state_directory = "data/crawler-small-profile"
+pages_per_domain = 50
+num_worker_threads = 2
+min_crawl_delay_ms = 10000
+timeout_seconds = 30
+network_policy = "public_only"
+max_redirect_hops = 10
+max_frontier = 10000
+revisit_interval_seconds = 3600
+
+[user_agent]
+full = "AstianGOBot/1.0 (+https://astiango.com/webmasters; contact@astian.org)"
+token = "AstianGOBot"
+
+[transport]
+max_client_slots = 128
+max_slots_per_origin = 4
+idle_timeout_seconds = 30
+dns_cache_entries = 1024
+dns_positive_ttl_seconds = 60
+dns_negative_ttl_seconds = 5
+dns_max_inflight = 32
+
+# C05: admission and body allocations, shared by pages, robots, feeds and sitemaps.
+# timeout_seconds remains an upper bound on the complete request.
+[body]
+max_inflight_bodies = 2
+max_reserved_bytes = 67108864
+connect_timeout_ms = 10000
+header_timeout_ms = 30000
+idle_timeout_ms = 10000
+total_timeout_ms = 60000
+budget_wait_timeout_ms = 10000
+
+[body.html]
+wire_limit_bytes = 4194304
+decoded_limit_bytes = 4194304
+
+[body.feed]
+wire_limit_bytes = 4194304
+decoded_limit_bytes = 4194304
+
+[body.sitemap]
+wire_limit_bytes = 4194304
+decoded_limit_bytes = 4194304
+
+[body.robots]
+wire_limit_bytes = 524288
+decoded_limit_bytes = 524288
+
+# C07: bounded CPU work and input bytes; control has an independent pool.
+[pipeline]
+max_inflight_documents = 2
+max_inflight_bytes = 67108864
+queue_wait_timeout_ms = 30000
+runtime_sample_interval_ms = 25
+batch_segment_bytes = 16777216
+batch_segment_items = 512
+
+[pipeline.parse]
+workers = 2
+max_items = 2
+max_bytes = 33554432
+
+[pipeline.storage]
+workers = 1
+max_items = 2
+max_bytes = 33554432
+
+[pipeline.control]
+workers = 1
+max_items = 2
+max_bytes = 16777216
+
+[pipeline.network_setup]
+workers = 1
+max_items = 2
+max_bytes = 1048576
+
+# C08: durable local ACK, recoverable members and bounded remote publication.
+[spool]
+directory = "data/crawler-small-profile/warc/spool"
+segment_bytes = 67108864
+segment_records = 65536
+rotate_seconds = 300
+gzip_level = 3
+max_spool_bytes = 1073741824
+max_segments = 256
+commit_records = 16
+commit_wait_ms = 10
+upload_retry_seconds = 10
+upload_timeout_seconds = 60
+gc_enabled = false
+retention_seconds = 86400
+
+# C11–C13: explicit migration mode; courtesy is independent of telemetry.
+[scheduler]
+mode = "long_jobs"
+max_tracked_origins = 4096
+max_active_per_site = 2
+max_active_per_ip = 8
+
+[robots]
+cache_entries = 1024
+failure_ttl_seconds = 60
+
+# C14: durable retry deadlines; Retry-After remains a minimum.
+[retry]
+max_attempts = 6
+max_elapsed_ms = 86400000
+initial_backoff_ms = 1000
+max_backoff_ms = 900000
+circuit_failures = 3
+circuit_open_ms = 60000
+origin_attempts_per_minute = 32
+global_attempts_per_minute = 1024
+
+# C15: aggregate discovery budgets per origin and cycle.
+[discovery]
+cycle_ms = 3600000
+max_depth = 8
+max_documents = 64
+max_urls = 100000
+max_total_bytes = 67108864
+
+# C18: conditional GET plus periodic full validation.
+[recrawl]
+enabled = true
+min_interval_ms = 60000
+initial_interval_ms = 3600000
+max_interval_ms = 604800000
+full_check_every = 20
+
+# C17: conservative, observable exclusions with manual release.
+[traps]
+enabled = true
+max_depth = 32
+calendar_family_budget = 256
+query_family_budget = 256
+session_family_budget = 64
+repeated_content_budget = 64
+review_sample_every = 64
+
+[resources]
+automatic = true
+memory_limit_bytes = 536870912
+minimum_disk_free_bytes = 268435456
+minimum_free_inodes = 1024
+max_open_fds = 256
+min_workers = 1
+max_workers = 2

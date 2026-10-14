@@ -67,7 +67,7 @@ impl Html {
         Ok(html)
     }
 
-    #[cfg(test)]
+    /// Attach independently extracted text while keeping URL and metadata.
     pub fn set_clean_text(&mut self, text: String) {
         self.clean_text = Some(text);
     }

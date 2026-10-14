@@ -312,7 +312,7 @@ pub struct SharedTransport {
 
 pub trait HttpAuthority: Send + Sync {
     fn check(&self) -> Result<()>;
-    fn authorize<'a>(&'a self, url: &'a Url) -> IoFuture<'a, Result<()>>;
+    fn authorize<'a>(&'a self, url: &'a Url, addresses: &'a [IpAddr]) -> IoFuture<'a, Result<()>>;
 }
 
 impl SharedTransport {
@@ -491,11 +491,7 @@ impl SharedTransport {
         started: Instant,
         headers: reqwest::header::HeaderMap,
     ) -> Result<reqwest::Response> {
-        if let Some(authority) = &self.authority {
-            authority.check()?;
-            authority.authorize(&url).await?;
-            authority.check()?;
-        }
+        if let Some(authority) = &self.authority { authority.check()?; }
         self.validate_url(&url)?;
         let host = url
             .host_str()
@@ -513,6 +509,10 @@ impl SharedTransport {
             },
             _ => self.resolve(host).await?,
         };
+        if let Some(authority) = &self.authority {
+            authority.authorize(&url, &answer.addresses).await?;
+            authority.check()?;
+        }
         let ip_permit = self.acquire_ips(&answer.addresses).await;
         let mut lease = self.acquire_slot(origin).await;
         lease.ip_permit = Some(ip_permit);

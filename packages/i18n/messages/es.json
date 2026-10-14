@@ -1225,5 +1225,19 @@
   "Recovery HTTP requests": "Peticiones HTTP durante la recuperación",
   "Isolated PDF extraction": "Extracción PDF aislada",
   "Prolonged monitoring stopped. You can suspend the computer.": "Seguimiento prolongado detenido. Puedes suspender el equipo.",
-  "Optional observation": "Observación opcional"
+  "Optional observation": "Observación opcional",
+  "Distributed acquisition": "Adquisición distribuida",
+  "Robots downloads after restart": "Descargas de robots tras reiniciar",
+  "Fetch / commit drain": "Cierre de descarga / commit",
+  "Shared crawl delay": "Demora de rastreo compartida",
+  "Redundant control plane": "Control redundante",
+  "Controllers": "Controladores",
+  "Controller recovery": "Recuperación del controlador",
+  "Lost data directory recovery": "Recuperación del directorio de datos perdido",
+  "Specialized extraction": "Extracción especializada",
+  "Archived real-web cohort": "Cohorte de páginas reales archivadas",
+  "Additional extracted text": "Texto adicional extraído",
+  "Completed / quota failures": "Completadas / descartes por cuota",
+  "Derived documents indexed": "Documentos derivados indexados",
+  "Isolated offline JavaScript. Network subresources stay blocked; global coverage is not estimated.": "JavaScript aislado sin red. Los subrecursos de red siguen bloqueados; no se estima cobertura global."
 }

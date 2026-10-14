@@ -124,8 +124,21 @@ struct CacheEntry {
     continuation: Option<(Url, usize)>,
     consumed: bool,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PersistedRules {
+    pub status: u16,
+    pub text: String,
+    pub ttl_ms: u64,
+    #[serde(default)]
+    pub crawl_delay_ms: u64,
+}
+pub trait RobotsPersistence: Send + Sync {
+    fn load<'a>(&'a self, origin: &'a str) -> super::runtime::IoFuture<'a, super::Result<Option<PersistedRules>>>;
+    fn save<'a>(&'a self, origin: &'a str, rules: PersistedRules) -> super::runtime::IoFuture<'a, super::Result<()>>;
+}
 struct InnerRobotsTxtManager {
     cache: Mutex<HashMap<String, CacheEntry>>,
+    persistence: Mutex<Option<Arc<dyn RobotsPersistence>>>,
     changed: tokio::sync::Notify,
     counters: Counters,
     transport: SharedTransport,
@@ -158,6 +171,7 @@ impl InnerRobotsTxtManager {
     ) -> Self {
         Self {
             cache: Mutex::new(HashMap::new()),
+            persistence: Mutex::new(None),
             changed: tokio::sync::Notify::new(),
             counters: Counters::default(),
             transport,
@@ -249,6 +263,23 @@ impl InnerRobotsTxtManager {
         url.set_query(None);
         url.set_fragment(None);
         let origin = initial.origin().ascii_serialization();
+        let persistence = self.persistence.lock().unwrap().clone();
+        if let Some(store) = &persistence {
+            match store.load(&origin).await {
+                Ok(Some(saved)) => {
+                    let rules = if saved.status == 200 {
+                        let agent = self.user_agent.clone();
+                        self.pipeline.parse.run(saved.text.len(), move || robotstxt::Robots::parse_rfc(&agent, &saved.text)).await.ok().and_then(Result::ok).map(Lookup::Found).unwrap_or(Lookup::Unreachable)
+                    } else if (400..500).contains(&saved.status) && saved.status != 429 { Lookup::Unavailable } else { Lookup::Unreachable };
+                    // The durable authority enforces the shared crawl-delay.
+                    // Reloading cached rules must not restart its delay on each worker.
+                    return CheckedRobotsTxt { robots: rules, last_check:self.now(), ttl:Duration::from_millis(saved.ttl_ms) };
+                }
+                Ok(None) => {},
+                Err(_) => return CheckedRobotsTxt { robots:Lookup::Deferred(1000),last_check:self.now(),ttl:Duration::from_millis(1000) },
+            }
+        }
+
         let continuation = self
             .cache
             .lock()
@@ -314,20 +345,30 @@ impl InnerRobotsTxtManager {
                         .unwrap_or_default()
                         .min(Duration::from_secs(31_536_000)),
                 );
+                if let Some(store) = &persistence {
+                    let _ = store.save(&origin, PersistedRules { status:429,text:String::new(),ttl_ms:ttl.as_millis().min(86400000) as u64,crawl_delay_ms:0 }).await;
+                }
                 break;
             }
             if (400..500).contains(&status) {
+                if let Some(store) = &persistence {
+                    if store.save(&origin, PersistedRules { status,text:String::new(),ttl_ms:ttl.as_millis() as u64,crawl_delay_ms:0 }).await.is_err() {
+                        lookup=Lookup::Deferred(1000);break;
+                    }
+                }
                 lookup = Lookup::Unavailable;
                 self.counters.unavailable.fetch_add(1, Ordering::Relaxed);
                 break;
             }
             if !(200..300).contains(&status) {
+                if let Some(store) = &persistence { let _ = store.save(&origin, PersistedRules { status:503,text:String::new(),ttl_ms:self.failure_ttl().as_millis() as u64,crawl_delay_ms:0 }).await; }
                 break;
             }
             let body = match self.body(response).await {
                 Ok(body) => body,
                 Err(_) => break,
             };
+            let persisted_body = persistence.as_ref().map(|_| body.to_string());
             let agent = self.user_agent.clone();
             self.pipeline.start_monitor();
             lookup = self
@@ -340,6 +381,10 @@ impl InnerRobotsTxtManager {
                 })
                 .await
                 .unwrap_or(Lookup::Unreachable);
+            if let (Some(store), Some(text)) = (&persistence, persisted_body) {
+                let crawl_delay_ms = match &lookup { Lookup::Found(rules) => rules.crawl_delay().unwrap_or_default().as_millis().min(86400000) as u64, _ => 0 };
+                if store.save(&origin, PersistedRules { status:200,text,ttl_ms:ttl.as_millis() as u64,crawl_delay_ms }).await.is_err() { lookup=Lookup::Deferred(1000); break; }
+            }
             if let Lookup::Found(rules) = &lookup {
                 self.scheduler
                     .set_crawl_delay(initial, rules.crawl_delay().unwrap_or_default());
@@ -595,6 +640,9 @@ impl RobotsTxtManager {
             ttl_seconds: self.inner.cache_expiration.as_secs(),
             failure_ttl_seconds: self.inner.failure_ttl().as_secs(),
         }
+    }
+    pub fn with_persistence(&self, store: Arc<dyn RobotsPersistence>) {
+        *self.inner.persistence.lock().unwrap() = Some(store);
     }
     pub fn retry_after_ms(&self, url: &Url) -> u64 {
         self.inner

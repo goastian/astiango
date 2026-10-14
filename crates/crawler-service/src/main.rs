@@ -1,3 +1,4 @@
+mod document;
 use anyhow::{Context, Result};
 use astiango_crawler_service as astiango;
 use clap::{Parser, Subcommand};
@@ -15,6 +16,8 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Capture one admitted public PDF without enabling a general document crawl.
+    CaptureDocument { config: String, url: url::Url, output: std::path::PathBuf },
     ExportQueue { directory: std::path::PathBuf },
     Normalize,
     Run { config: String },
@@ -80,6 +83,9 @@ fn main() -> Result<()> {
         .enable_all()
         .build()?;
     match args.command {
+        Command::CaptureDocument { config, url, output } => {
+            runtime.block_on(document::capture(load(&config)?, url, &output))?;
+        }
         Command::Validate { config } => {
             let config: astiango::crawler::local::Config = load(&config)?;
             config.validate()?;

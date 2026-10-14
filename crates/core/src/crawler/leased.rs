@@ -79,6 +79,20 @@ impl Rpc {
         value["worker_id"] = json!(self.worker);
         let _serialization = self.serialization.acquire().await?;
         let bytes = tokio::task::spawn_blocking(move || serde_json::to_vec(&value)).await??;
+        // Serialize once; retries reuse the identical bytes and command ID.
+        // Retry the SAME command after a lost response or unconfirmed replication.
+        let mut last = None;
+        for attempt in 0..3 {
+            match self.send(bytes.clone()).await {
+                Ok(reply) if reply["error"] != "replication_unconfirmed" && reply["error"] != "no_quorum" => return Ok(reply),
+                Ok(reply) => last = Some(anyhow::anyhow!("frontier unavailable: {}", reply)),
+                Err(error) => last = Some(error),
+            }
+            if attempt < 2 { tokio::time::sleep(Duration::from_millis(100)).await; }
+        }
+        Err(last.unwrap())
+    }
+    async fn send(&self, bytes: Vec<u8>) -> Result<Value> {
         anyhow::ensure!(
             bytes.len() <= 10 * 1024 * 1024,
             "RPC message exceeds worker budget"
@@ -103,7 +117,7 @@ impl Rpc {
         let mut output = Vec::new();
         while let Some(chunk) = response.chunk().await? {
             anyhow::ensure!(
-                output.len() + chunk.len() <= 65536,
+                output.len() + chunk.len() <= 8 * 1024 * 1024,
                 "RPC reply exceeds budget"
             );
             output.extend_from_slice(&chunk);
@@ -144,13 +158,15 @@ impl HttpAuthority for Authority {
         }
         Ok(())
     }
-    fn authorize<'a>(&'a self, url: &'a Url) -> IoFuture<'a, super::Result<()>> {
+    fn authorize<'a>(&'a self, url: &'a Url, addresses: &'a [std::net::IpAddr]) -> IoFuture<'a, super::Result<()>> {
         Box::pin(async move {
             self.check()?;
             let mut request = self.request("authorize");
             request["destination_origin"] = json!(url.origin().ascii_serialization());
+            request["destination_ips"] = json!(addresses);
+            request["destination_url"] = json!(url.as_str());
             let result = self.rpc.call(request).await?;
-            if result["error"] == "courtesy_deferred" {
+            if matches!(result["error"].as_str(), Some("courtesy_deferred" | "redirect_origin_requires_lease" | "aggregate_budget")) {
                 return Err(super::Error::CrawlDeferred {
                     retry_after_ms: result["retry_after_ms"].as_u64().unwrap_or(1000),
                 });
@@ -159,6 +175,47 @@ impl HttpAuthority for Authority {
                 return Err(anyhow::anyhow!("cluster HTTP authority rejected: {}", result).into());
             }
             self.check()
+        })
+    }
+}
+
+// One sequential worker shares caches/pools while binding each admission to its
+// current fenced lease. Clearing the slot occurs only after fetch/storage drain.
+#[derive(Default)]
+struct CurrentAuthority(Mutex<Option<Authority>>);
+impl HttpAuthority for CurrentAuthority {
+    fn check(&self) -> super::Result<()> {
+        self.0.lock().unwrap().as_ref().context("worker has no active HTTP lease")?.check()
+    }
+    fn authorize<'a>(&'a self, url: &'a Url, addresses: &'a [std::net::IpAddr]) -> IoFuture<'a, super::Result<()>> {
+        let current = self.0.lock().unwrap().clone();
+        Box::pin(async move {
+            current.context("worker has no active HTTP lease")?.authorize(url, addresses).await
+        })
+    }
+}
+
+struct DurableRobots(Arc<CurrentAuthority>);
+impl super::robots_txt::RobotsPersistence for DurableRobots {
+    fn load<'a>(&'a self, origin: &'a str) -> IoFuture<'a, super::Result<Option<super::robots_txt::PersistedRules>>> {
+        let current = self.0.0.lock().unwrap().clone();
+        Box::pin(async move {
+            let authority = current.context("robots cache has no active lease")?;
+            let mut request = authority.request("robots_get");request["cache_origin"]=json!(origin);
+            let reply = authority.rpc.call(request).await?;
+            if reply.get("error").is_some() { return Err(anyhow::anyhow!("durable robots lookup rejected: {}",reply).into()); }
+            if reply["rules"].is_null() { return Ok(None); }
+            Ok(Some(serde_json::from_value(reply["rules"].clone()).map_err(anyhow::Error::from)?))
+        })
+    }
+    fn save<'a>(&'a self, origin: &'a str, rules: super::robots_txt::PersistedRules) -> IoFuture<'a, super::Result<()>> {
+        let current = self.0.0.lock().unwrap().clone();
+        Box::pin(async move {
+            let authority = current.context("robots cache has no active lease")?;
+            let mut request=authority.request("robots_put");request["cache_origin"]=json!(origin);request["rules"]=serde_json::to_value(rules).map_err(anyhow::Error::from)?;
+            let reply=authority.rpc.call(request).await?;
+            if reply["stored"]!=true { return Err(anyhow::anyhow!("durable robots publication rejected: {}",reply).into()); }
+            Ok(())
         })
     }
 }
@@ -231,6 +288,25 @@ impl DatumSink for Sink {
         self.writer.write_prepared(page).await?;
         self.confirm(capture).await.map_err(super::Error::from)
     }
+    async fn redirect_continuation(&self, _url: &Url) -> super::Result<Option<super::RedirectContinuation>> {
+        let value = &self.authority.lease["continuation"];
+        if value.is_null() { return Ok(None); }
+        Ok(Some(serde_json::from_value(value.clone()).map_err(anyhow::Error::from)?))
+    }
+    async fn save_redirect_continuation(&self, _url: &Url, continuation: super::RedirectContinuation) -> super::Result<()> {
+        let mut request = self.authority.request("continue_redirect");
+        request["continuation"] = serde_json::to_value(continuation).map_err(anyhow::Error::from)?;
+        let reply = self.authority.rpc.call(request).await?;
+        if reply["continued"] != true { return Err(anyhow::anyhow!("redirect continuation rejected: {}", reply).into()); }
+        Ok(())
+    }
+    async fn discovered_urls(&self, urls: Vec<Url>, sitemaps: Vec<Url>) -> super::Result<()> {
+        let mut request = self.authority.request("discover");
+        request["urls"] = json!(urls.into_iter().chain(sitemaps).take(128).map(|url| json!({"url":url.as_str(),"provenance":{"kind":"robots_sitemap"}})).collect::<Vec<_>>());
+        let reply = self.authority.rpc.call(request).await?;
+        if !reply["discovered"].is_number() { return Err(anyhow::anyhow!("discovery rejected: {}", reply).into()); }
+        Ok(())
+    }
     async fn checkpoint(&self) -> super::Result<()> {
         self.writer.checkpoint().await
     }
@@ -251,7 +327,7 @@ pub async fn run_fixture(config: Config, transport: SharedTransport) -> Result<(
 async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<()> {
     anyhow::ensure!(config.experimental, "distributed worker is a protocol-v2 pilot; require experimental = true and an isolated validated profile");
     config.crawler.validate()?;
-    anyhow::ensure!(config.crawler.scheduler.mode == super::scheduler::Mode::LongJobs, "protocol-v2 pilot currently requires explicit scheduler.mode = long_jobs; distributed fair turns are not enabled");
+
     anyhow::ensure!(
         config.crawler.body.html.wire_limit_bytes <= 4 * 1024 * 1024,
         "cluster profile supports at most 4 MiB captures"
@@ -300,6 +376,11 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
         Some(transport) => transport,
         None => SharedTransport::new(&options, options.transport.clone())?,
     };
+    let current = Arc::new(CurrentAuthority::default());
+    let client = super::robot_client::RobotClient::with_transport(
+        &options, transport.with_authority(current.clone()));
+    client.robots_txt_manager().with_persistence(Arc::new(DurableRobots(current.clone())));
+    let mut previous_wire_bytes = 0;
     let mut completed = 0usize;
     let mut received_bytes = 0u64;
     let shutdown = super::local::shutdown_signal();
@@ -348,12 +429,7 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
                 .context("missing lease duration")?,
             started,
         )?;
-        let client = super::robot_client::RobotClient::with_transport(
-            &options,
-            transport
-                .clone()
-                .with_authority(Arc::new(authority.clone())),
-        );
+        *current.0.lock().unwrap() = Some(authority.clone());
         let body_reader = client.body_reader().clone();
         let writer = Arc::new(
             super::WarcWriter::open(options.spool.clone(), None, client.pipeline().clone(), None)
@@ -414,7 +490,8 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
                 Ok::<_, anyhow::Error>(outcome)
             } else {
                 anyhow::ensure!(!pending.full()?, "replication outbox is full; drain pending captures before HTTP");
-                Ok(JobExecutor::new(job.into(), options.clone(), sink.clone(), client)
+                Ok(JobExecutor::new(job.into(), options.clone(), sink.clone(), client.clone())
+                    .with_cross_origin_redirects()
                     .with_cancellation(authority.cancelled.clone()).run().await)
             }
         };
@@ -431,7 +508,9 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
         };
         // Keep renewing until admitted durable storage has drained.
         sink.finish().await?;
-        received_bytes = received_bytes.saturating_add(body_reader.stats().wire_bytes_received);
+        let wire_bytes = body_reader.stats().wire_bytes_received;
+        received_bytes = received_bytes.saturating_add(wire_bytes.saturating_sub(previous_wire_bytes));
+        previous_wire_bytes = wire_bytes;
         spool_stats = sink.writer.metrics.stats();
         resources.sample_spool(received_bytes, &spool_stats)?;
         renew.abort();
@@ -450,7 +529,8 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
                 })
                 .unwrap_or(60000);
             let pending_local = pending.load(lease["fetch_id"].as_str().unwrap())?.is_some();
-            let permanent = !pending_local && (attempts >= options.retry.max_attempts
+            let storage_failed = outcome.status == super::JobStatus::StorageFailed;
+            let permanent = !pending_local && !storage_failed && (attempts >= options.retry.max_attempts
                 || target.is_some_and(|entry| {
                     matches!(
                         entry.outcome,
@@ -458,11 +538,13 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
                             | super::FetchOutcome::Skipped { .. }
                     )
                 }));
-            request["retry_after_ms"] = json!(options.retry.delay(
+            let turn_only = storage_failed || target.is_some_and(|entry| matches!(&entry.outcome, super::FetchOutcome::Deferred { reason, .. } if reason == "origin_not_eligible"));
+            request["turn_only"] = json!(turn_only);
+            request["retry_after_ms"] = json!(if turn_only { remote_minimum } else { options.retry.delay(
                 attempts,
                 remote_minimum,
                 lease["url"].as_str().unwrap_or("")
-            ));
+            ) });
             request["permanent"] = json!(permanent);
             request["reason"] = json!(serde_json::to_string(&outcome)?);
             let reply = rpc.call(request).await?;
@@ -472,11 +554,13 @@ async fn run_inner(config: Config, fixture: Option<SharedTransport>) -> Result<(
                 reply
             );
         }
+        *current.0.lock().unwrap() = None;
         completed += 1;
         println!("{}", serde_json::to_string(&outcome)?);
         if draining {
             break;
         }
     }
+    client.shutdown().await;
     Ok(())
 }

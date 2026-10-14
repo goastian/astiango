@@ -1225,5 +1225,19 @@
   "Recovery HTTP requests": "恢复期间的 HTTP 请求",
   "Isolated PDF extraction": "隔离 PDF 提取",
   "Prolonged monitoring stopped. You can suspend the computer.": "持续监控已停止。可以暂停计算机。",
-  "Optional observation": "可选观察"
+  "Optional observation": "可选观察",
+  "Distributed acquisition": "分布式抓取",
+  "Robots downloads after restart": "重启后机器人规则下载",
+  "Fetch / commit drain": "下载与提交关闭时间",
+  "Shared crawl delay": "共享抓取间隔",
+  "Redundant control plane": "冗余控制",
+  "Controllers": "控制器",
+  "Controller recovery": "控制器恢复",
+  "Lost data directory recovery": "丢失数据目录的恢复",
+  "Specialized extraction": "专门内容提取",
+  "Archived real-web cohort": "已存档真实网页样本",
+  "Additional extracted text": "新增提取文本",
+  "Completed / quota failures": "完成与限额失败",
+  "Derived documents indexed": "已索引衍生文档",
+  "Isolated offline JavaScript. Network subresources stay blocked; global coverage is not estimated.": "离线隔离运行脚本。网络资源保持阻止，不估计全球覆盖率。"
 }

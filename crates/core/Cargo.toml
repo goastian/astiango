@@ -21,6 +21,10 @@ integration-fixtures = []
 serde = []
 
 [[bin]]
+name = "astiango-derived"
+path = "src/bin/derived.rs"
+
+[[bin]]
 name = "astiango"
 path = "src/main.rs"
 

@@ -251,6 +251,8 @@ enum WebgraphOptions {
 
 #[derive(Subcommand)]
 enum IndexingOptions {
+    /// Consume versioned PDF/isolated-JavaScript derivatives into a mergeable search index.
+    Derived { input: std::path::PathBuf, output: std::path::PathBuf },
     /// Create the search index.
     Search { config_path: String },
 
@@ -297,6 +299,9 @@ fn main() -> Result<()> {
 
     match args.command {
         Commands::Indexer { options } => match options {
+            IndexingOptions::Derived { input, output } => {
+                println!("{}", serde_json::to_string(&entrypoint::indexer::derived::run(&input, &output)?)?);
+            }
             IndexingOptions::Search { config_path } => {
                 let config = load_toml_config(config_path);
                 entrypoint::indexer::run(&config)?;

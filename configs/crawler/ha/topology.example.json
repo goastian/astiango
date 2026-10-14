@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "cluster": "astiango-crawler",
+  "nodes": [
+    {"name":"crawler-1","machine_id":"machine-1","disk_id":"disk-1","address":"192.0.2.11","data_directory":"/var/lib/astiango/postgres","dcs_directory":"/var/lib/astiango/etcd","watchdog_device":"/dev/watchdog","ca_file":"/etc/astiango/ca.pem","certificate_file":"/etc/astiango/node.pem","key_file":"/etc/astiango/node.key"},
+    {"name":"crawler-2","machine_id":"machine-2","disk_id":"disk-2","address":"192.0.2.12","data_directory":"/var/lib/astiango/postgres","dcs_directory":"/var/lib/astiango/etcd","watchdog_device":"/dev/watchdog","ca_file":"/etc/astiango/ca.pem","certificate_file":"/etc/astiango/node.pem","key_file":"/etc/astiango/node.key"},
+    {"name":"crawler-3","machine_id":"machine-3","disk_id":"disk-3","address":"192.0.2.13","data_directory":"/var/lib/astiango/postgres","dcs_directory":"/var/lib/astiango/etcd","watchdog_device":"/dev/watchdog","ca_file":"/etc/astiango/ca.pem","certificate_file":"/etc/astiango/node.pem","key_file":"/etc/astiango/node.key"}
+  ]
+}
