@@ -20,3 +20,12 @@ memory_guard_bytes = 402653184
 cpu_index = 3
 auto_promote = true
 scope = "local"
+# One native execution per query; failures recover outside the request path.
+replica_timeout_ms = 1500
+recovery_base_ms = 250
+recovery_max_ms = 8000
+recovery_attempts_per_minute = 5
+# Sequential persistent HTTP; JSON stays bounded before compression.
+keepalive_seconds = 3
+keepalive_requests = 100
+gzip_min_bytes = 1024

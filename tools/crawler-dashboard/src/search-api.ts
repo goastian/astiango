@@ -9,7 +9,9 @@ export type SearchResponse = {
     active: number; queued: number;
     resources: { rss_bytes: number; cpu_percent: number; open_fds: number; read_bytes?: number; written_bytes?: number };
     cache_bytes?: number;
-    nodes: { id: string; pid: number; generation: string; state: string; load_ms: number; requests: number }[];
+    replicas?: { configured: number; ready: number; compatible: number; policy: string };
+    http?: { connections: number; connections_opened?: number; requests?: number; reused_requests?: number; response_aborted?: number; traffic: Record<string,Record<string,number>> };
+    nodes: { id: string; pid: number; generation: string; state: string; load_ms: number; requests: number; enabled: boolean; generation_compatible: boolean; failures: number; recoveries: number; next_retry_at?: string | null; last_error?: string | null; recovery_attempts_last_minute: number }[];
     history: { at: string; qps: number; p95_ms: number | null; rss_bytes: number }[];
     stages_ms: Record<string, number>;
     configuration: Record<string, unknown>; capabilities: Record<string, unknown>;

@@ -1,0 +1,20 @@
+[Unit]
+Description=AstianGO local Search/API with persistent native readers
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Development/astiango/stract
+ExecStart=/usr/bin/python3 scripts/search-api.py --config configs/search/local.toml
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=10
+CPUQuota=100%
+MemoryMax=1G
+TasksMax=64
+Nice=5
+
+[Install]
+WantedBy=default.target
