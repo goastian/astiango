@@ -1,0 +1,14 @@
+# Working quotas remain 8 GiB (graph) and 16 GiB (index). Cold history is
+# recoverable storage, never a capture GC acknowledgement.
+archive_directory = "data/ingestion-history"
+archive_quota_bytes = 34359738368
+disk_reserve_bytes = 8589934592
+keep_generations = 6
+max_warm_generations = 12
+minimum_age_seconds = 120
+high_watermark = 0.60
+target_watermark = 0.40
+poll_seconds = 2
+max_generation_bytes = 2147483648
+indexer_config = "configs/indexer/shared-local.toml"
+webgraph_config = "configs/webgraph/ingestion-local.toml"

@@ -22,7 +22,7 @@ workers = 1
 stack_bytes = 8388608
 
 [ingestion]
-graph_generation="data/webgraph-ingestion/graph/generations/4745f228-8f2b-4ff1-b62b-4bbc17b53ffc"
+graph_generation="data/webgraph-ingestion/graph/generations/926bbe13-3134-420b-803b-27f964fa1f24"
 writer_bytes=25165824
 cache_bytes=4194304
 prepared_bytes=67108864
