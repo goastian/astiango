@@ -1,6 +1,6 @@
 source_spool = "data/crawler-local/warc/spool"
 state_directory = "data/indexer-shared"
-binary = "data/artifacts/indexer/1dc50daa53db1af063d7a4964a91978a1c1fb992bb0ee21da79f3ed5d731b909/astiango-indexer"
+binary = "data/artifacts/ingestion-runtime/46bdaf00a43067a525c1ac131d68cae9b25c06e671e798db3282d044611e3010/indexer/astiango-indexer-runtime"
 poll_seconds = 2
 scan_seconds = 10
 admission_seconds = 0
@@ -22,7 +22,7 @@ workers = 1
 stack_bytes = 8388608
 
 [ingestion]
-graph_generation="data/webgraph-ingestion/graph/generations/926bbe13-3134-420b-803b-27f964fa1f24"
+graph_generation="data/webgraph-ingestion/graph/generations/a00714a5-bfaa-4611-be04-e067bdc4303e"
 writer_bytes=25165824
 cache_bytes=4194304
 prepared_bytes=67108864

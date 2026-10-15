@@ -272,6 +272,7 @@ export interface IndexingShard {
   attempts?: number; next_eligible_at?: number;
 }
 export interface IndexingSnapshot {
+  publication_error?: string | null;
   schema_version: 1; component: "indexer"; run_id: string; pid: number; started_at: string; updated_at: string;
   phase: string; reason: string;
   source: { spool: string; sealed: number; open: number; oversized: number; available: number; scan_errors: number };
@@ -281,7 +282,7 @@ export interface IndexingSnapshot {
   history?: Array<{ at: string; documents: number; rss_mib: number; cpu_percent: number }>;
   runtime?: { recovered_reference_inputs?: number; stage: string; error?: string | null; stages?: Record<string, { wall_ms: number; cpu_ms: number }>; outcomes?: Record<string, number>; current_url?: string; documents?: number };
   shards: IndexingShard[]; recent_events: Array<{ at: string; kind: string; message: string }>;
-  publication: { search_visible: boolean; cross_shard_dedup: boolean; gc_enabled: boolean };
+  publication: { search_visible: boolean; cross_shard_dedup: boolean; gc_enabled: boolean; publication_error?: { error?: string } | null };
 }
 export interface IndexingResponse {
   snapshot: IndexingSnapshot;
@@ -298,7 +299,7 @@ export interface WebgraphResponse {
   snapshot: {
     schema_version: 1; component: "webgraph"; run_id: string; pid: number; started_at: string; updated_at: string;
     phase: string; reason: string; scope: string; signals_adopted: boolean;
-    configuration: { workers: number; priority: number; memory_guard_bytes: number; max_output_bytes: number; minimum_disk_free_bytes: number; max_input_bytes: number; max_pending: number; max_centrality_edges: number; job_timeout_seconds: number; binary_sha256: string };
+    configuration: { workers: number; priority: number; memory_guard_bytes: number; max_output_bytes: number; minimum_disk_free_bytes: number; max_input_bytes: number; max_pending: number; max_centrality_edges: number; centrality_max_nodes?: number; centrality_max_edges?: number; centrality_memory_bytes?: number; job_timeout_seconds: number; binary_sha256: string };
     source: { sealed: number; open: number; oversized: number; scan_errors: number };
     totals: { inputs: number; completed: number; pending: number; failed: number; source_records: number; stored_edges: number; scored_inputs: number; output_bytes: number };
     worker: { pid: number; input: string; stage: string; elapsed_seconds: number; rss_bytes?: number; cpu_seconds?: number; open_fds?: number; read_bytes?:number; written_bytes?:number } | null;

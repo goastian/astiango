@@ -1,4 +1,6 @@
 <script lang="ts">
+  import GenerationStorage from "./GenerationStorage.svelte";
+  import type { GenerationStorage as GenerationStorageState } from "./generation-storage";
   import SignalBenchmark from "./SignalBenchmark.svelte";
   import GraphBenchmark from "./GraphBenchmark.svelte";
   import { initI18n } from "./i18n";
@@ -59,6 +61,7 @@
   const selectedResponse = $derived(webgraphView ? webgraph : indexingView ? indexing : response);
   const componentName = $derived(webgraphView ? "Webgraph" : indexingView ? "Indexing" : "Crawler");
   let flow = $state<ComponentFlow | null>(null);
+  let generationStorage = $state<GenerationStorageState | null>(null);
   const usableFlow = $derived(flow && now-Date.parse(flow.updated_at)<=10000 ? {...flow,signals:flow.signals?.generation===webgraph?.snapshot.generation?.id ? flow.signals : null} : null);
   let mobileMenu: HTMLDialogElement;
   let menuOpen = $state(false);
@@ -400,6 +403,7 @@
     };
     // One request per component; a stalled channel cannot suspend the others.
     await Promise.allSettled([
+      refreshComponent("history", signal => read("/ingestion-retention-live.json", signal), value => { generationStorage = value; }, () => {}, force),
       refreshComponent("flow", signal => read("/component-flow.json", signal), value => { flow = value; }, () => {}, force),
       refreshComponent("crawler", signal => read("/api/status", signal), value => {
         synchronizeClock(value.meta?.read_at);
@@ -500,11 +504,14 @@
       {/if}
       {#if view === "overview" || view === "components"}
         <SystemOverview flow={usableFlow} {snapshot} {indexing} {indexingLive} {webgraph} {webgraphLive} connected={live} status={statusText} readingPaused={paused} inventory={view === "components"} />
+        {#if view === "overview"}<GenerationStorage storage={generationStorage} {indexing} {webgraph} {now} />{/if}
       {:else if webgraphView}
+        {#if view === "webgraph"}<GenerationStorage storage={generationStorage} {webgraph} {now} component="webgraph" />{/if}
         <WebgraphStatus flow={usableFlow} response={webgraph} crawler={snapshot} {now} error={webgraphError} mode={view === "webgraph-inputs" ? "inputs" : view === "webgraph-centrality" ? "centrality" : view === "webgraph-generations" ? "generations" : view === "webgraph-configuration" ? "configuration" : "overview"} />
       {:else if view === "indexing-generations"}
         <GenerationStatus flow={usableFlow} {now} {paused} />
       {:else if indexingView}
+        {#if view === "indexing"}<GenerationStorage storage={generationStorage} {indexing} {now} component="indexer" />{/if}
         <IndexingStatus flow={usableFlow} response={indexing} crawler={snapshot} {now} readError={indexingError} {paused} mode={view === "indexing-shards" ? "shards" : view === "indexing-configuration" ? "configuration" : "overview"} />
       {:else if view === "crawler-overview"}
     <section

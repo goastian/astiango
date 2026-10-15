@@ -6,7 +6,7 @@
   import TimeChart from "./TimeChart.svelte";
   import Pagination from "./Pagination.svelte";
   import type { WebgraphResponse, Snapshot } from "./types";
-  import { consumerActivity } from "./work-status";
+  import { consumerActivity, publicationNotBefore } from "./work-status";
   const { t, formatLocale } = getI18n();
   let { flow = null, response, crawler, now, error = "", mode = "overview" }: { flow?:ComponentFlow|null; response: WebgraphResponse | null; crawler?: Snapshot; now: number; error?: string; mode?: string } = $props();
   const snapshot = $derived(response?.snapshot);
@@ -58,7 +58,9 @@
         <div><dt>{$t("Disk reserve")}</dt><dd>{bytes(snapshot.configuration.minimum_disk_free_bytes)}</dd></div>
         <div><dt>{$t("Input size budget")}</dt><dd>{bytes(snapshot.configuration.max_input_bytes)}</dd></div>
         <div><dt>{$t("Pending input budget")}</dt><dd>{snapshot.configuration.max_pending}</dd></div>
-        <div><dt>{$t("Centrality edge budget")}</dt><dd>{number(snapshot.configuration.max_centrality_edges)}</dd></div>
+        <div><dt>{$t("Centrality edge budget")}</dt><dd>{number(snapshot.configuration.centrality_max_edges ?? snapshot.configuration.max_centrality_edges)}</dd></div>
+        {#if snapshot.configuration.centrality_max_nodes}<div><dt>{$t("Centrality")} · {$t("Nodes")}</dt><dd>{number(snapshot.configuration.centrality_max_nodes)}</dd></div>{/if}
+        {#if snapshot.configuration.centrality_memory_bytes}<div><dt>{$t("Centrality")} · {$t("Memory guard")}</dt><dd>{bytes(snapshot.configuration.centrality_memory_bytes)}</dd></div>{/if}
       </dl><details><summary>{$t("Build and scope")}</summary><code>{snapshot.configuration.binary_sha256}</code><p>{$t(current ? "Exact capture ledger; compatible graph generations. Signal adoption is separate." : "Per-input graphs. Global deduplication and signal adoption are planned separately.")}</p></details></section>
     {:else if mode === "generations"}
       <section class="panel generation"><header><h2>{$t("Active generation")}</h2><span class="state">{$t(generation ? "Ready" : "Preparing")}</span></header>
@@ -68,7 +70,7 @@
         <div class="partition-grid" aria-label={$t("Graph partitions")}>{#each generation.partitions as partition}<div title={`${partition.bucket}: ${partition.edges}`} class:populated={partition.edges > 0}><span>{partition.bucket}</span><b>{number(partition.edges)}</b></div>{/each}</div>
         <details><summary>{$t("Build and scope")}</summary><code>{generation.logical_sha256}</code><code>{generation.build_id}</code><p>{$t("Previous generation retained")}.</p></details>
       {:else}<p>{$t("No validated generation yet")}</p>{/if}
-      {#if snapshot.publication_error}<p class="failure">{snapshot.publication_error}</p>{/if}</section>
+      {#if snapshot.publication_error}<p class:failure={!publicationNotBefore(snapshot.publication_error)}>{publicationNotBefore(snapshot.publication_error) ? $t("Publication scheduled") + ` · ${number(Math.max(0,((publicationNotBefore(snapshot.publication_error)??0)-now)/1000))} s` : snapshot.publication_error}</p>{/if}</section>
     {:else if mode === "inputs"}
       <section class="panel"><header><h2>{$t("Graph inputs")}</h2><span>{$t("Oldest visible pending input")}: {Number.isFinite(oldestVisible) ? `${number(Math.max(0,(now-oldestVisible)/1000))} s` : "—"} · {$t("Outside input budget")}: {number(snapshot.source.oversized)}</span></header>
         <div class="filters"><label>{$t("Search")} <input bind:value={query} /></label><label>{$t("State")} <select bind:value={filter}><option value="all">{$t("All")}</option>{#each ["pending","running","deferred","graph_committed","calculating","completed","failed"] as state}<option value={state}>{$t(names[state])}</option>{/each}</select></label></div>

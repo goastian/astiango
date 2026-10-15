@@ -3,9 +3,9 @@ permissions:
   contents: read
 on:
   pull_request:
-    paths: ['crates/**', 'Cargo.*', 'rust-toolchain.toml', 'configs/webgraph/**', 'configs/indexer/**', 'scripts/*webgraph*.py', 'scripts/build-ingestion.py', 'scripts/control-center-observation.py', 'scripts/configure-dashboard-preview.mjs', 'tools/crawler-dashboard/**', 'packages/i18n/**', '.github/workflows/webgraph-integration.yaml']
+    paths: ['crates/**', 'Cargo.*', 'rust-toolchain.toml', 'configs/webgraph/**', 'configs/indexer/**', 'scripts/*webgraph*.py', 'scripts/ingestion-runtime*.py', 'scripts/build-ingestion.py', 'scripts/control-center-observation.py', 'scripts/configure-dashboard-preview.mjs', 'tools/crawler-dashboard/**', 'packages/i18n/**', '.github/workflows/webgraph-integration.yaml']
   push:
-    paths: ['crates/**', 'Cargo.*', 'rust-toolchain.toml', 'configs/webgraph/**', 'configs/indexer/**', 'scripts/*webgraph*.py', 'scripts/build-ingestion.py', 'scripts/control-center-observation.py', 'scripts/configure-dashboard-preview.mjs', 'tools/crawler-dashboard/**', 'packages/i18n/**', '.github/workflows/webgraph-integration.yaml']
+    paths: ['crates/**', 'Cargo.*', 'rust-toolchain.toml', 'configs/webgraph/**', 'configs/indexer/**', 'scripts/*webgraph*.py', 'scripts/ingestion-runtime*.py', 'scripts/build-ingestion.py', 'scripts/control-center-observation.py', 'scripts/configure-dashboard-preview.mjs', 'tools/crawler-dashboard/**', 'packages/i18n/**', '.github/workflows/webgraph-integration.yaml']
 jobs:
   integration:
     runs-on: ubuntu-24.04
@@ -26,6 +26,7 @@ jobs:
       - run: python3 scripts/build-ingestion.py --verify-rebuild
       - run: node --check scripts/configure-dashboard-preview.mjs
       - run: python3 scripts/webgraph-signals-integration.py
+      - run: python3 scripts/ingestion-runtime-integration.py
       - run: npm ci && npm run check && npm run build
         working-directory: tools/crawler-dashboard
       - uses: actions/upload-artifact@v4
