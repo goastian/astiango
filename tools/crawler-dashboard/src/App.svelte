@@ -11,6 +11,8 @@
   import Sidebar from "./Sidebar.svelte";
   import type { ComponentFlow } from "./component-flow";
   import SystemOverview from "./SystemOverview.svelte";
+  import SearchStatus from "./SearchStatus.svelte";
+  import type { SearchResponse } from "./search-api";
   import { consumerActivity } from "./work-status";
   import Pagination from "./Pagination.svelte";
   import { resolveView, views } from "./navigation";
@@ -44,6 +46,8 @@
   let indexing = $state<IndexingResponse | null>(null);
   let webgraph = $state<WebgraphResponse | null>(null);
   let webgraphError = $state("");
+  let searchApi = $state<SearchResponse | null>(null);
+  let searchError = $state("");
   let indexingError = $state("");
   let loading = $state(false);
   let paused = $state(false);
@@ -57,9 +61,11 @@
   const indexingView = $derived(view.startsWith("indexing"));
   const indexingLive = $derived(!!indexing && !indexingError && indexing.meta.process_alive === true && now - Date.parse(indexing.snapshot.updated_at) <= 10_000 && indexing.snapshot.phase !== "stopped");
   const webgraphView = $derived(view.startsWith("webgraph"));
+  const searchView = $derived(view.startsWith("search"));
+  const searchLive = $derived(!!searchApi && !searchError && searchApi.meta.process_alive && now-Date.parse(searchApi.snapshot.updated_at)<=10000);
   const webgraphLive = $derived(!!webgraph && !webgraphError && webgraph.meta.process_alive === true && now-Date.parse(webgraph.snapshot.updated_at) <= 10_000 && webgraph.snapshot.phase !== "stopped");
-  const selectedResponse = $derived(webgraphView ? webgraph : indexingView ? indexing : response);
-  const componentName = $derived(webgraphView ? "Webgraph" : indexingView ? "Indexing" : "Crawler");
+  const selectedResponse = $derived(searchView ? searchApi : webgraphView ? webgraph : indexingView ? indexing : response);
+  const componentName = $derived(searchView ? "Search & API" : webgraphView ? "Webgraph" : indexingView ? "Indexing" : "Crawler");
   let flow = $state<ComponentFlow | null>(null);
   let generationStorage = $state<GenerationStorageState | null>(null);
   const usableFlow = $derived(flow && now-Date.parse(flow.updated_at)<=10000 ? {...flow,signals:flow.signals?.generation===webgraph?.snapshot.generation?.id ? flow.signals : null} : null);
@@ -213,8 +219,8 @@
               ? "Telemetría sin actualizar"
               : phases[snapshot.phase],
   );
-  const selectedLive = $derived(webgraphView ? webgraphLive : indexingView ? indexingLive : live);
-  const selectedStatus = $derived(webgraphView || indexingView ? paused ? "Showing the last available sample." : !selectedLive ? "State unavailable or stale" : consumerActivity(webgraphView ? webgraph?.snapshot : indexing?.snapshot,snapshot).label : statusText);
+  const selectedLive = $derived(searchView ? searchLive : webgraphView ? webgraphLive : indexingView ? indexingLive : live);
+  const selectedStatus = $derived(searchView ? paused ? "Showing the last available sample." : !searchLive ? "State unavailable or stale" : searchApi?.snapshot.ready ? "Ready" : "Waiting for a validated generation" : webgraphView || indexingView ? paused ? "Showing the last available sample." : !selectedLive ? "State unavailable or stale" : consumerActivity(webgraphView ? webgraph?.snapshot : indexing?.snapshot,snapshot).label : statusText);
   const elapsed = $derived(
     snapshot
       ? Math.max(
@@ -403,6 +409,7 @@
     };
     // One request per component; a stalled channel cannot suspend the others.
     await Promise.allSettled([
+      refreshComponent("search", signal => read("/api/search/status", signal), value => { searchApi=value;searchError=""; }, () => { searchError="Search state is unavailable or stale."; }, force),
       refreshComponent("history", signal => read("/ingestion-retention-live.json", signal), value => { generationStorage = value; }, () => {}, force),
       refreshComponent("flow", signal => read("/component-flow.json", signal), value => { flow = value; }, () => {}, force),
       refreshComponent("crawler", signal => read("/api/status", signal), value => {
@@ -499,12 +506,15 @@
       </div>
     </header>
     <main id="main-content" data-view={view}>
-      {#if !indexingView && !webgraphView && (error || offline || (stale && activeProcess) || paused)}
+      {#if !searchView && !indexingView && !webgraphView && (error || offline || (stale && activeProcess) || paused)}
         <div class="notice" role="status"><strong>{paused && !error && !offline ? $t("Actualización pausada.") : $t("Lectura no actualizada.")}</strong> {$t(error) || (offline ? $t("El proceso del crawler ya no está activo.") : paused ? $t("El crawler continúa de forma independiente.") : $t("El estado visible no se ha actualizado. Esta lectura no permite concluir que el crawler esté detenido."))} {#if snapshot}{$t("Se conserva el último estado recibido.")}{/if}</div>
       {/if}
       {#if view === "overview" || view === "components"}
-        <SystemOverview flow={usableFlow} {snapshot} {indexing} {indexingLive} {webgraph} {webgraphLive} connected={live} status={statusText} readingPaused={paused} inventory={view === "components"} />
+        <SystemOverview flow={usableFlow} {snapshot} {indexing} {indexingLive} {webgraph} {webgraphLive} search={searchApi} {searchLive} connected={live} status={statusText} readingPaused={paused} inventory={view === "components"} />
+        {#if view === "overview"}<SearchStatus response={searchApi} {now} mode="summary" />{/if}
         {#if view === "overview"}<GenerationStorage storage={generationStorage} {indexing} {webgraph} {now} />{/if}
+      {:else if searchView}
+        <SearchStatus response={searchApi} {now} error={searchError} mode={view === "search" ? "overview" : view.slice("search-".length)} />
       {:else if webgraphView}
         {#if view === "webgraph"}<GenerationStorage storage={generationStorage} {webgraph} {now} component="webgraph" />{/if}
         <WebgraphStatus flow={usableFlow} response={webgraph} crawler={snapshot} {now} error={webgraphError} mode={view === "webgraph-inputs" ? "inputs" : view === "webgraph-centrality" ? "centrality" : view === "webgraph-generations" ? "generations" : view === "webgraph-configuration" ? "configuration" : "overview"} />

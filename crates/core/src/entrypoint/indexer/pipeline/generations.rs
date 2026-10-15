@@ -450,6 +450,12 @@ fn validate_manifest(root: &Path, id: &str, full: bool) -> Result<Manifest> {
 }
 /// Existing search_server can point index_path at the ingestion root. Resolve one
 /// validated generation at load; changing the selector never mutates a live reader.
+pub fn validate_serving_generation(root: &Path, id: &str) -> Result<serde_json::Value> {
+    // The caller pins the generation before validation and retains that pin for
+    // the entire lifetime of its reader, independently of ingestion's selector.
+    Ok(serde_json::to_value(validate_manifest(root, id, true)?)?)
+}
+
 pub fn serving_path(path: &Path) -> Result<PathBuf> {
     if let Some(selected) = selector(path)? {
         let directory = id_path(path, &selected.active)?;

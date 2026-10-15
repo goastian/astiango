@@ -6,11 +6,12 @@
   import Icon from "./Icon.svelte";
   import TimeChart from "./TimeChart.svelte";
   import type { Snapshot, IndexingResponse, WebgraphResponse } from "./types";
+  import type { SearchResponse } from "./search-api";
   import { componentCatalog } from "./navigation";
   import { consumerActivity } from "./work-status";
   const { t, formatLocale } = getI18n();
-  let { flow=null, snapshot, connected, status, indexing = null, indexingLive = false, webgraph = null, webgraphLive = false, readingPaused = false, inventory = false }: {
-    flow?:ComponentFlow|null; snapshot?: Snapshot; connected: boolean; status: string; indexing?: IndexingResponse | null; indexingLive?: boolean; webgraph?: WebgraphResponse | null; webgraphLive?: boolean; readingPaused?: boolean; inventory?: boolean;
+  let { flow=null, snapshot, connected, status, indexing = null, indexingLive = false, webgraph = null, webgraphLive = false, search=null, searchLive=false, readingPaused = false, inventory = false }: {
+    flow?:ComponentFlow|null; snapshot?: Snapshot; connected: boolean; status: string; indexing?: IndexingResponse | null; indexingLive?: boolean; webgraph?: WebgraphResponse | null; webgraphLive?: boolean; search?:SearchResponse|null;searchLive?:boolean; readingPaused?: boolean; inventory?: boolean;
   } = $props();
   const format = $derived(new Intl.NumberFormat($formatLocale));
   const number = (v?: number) => v === undefined ? "—" : format.format(v);
@@ -40,7 +41,7 @@
   <div class="section-heading"><h2>{inventory ? $t("Fuentes de estado") : $t("Componentes del buscador")}</h2>{#if !inventory}<a href="#/components">{$t("Ver integraciones")} <Icon name="arrow" size={15}/></a>{/if}</div>
   <div class="component-rows">
     {#each componentCatalog as component}
-      {@const link = components.find(v => v.name === (component.source === "indexer" ? "Indexing" : component.source === "webgraph" ? "Webgraph" : "Crawler"))}
+      {@const link = component.source === "search" ? {live:searchLive && !!search?.snapshot.ready,href:"#/search/overview"} : components.find(v => v.source === component.source)}
       <article class="component-row"><span class="component-symbol"><Icon name={component.source === "webgraph" ? "graph" : component.source === "indexer" ? "index" : "components"} size={19}/></span><div><h3>{$t(component.name)}</h3>{#if inventory}<p>{$t(component.purpose)}</p>{/if}</div><span class="integration-state" class:source-connected={!!component.source && !!link?.live}>{$t(component.source ? readingPaused ? "Actualización pausada." : link?.live ? "Connected" : "State unavailable or stale" : "Sin integración con el panel")}</span>{#if component.source && link}<a href={link.href} aria-label={$t(component.name)}><Icon name="arrow" size={18}/></a>{/if}</article>
     {/each}
   </div>

@@ -17,6 +17,13 @@ export const views = [
   { id: "webgraph-centrality", path: "/webgraph/centrality", group: "Webgraph", label: "Centrality", icon: "chart", description: "Scores from local graph cohorts; consumer adoption is separate." },
   { id: "webgraph-generations", path: "/webgraph/generations", group: "Webgraph", label: "Generations", icon: "storage", description: "Validated generations, active selector and retained rollback." },
   { id: "webgraph-configuration", path: "/webgraph/configuration", group: "Webgraph", label: "Graph configuration", icon: "settings", description: "Graph worker, memory, disk and centrality budgets." },
+  { id: "search", path: "/search/overview", group: "Search & API", label: "Search overview", icon: "search", description: "Live search, readiness and query traffic." },
+  { id: "search-performance", path: "/search/performance", group: "Search & API", label: "Search performance", icon: "chart", description: "Latency, stage timings and cache efficiency." },
+  { id: "search-nodes", path: "/search/nodes", group: "Search & API", label: "Search nodes", icon: "components", description: "Native readers, generations and bounded admission." },
+  { id: "search-generations", path: "/search/generations", group: "Search & API", label: "Serving generations", icon: "storage", description: "Validated readers, promotion and retained rollback." },
+  { id: "search-diagnostics", path: "/search/diagnostics", group: "Search & API", label: "Search diagnostics", icon: "activity", description: "Outcomes, dependency failures and confirmed actions." },
+  { id: "search-configuration", path: "/search/configuration", group: "Search & API", label: "Search configuration", icon: "settings", description: "Effective query budgets, build and capabilities." },
+  { id: "search-access", path: "/search/access", group: "Search & API", label: "API access", icon: "settings", description: "Commercial API roadmap and current access scope." },
   { id: "benchmarks", path: "/tools/benchmarks", group: "Herramientas", label: "Pruebas de capacidad", icon: "experiment", description: "Mediciones locales y comparaciones reproducibles, separadas de la operación." },
 ];
 
@@ -34,7 +41,7 @@ export const componentCatalog = [
   { name: "Crawler", purpose: "Adquisición web, descubrimiento y captura durable.", source: "crawler" },
   { name: "Indexación", purpose: "Procesamiento de documentos y publicación del índice.", source: "indexer" },
   { name: "Grafo web", purpose: "Enlaces, centralidad y señales para planificación.", source: "webgraph" },
-  { name: "Búsqueda y API", purpose: "Consultas, ranking y disponibilidad del buscador.", source: null },
+  { name: "Búsqueda y API", purpose: "Consultas, ranking y disponibilidad del buscador.", source: "search" },
   { name: "Coordinación", purpose: "Trabajos distribuidos y capacidad de los nodos.", source: null },
   { name: "Live index", purpose: "Actualización de contenido reciente y publicación.", source: null },
 ];

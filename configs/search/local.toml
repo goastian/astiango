@@ -1,0 +1,22 @@
+# Local native readers; public paid access remains planned, not enabled.
+host = "127.0.0.1"
+port = 3210
+state_directory = "data/search-api"
+index_root = "data/indexer-shared/index"
+graph_root = "data/webgraph-ingestion/graph"
+binary = "data/artifacts/search/aa4a6a01272e69a9d28af62d214cc0aea60009b2907be89990f6138f6aaa839c/astiango-search-worker"
+binary_sha256 = "eb8b3f25262d2a76d704354cca11c028b251f5c6e29d355d92e4492d3965d190"
+workers = 2
+max_queue = 8
+max_connections = 32
+deadline_ms = 2000
+load_timeout_seconds = 30
+max_qps = 20
+cache_bytes = 2097152
+cache_entries = 128
+cache_seconds = 30
+poll_seconds = 2
+memory_guard_bytes = 402653184
+cpu_index = 3
+auto_promote = true
+scope = "local"

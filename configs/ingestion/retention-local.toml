@@ -12,3 +12,4 @@ poll_seconds = 2
 max_generation_bytes = 2147483648
 indexer_config = "configs/indexer/shared-local.toml"
 webgraph_config = "configs/webgraph/ingestion-local.toml"
+serving_pins = "data/search-api/pins.json"

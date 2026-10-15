@@ -222,3 +222,7 @@ path = "src/bin/indexer.rs"
 [[bin]]
 name = "astiango-webgraph"
 path = "src/bin/webgraph.rs"
+
+[[bin]]
+name = "astiango-search-worker"
+path = "src/bin/search_worker.rs"

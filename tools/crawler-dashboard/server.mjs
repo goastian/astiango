@@ -48,6 +48,24 @@ export function createDashboardServer({
   webgraphLedgerPath = process.env.WEBGRAPH_LEDGER_STATE_PATH || resolve(appDirectory, "../../data/webgraph-ingestion/status.json"),
 } = {}) {
   let previewBusy = false;
+  const searchApi = "http://127.0.0.1:3210";
+  const searchControlToken = resolve(appDirectory, "../../data/search-api/control-token");
+  let searchReadCache = null;
+  let searchReadPromise = null;
+  async function searchObservation() {
+    if (searchReadCache && Date.now()-searchReadCache.at<500) return searchReadCache.value;
+    if (searchReadPromise) return searchReadPromise;
+    searchReadPromise = (async()=>{
+      const upstream=await fetch(searchApi+"/status",{signal:AbortSignal.timeout(3000)});
+      if(!upstream.ok || Number(upstream.headers.get("content-length")??0)>512*1024) throw Error("Search observation unavailable");
+      const data=await upstream.arrayBuffer();
+      if(data.byteLength>512*1024) throw Error("Search observation exceeds budget");
+      const value=JSON.parse(Buffer.from(data).toString("utf8"));
+      searchReadCache={at:Date.now(),value};
+      return value;
+    })();
+    try { return await searchReadPromise; } finally { searchReadPromise=null; }
+  }
   const distRoot = resolve(distDirectory);
   const observations = snapshotCache(statePath);
   const series = resourceSeries(seriesPath);
@@ -65,7 +83,7 @@ export function createDashboardServer({
       "Content-Security-Policy",
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     );
-    if (request.method !== "GET" && request.method !== "HEAD" && !(request.method === "POST" && request.url === "/api/quarantine/release")) {
+    if (request.method !== "GET" && request.method !== "HEAD" && !(request.method === "POST" && ["/api/quarantine/release", "/api/search/control"].includes(request.url))) {
       response.setHeader("Allow", "GET, HEAD");
       respondJson(response, 405, { error: "Método no permitido." });
       return;
@@ -107,6 +125,39 @@ export function createDashboardServer({
       } catch (error) {
         respondJson(response, error.code === "ENOENT" ? 404 : 503, { code: "OPERATIONS_UNAVAILABLE", error: "Operational verification is unavailable." });
       }
+      return;
+    }
+    if (pathname.startsWith("/api/search/")) {
+      const routes = {"/api/search/status":"/status", "/api/search/metrics":"/metrics", "/api/search/nodes":"/nodes", "/api/search/generations":"/generations", "/api/search/query":"/v1/web/search", "/api/search/control":"/control"};
+      const route = routes[pathname];
+      if (!route) { respondJson(response,404,{code:"SEARCH_ROUTE_UNKNOWN"}); return; }
+      try {
+        if (["/api/search/status","/api/search/metrics","/api/search/nodes","/api/search/generations"].includes(pathname)) {
+          respondJson(response,200,await searchObservation());return;
+        }
+        const headers = {};
+        let body;
+        if (pathname === "/api/search/control") {
+          if (request.method !== "POST" || !["127.0.0.1","::1","::ffff:127.0.0.1"].includes(request.socket.remoteAddress)
+            || request.headers.origin !== `http://${request.headers.host}` || !request.headers["content-type"]?.startsWith("application/json")) {
+            respondJson(response,403,{error:"Local same-origin control required"}); return;
+          }
+          const chunks=[];let size=0;
+          for await (const chunk of request) { size+=chunk.length; if(size>8192) {respondJson(response,413,{error:"Control request exceeds budget"});return;} chunks.push(chunk); }
+          body=Buffer.concat(chunks);headers["Content-Type"]="application/json";
+        }
+        if (pathname === "/api/search/query" || body) {
+          headers.Authorization=`Bearer ${(await readFile(searchControlToken,"utf8")).trim()}`;
+          headers["X-Search-Traffic"]="probe";
+        }
+        const query = pathname === "/api/search/query" ? new URL(request.url,"http://localhost").search : "";
+        const upstream = await fetch(searchApi+route+query,{method:body?"POST":"GET",headers,body,signal:AbortSignal.timeout(4000)});
+        if(Number(upstream.headers.get("content-length")??0)>512*1024) throw Error("Search response exceeds budget");
+        const data=await upstream.arrayBuffer();
+        if(data.byteLength>512*1024) throw Error("Search response exceeds budget");
+        if(upstream.headers.has("retry-after")) response.setHeader("Retry-After",upstream.headers.get("retry-after"));
+        respondJson(response,upstream.status,JSON.parse(Buffer.from(data).toString("utf8")));
+      } catch { respondJson(response,503,{code:"SEARCH_UNAVAILABLE",error:"Search/API is unavailable or its deadline expired."}); }
       return;
     }
     if (pathname === "/api/webgraph" || pathname === "/api/webgraph/inputs") {
