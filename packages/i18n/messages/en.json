@@ -1473,5 +1473,15 @@
   "Legacy identity aliases": "Legacy identity aliases",
   "Oldest visible pending input": "Oldest visible pending input",
   "Relative error · p95": "Relative error · p95",
-  "Planner": "Planner"
+  "Planner": "Planner",
+  "Generation storage": "Generation storage",
+  "Active and rollback versions protected": "Active and rollback versions protected",
+  "Working storage": "Working storage",
+  "Recoverable history": "Recoverable history",
+  "Archived generations": "Archived generations",
+  "History maintenance needs attention": "History maintenance needs attention",
+  "History status is stale": "History status is stale",
+  "Publication delayed": "Publication delayed",
+  "Previous generation retained; publication needs recovery": "Previous generation retained; publication needs recovery",
+  "Publication scheduled": "Publication scheduled"
 }

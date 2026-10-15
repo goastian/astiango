@@ -1473,5 +1473,15 @@
   "Legacy identity aliases": "Historische Identitätsaliase",
   "Oldest visible pending input": "Älteste sichtbare ausstehende Eingabe",
   "Relative error · p95": "Relativer Fehler · p95",
-  "Planner": "Planer"
+  "Planner": "Planer",
+  "Generation storage": "Generationsspeicher",
+  "Active and rollback versions protected": "Aktive und vorherige Versionen geschützt",
+  "Working storage": "Aktiver Speicher",
+  "Recoverable history": "Wiederherstellbarer Verlauf",
+  "Archived generations": "Archivierte Generationen",
+  "History maintenance needs attention": "Verlaufswartung erfordert Aufmerksamkeit",
+  "History status is stale": "Verlaufsstatus ist veraltet",
+  "Publication delayed": "Veröffentlichung verzögert",
+  "Previous generation retained; publication needs recovery": "Vorherige Generation erhalten; Veröffentlichung muss wiederhergestellt werden",
+  "Publication scheduled": "Veröffentlichung geplant"
 }

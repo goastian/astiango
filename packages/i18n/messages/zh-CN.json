@@ -1473,5 +1473,15 @@
   "Legacy identity aliases": "历史标识别名",
   "Oldest visible pending input": "等待时间最长的可见输入",
   "Relative error · p95": "相对误差 · p95",
-  "Planner": "规划器"
+  "Planner": "规划器",
+  "Generation storage": "版本存储",
+  "Active and rollback versions protected": "保护当前和回退版本",
+  "Working storage": "工作存储",
+  "Recoverable history": "可恢复历史",
+  "Archived generations": "已归档版本",
+  "History maintenance needs attention": "历史维护需要处理",
+  "History status is stale": "历史状态未更新",
+  "Publication delayed": "发布延迟",
+  "Previous generation retained; publication needs recovery": "保留上一版本，发布需要恢复",
+  "Publication scheduled": "发布已计划"
 }
