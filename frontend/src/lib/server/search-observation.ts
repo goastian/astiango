@@ -60,7 +60,7 @@ async function flush() {
     const value = { schema_version: 1, component: 'frontend', pid: process.pid, started_at: state.started,
       run_id: state.run, updated_at: new Date().toISOString(), telemetry_error: state.error,
       retention: { max_queries: 256, max_hours: 24, raw_queries: captureQueries, scope: 'local operator; user requested query diagnostics; no IP or cookies' },
-      build: { mode: import.meta.env.DEV ? 'vite-hmr' : 'production', api: 'same-origin adapter → local Search/API v1' },
+      build: { url: env.FRONTEND_PUBLIC_URL || 'http://127.0.0.1:8002/', mode: import.meta.env.DEV ? 'vite-hmr' : 'production', api: 'same-origin adapter → local Search/API v1' },
       resources: { rss_bytes: process.memoryUsage().rss, heap_bytes: process.memoryUsage().heapUsed },
       window: { samples: window.length, qps: window.length/60,
         p50_ms: percentile(window.map(r=>r.apiMs),.5), p95_ms: percentile(window.map(r=>r.apiMs),.95), p99_ms: percentile(window.map(r=>r.apiMs),.99) },

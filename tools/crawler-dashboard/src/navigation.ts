@@ -2,6 +2,7 @@ export const views = [
   { id: "overview", path: "/overview", group: "Sistema", label: "Vista general", icon: "overview", description: "Estado de los componentes conectados a esta instancia." },
   { id: "components", path: "/components", group: "Sistema", label: "Componentes", icon: "components", description: "Fuentes de estado disponibles y componentes pendientes de integración." },
   { id: "crawler-overview", path: "/crawler/overview", group: "Crawler", label: "Resumen del rastreo", icon: "globe", description: "Producción, cobertura e incidencias de la ejecución actual." },
+  { id: "manual-seeds", path: "/crawler/seeds", group: "Crawler", label: "Manual domains", icon: "sites", description: "Admit public domains and URLs, with durable crawler confirmation." },
   { id: "sites", path: "/crawler/sites", group: "Crawler", label: "Sitios y URLs", icon: "sites", description: "Busca sitios, consulta su estado e inspecciona sus solicitudes." },
   { id: "activity", path: "/crawler/activity", group: "Crawler", label: "Actividad", icon: "activity", description: "Eventos recientes, errores y seguimiento del sitio seleccionado." },
   { id: "policies", path: "/crawler/policies", group: "Crawler", label: "Cola y políticas", icon: "queue", description: "Elegibilidad, cortesía, robots, reintentos y revisión de cuarentenas." },

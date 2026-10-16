@@ -7,6 +7,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isBenchmarkReport } from "./benchmark-report.mjs";
 import { snapshotCache, paginate, aggregateMetrics } from "./observability.mjs";
 import { resourceSeries } from "./series.mjs";
+import { manualSeeds } from "./manual-seeds.mjs";
+import { manualCoverage } from "./manual-coverage.mjs";
 
 const appDirectory = dirname(fileURLToPath(import.meta.url));
 const contentTypes = {
@@ -67,6 +69,9 @@ export function createDashboardServer({
     try { return await searchReadPromise; } finally { searchReadPromise=null; }
   }
   const distRoot = resolve(distDirectory);
+  const observeManual = manualCoverage({directory:resolve(dirname(statePath),"control"),
+    indexRoot:resolve(dirname(indexingPath),"index"), searchStatusPath:resolve(appDirectory,"../../data/search-api/status.json"),
+    prioritySitesPath:resolve(appDirectory,"../../configs/crawler/priority-sites.json")});
   const frontend = snapshotCache(resolve(appDirectory, "../../data/frontend/status.json"), 2 * 1024 * 1024, value => value.schema_version === 1 && value.component === "frontend" && Array.isArray(value.queries) && value.queries.length <= 256);
   const observations = snapshotCache(statePath);
   const series = resourceSeries(seriesPath);
@@ -84,7 +89,7 @@ export function createDashboardServer({
       "Content-Security-Policy",
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     );
-    if (request.method !== "GET" && request.method !== "HEAD" && !(request.method === "POST" && ["/api/quarantine/release", "/api/search/control"].includes(request.url))) {
+    if (request.method !== "GET" && request.method !== "HEAD" && !(request.method === "POST" && ["/api/quarantine/release", "/api/search/control", "/api/crawler/seeds"].includes(request.url))) {
       response.setHeader("Allow", "GET, HEAD");
       respondJson(response, 405, { error: "Método no permitido." });
       return;
@@ -126,6 +131,11 @@ export function createDashboardServer({
       } catch (error) {
         respondJson(response, error.code === "ENOENT" ? 404 : 503, { code: "OPERATIONS_UNAVAILABLE", error: "Operational verification is unavailable." });
       }
+      return;
+    }
+    if (pathname === "/api/crawler/seeds") {
+      try { const [status,value]=await manualSeeds(request,resolve(dirname(statePath),"control"),observeManual);respondJson(response,status,value); }
+      catch(error){respondJson(response,400,{error:error.message||"Manual admission failed"});}
       return;
     }
     if (pathname === "/api/frontend") {

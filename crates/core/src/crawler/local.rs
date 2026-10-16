@@ -54,6 +54,8 @@ pub struct Config {
     pub status_path: PathBuf,
     pub state_directory: Option<PathBuf>,
     pub pages_per_domain: u64,
+    #[serde(default)]
+    pub manual_reserve_per_site: u64,
     pub num_worker_threads: usize,
     pub min_crawl_delay_ms: u64,
     pub timeout_seconds: u64,
@@ -114,6 +116,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(self.manual_reserve_per_site<=16,"manual reserve must be at most 16 URLs per site/round");
         self.resources.validate()?;
         self.retry.validate()?;
         self.recrawl.validate()?;
@@ -614,6 +617,7 @@ pub async fn run(config: Config) -> Result<()> {
         observer.clone(),
     )?);
     frontier.configure_retry(&config.retry)?;
+    frontier.configure_manual_reserve(config.manual_reserve_per_site)?;
     frontier.configure_recrawl(&config.recrawl)?;
     frontier.configure_discovery(&config.discovery, &config.traps)?;
     observer.observe_frontier(frontier.metrics.clone());

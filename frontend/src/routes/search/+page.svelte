@@ -62,6 +62,8 @@
         {#if result.total.kind!=='unknown'}{result.total.kind==='approximate'?'≈ ':''}{(result.total.value??0).toLocaleString($formatLocale)} {$t('results')}{:else}{$t('Search Results')}{/if}
         <span aria-hidden="true"> · </span>{(result.durationMs/1000).toLocaleString($formatLocale,{maximumFractionDigits:2})} s
       </p>
+      {#if result.navigationHost}<p class="result-count">{$t('Indexed pages from {p0}',{p0:result.navigationHost})}</p>{/if}
+      {#if result.navigationFrom}<p class="result-count">{$t('Captured redirect: {p0} → {p1}',{p0:result.navigationFrom,p1:result.navigationHost??''})}</p>{/if}
       {#if result.results.length}
         <div class="results-list">
           {#each result.results as item,index (`${result.id}-${index}`)}
@@ -73,7 +75,7 @@
           {/each}
         </div>
       {:else}
-        <div class="search-state"><h2>{$t('No results')}</h2><p>{$t('Try different keywords or a broader query.')}</p></div>
+        <div class="search-state"><h2>{$t('No results')}</h2><p>{$t(result.navigationHost ? 'No matching indexed pages were found for this domain.' : 'Try different keywords or a broader query.')}</p></div>
       {/if}
       <nav class="pagination" aria-label={$t('Pagination')}>
         {#if currentPage>1}<a href={pageHref(currentPage-1)} rel="prev">← {$t('Previous page')}</a>{/if}

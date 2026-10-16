@@ -5,7 +5,7 @@ export type PublicResult = {
 export type PublicSearch = {
   version: 1; id: string; generation: string; query: string; page: number;
   results: PublicResult[]; total: { kind: 'exact' | 'approximate' | 'unknown'; value?: number };
-  hasMore: boolean | null; durationMs: number; cache: string;
+  hasMore: boolean | null; durationMs: number; cache: string; navigationHost?: string; navigationFrom?: string;
 };
 export const publicCapabilities = {
   web: true, snippets: true, safeSearch: true, pagination: true,

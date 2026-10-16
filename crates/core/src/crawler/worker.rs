@@ -459,14 +459,20 @@ impl<S: DatumSink> JobExecutor<S> {
     }
 
     async fn verify_url(&self, url: &Url) -> UrlVisit {
+        if !self.job.domain.covers(url) && !self.cross_origin_redirects {
+            return UrlVisit::Stop(FetchOutcome::Skipped { reason: "outside_job_domain".into() });
+        }
+        self.verify_target(url).await
+    }
+
+    // A validated redirect can leave the seed's site. Its destination still has
+    // to pass public-network checks, robots and the shared request scheduler.
+    async fn verify_target(&self, url: &Url) -> UrlVisit {
         let skipped = |reason: &str| {
             UrlVisit::Stop(FetchOutcome::Skipped {
                 reason: reason.into(),
             })
         };
-        if !self.job.domain.covers(url) && !self.cross_origin_redirects {
-            return skipped("outside_job_domain");
-        }
         if self.crawled_urls.contains(url) {
             return skipped("already_visited");
         }
@@ -476,13 +482,14 @@ impl<S: DatumSink> JobExecutor<S> {
         if let Err(error) = super::robot_client::validate_network_url(self.network_policy, url) {
             return UrlVisit::Stop(self.error_outcome(error));
         }
-        let target = if self.cross_origin_redirects {
-            match self.writer.redirect_continuation(url).await {
-                Ok(Some(continuation)) => continuation.url,
-                Ok(None) => url.clone(),
-                Err(error) => return UrlVisit::Stop(FetchOutcome::StorageFailure { message: error.to_string() }),
-            }
-        } else { url.clone() };
+        let target = match self.writer.redirect_continuation(url).await {
+            Ok(Some(continuation)) => continuation.url,
+            Ok(None) => url.clone(),
+            Err(error) => return UrlVisit::Stop(FetchOutcome::StorageFailure { message: error.to_string() }),
+        };
+        if let Err(error) = super::robot_client::validate_network_url(self.network_policy, &target) {
+            return UrlVisit::Stop(self.error_outcome(error));
+        }
         let access = self
             .cancellable(async { Ok(self.client.robots_txt_manager().access(&target).await) })
             .await;
@@ -788,7 +795,7 @@ impl<S: DatumSink> JobExecutor<S> {
             if self.cancelled() {
                 return Err(FetchOutcome::Cancelled);
             }
-            if let UrlVisit::Stop(outcome) = self.verify_url(&url).await {
+            if let UrlVisit::Stop(outcome) = self.verify_target(&url).await {
                 return Err(outcome);
             }
             let crawl_delay = self

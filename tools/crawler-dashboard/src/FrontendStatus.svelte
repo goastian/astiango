@@ -22,9 +22,9 @@
   const cost=$derived(snapshot?.cost);
 </script>
 {#if error}<div class="notice" role="status">{$t(error)}</div>{/if}
-<div class="frontend-heading"><div><p>{$t('Web frontend')}</p><h2>{$t(mode==='queries'?'Search queries':mode==='diagnostics'?'User experience':'Live search')}</h2></div><a class="button" href="http://127.0.0.1:8000/" target="_blank" rel="noreferrer">{$t('Open search')} ↗</a></div>
+<div class="frontend-heading"><div><p>{$t('Web frontend')}</p><h2>{$t(mode==='queries'?'Search queries':mode==='diagnostics'?'User experience':'Live search')}</h2></div><a class="button" href={snapshot?.build?.url || "http://127.0.0.1:8002/"} target="_blank" rel="noreferrer">{$t('Open search')} ↗</a></div>
 <section class="frontend-kpis">
-  <article><span>{$t('Status')}</span><strong>{$t(data?.meta?.process_alive && Date.now()-Date.parse(snapshot?.updated_at)<10000?'Running':'State unavailable or stale')}</strong><small>{snapshot?.build?.mode??'—'} · :8000 · {$t(searchReady?'Ready':'Search is temporarily unavailable. Please try again.')}</small></article>
+  <article><span>{$t('Status')}</span><strong>{$t(data?.meta?.process_alive && Date.now()-Date.parse(snapshot?.updated_at)<10000?'Running':'State unavailable or stale')}</strong><small>{snapshot?.build?.mode??'—'} · {snapshot?.build?.url || "http://127.0.0.1:8002/"} · {$t(searchReady?'Ready':'Search is temporarily unavailable. Please try again.')}</small></article>
   <article><span>{$t('Latency')} · p95</span><strong>{number(snapshot?.window?.p95_ms)} <small>ms</small></strong><small>{number(snapshot?.window?.samples)} {$t('Samples')} · 60 s</small></article>
   <article><span>{$t('Native CPU per query')}</span><strong>{number(cost?.cpu_samples?cost.native_cpu_ms/cost.cpu_samples:null)} <small>ms</small></strong><small>{$t('User queries; probes excluded')}</small></article>
   <article><span>{$t('Payload per query')}</span><strong>{number(cost?.byte_samples?cost.response_bytes/cost.byte_samples/1024:null)} <small>KiB</small></strong><small>{$t('Measured API JSON bytes')}</small></article>

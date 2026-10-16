@@ -51,6 +51,8 @@ const LIVE_PENDING: TableDefinition<(&str, &str), u64> =
 const METADATA_VERSIONS: TableDefinition<&str, ()> =
     TableDefinition::new("capture_metadata_versions.v1");
 const RETRIES: TableDefinition<&str, &[u8]> = TableDefinition::new("origin_retries.v1");
+const MANUAL_PRIORITY: TableDefinition<&str, u64> = TableDefinition::new("manual_priority.v1");
+const MAX_MANUAL_PRIORITY: u64 = 1024;
 
 fn legacy_site_version() -> u32 {
     1
@@ -60,6 +62,8 @@ pub const BATCH_SIZE: usize = 128;
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Stats {
+    #[serde(default)]
+    pub manual_reserve_per_site: u64,
     #[serde(default)]
     pub retry_deferred: u64,
     #[serde(default)]
@@ -216,6 +220,7 @@ pub struct Frontier {
     discovery_config: Mutex<super::discovery::Config>,
     traps_config: Mutex<super::traps::Config>,
     recrawl_config: Mutex<super::recrawl::Config>,
+    manual_projected_at: Mutex<Option<std::time::Instant>>,
 }
 
 fn read<T: serde::de::DeserializeOwned>(
@@ -316,6 +321,7 @@ impl Frontier {
         tx.open_table(CONTENT)?;
         tx.open_table(RECRAWL)?;
         tx.open_table(RECRAWL_READY)?;
+        tx.open_table(MANUAL_PRIORITY)?;
         let stats: Stats = read(&tx, META, "stats")?.unwrap_or_else(|| Stats {
             schema_version: 1,
             identity_version: crate::capture::IDENTITY_VERSION,
@@ -354,6 +360,7 @@ impl Frontier {
             discovery_config: Mutex::new(Default::default()),
             traps_config: Mutex::new(Default::default()),
             recrawl_config: Mutex::new(Default::default()),
+            manual_projected_at: Mutex::new(None),
         };
         frontier.migrate_site_identity()?;
         frontier.migrate_http_origins()?;
@@ -1027,19 +1034,61 @@ impl Frontier {
                     path.file_stem().and_then(|v| v.to_str()) == Some(id),
                     "control filename/id mismatch"
                 );
-                let url = Url::parse(
-                    request["url"]
-                        .as_str()
-                        .context("control request without URL")?,
-                )?;
-                anyhow::ensure!(
-                    request["action"] == "release_quarantine",
-                    "unsupported crawler control action"
-                );
+                let action = request["action"].as_str().context("control request without action")?;
+                if action == "enqueue_urls" {
+                    let values = request["urls"].as_array().context("control request without URLs")?;
+                    anyhow::ensure!(!values.is_empty() && values.len() <= 16, "manual URL batch must contain 1..16 URLs");
+                    let urls = values.iter().map(|value| {
+                        let mut url = Url::parse(value.as_str().context("invalid manual URL")?)?;
+                        url.set_fragment(None);
+                        super::robot_client::validate_public_url(&url)?;
+                        anyhow::ensure!(Self::admissible(&url), "inadmissible manual URL");
+                        Ok(url)
+                    }).collect::<Result<Vec<_>>>()?;
+                    let priority = request["priority"].as_bool().unwrap_or(true);
+                    let decisions = self.transaction(|tx, stats| {
+                        // Bounded cleanup also allows a new operator batch after
+                        // earlier priorities have reached a terminal decision.
+                        Self::manual_candidate(tx, stats.round, 0)?;
+                        urls.iter().map(|url| {
+                            let limit = self.budget.saturating_add(stats.manual_reserve_per_site);
+                            let admitted = self.admit_capped(tx, stats, url, true, limit, true)?;
+                            let key = crate::capture::url_key(url)?;
+                            // An explicit operator resubmission may recover the
+                            // previous worker's erroneous cross-site scope stop.
+                            // Robots, HTTP/TLS failures and retry limits are not reset.
+                            let recovered = if priority { Self::recover_scope_stop(tx, stats, &key, self.capacity)? } else { false };
+                            let pending = read::<UrlRow>(tx, URLS, &key)?.is_some_and(|row|
+                                row.round == stats.round && row.state == State::Pending);
+                            let prioritized = if priority && pending {
+                                let exists = tx.open_table(MANUAL_PRIORITY)?.get(key.as_str())?.is_some();
+                                if exists { true } else if tx.open_table(MANUAL_PRIORITY)?.len()? < MAX_MANUAL_PRIORITY {
+                                    stats.sequence += 1;
+                                    tx.open_table(MANUAL_PRIORITY)?.insert(key.as_str(), stats.sequence)?;
+                                    true
+                                } else { false }
+                            } else { false };
+                            let stored: Option<UrlRow> = read(tx, URLS, &key)?;
+                            let site = Domain::from(url).as_str().to_string();
+                            let origin: Option<OriginRow> = read(tx, ORIGINS, &site)?;
+                            let reason = if admitted { "admitted" } else if let Some(row) = &stored {
+                                match row.state {State::Pending=>"already_queued",State::Leased=>"already_fetching",State::Committed=>"already_captured",State::Terminal=>"previous_crawl_exclusion"}
+                            } else if origin.as_ref().is_some_and(|row|row.admitted>=limit) { "site_admission_quota" }
+                            else if stats.pending_sites+stats.active_sites>=self.capacity as u64 { "frontier_capacity" }
+                            else { "admission_policy" };
+                            Ok(serde_json::json!({"url":url,"admitted":admitted,"prioritized":prioritized,"recovered":recovered,
+                                "reason":reason,"site_admitted":origin.map(|row|row.admitted),"site_limit":limit}))
+                        }).collect::<Result<Vec<_>>>()
+                    })?;
+                    let admitted = decisions.iter().filter(|row| row["admitted"] == true).count();
+                    return Ok(serde_json::json!({"id":id,"action":action,"state":"completed",
+                        "admitted":admitted,"not_admitted":decisions.len()-admitted,"priority":priority,"decisions":decisions,
+                        "meaning":"frontier admission only; robots, public DNS, budgets and courtesy still apply"}));
+                }
+                anyhow::ensure!(action == "release_quarantine", "unsupported crawler control action");
+                let url = Url::parse(request["url"].as_str().context("control request without URL")?)?;
                 let released = self.release_quarantine(&url)?;
-                Ok(
-                    serde_json::json!({"id":id,"url":url,"state":if released { "completed" } else { "not_found" }}),
-                )
+                Ok(serde_json::json!({"id":id,"url":url,"state":if released { "completed" } else { "not_found" }}))
             })();
             let value = match result {
                 Ok(v) => v,
@@ -1059,6 +1108,104 @@ impl Frontier {
         if processed {
             fs::File::open(directory)?.sync_all()?;
         }
+        // This is a reconstructible observation, separate from durable receipts.
+        // Failure to project it must not stop a healthy crawl.
+        if let Err(error) = self.project_manual_urls(directory) {
+            tracing::warn!("Manual URL observation unavailable: {error}");
+        }
+        Ok(())
+    }
+
+    fn manual_candidate(tx: &WriteTransaction, round: u64, now: u64) -> Result<Option<(String, String)>> {
+        let mut chosen: Option<(u64, String, String)> = None;
+        let mut finished = Vec::new();
+        for entry in tx.open_table(MANUAL_PRIORITY)?.iter()?.take(MAX_MANUAL_PRIORITY as usize) {
+            let (key, sequence) = entry?;
+            let key = key.value();
+            let Some(row): Option<UrlRow> = read(tx, URLS, key)? else { finished.push(key.to_string()); continue; };
+            if row.round != round || matches!(row.state, State::Committed | State::Terminal) {
+                finished.push(key.to_string()); continue;
+            }
+            if row.state != State::Pending || row.not_before > now { continue; }
+            let Some(site): Option<OriginRow> = read(tx, ORIGINS, &row.site)? else { continue; };
+            let Some(origin): Option<HttpOriginRow> = read(tx, HTTP_ORIGINS, &row.origin)? else { continue; };
+            let retry = read::<super::retry::OriginState>(tx, RETRIES, &row.origin)?.map_or(0, |v| v.not_before_ms);
+            if site.state != "pending" || site.not_before.max(origin.not_before).max(retry) > now { continue; }
+            if chosen.as_ref().is_none_or(|(old, _, _)| sequence.value() < *old) {
+                chosen = Some((sequence.value(), row.site, key.to_string()));
+            }
+        }
+        for key in finished { tx.open_table(MANUAL_PRIORITY)?.remove(key.as_str())?; }
+        Ok(chosen.map(|(_, site, url)| (site, url)))
+    }
+
+    fn recover_scope_stop(tx: &WriteTransaction, stats: &mut Stats, key: &str, capacity: usize) -> Result<bool> {
+        let Some(mut row): Option<UrlRow> = read(tx, URLS, key)? else { return Ok(false); };
+        if row.round != stats.round || row.state != State::Terminal || row.reason.as_deref() != Some("outside_job_domain") { return Ok(false); }
+        let mut site: OriginRow = read(tx, ORIGINS, &row.site)?.context("missing rejected URL site")?;
+        if site.state == "done" && stats.pending_sites + stats.active_sites >= capacity as u64 { return Ok(false); }
+        if site.state == "pending" { tx.open_table(READY)?.remove((site.not_before, site.sequence))?; }
+        row.state = State::Pending;
+        row.reason = Some("recovered_redirect_scope".into());
+        stats.terminal_urls = stats.terminal_urls.saturating_sub(1);
+        stats.pending_urls += 1;
+        site.done = site.done.saturating_sub(1);
+        tx.open_table(ELIGIBLE)?.insert((row.site.as_str(), key), row.not_before)?;
+        Self::queue_http_origin(tx, stats, &row)?;
+        if site.state != "active" {
+            if site.state == "done" { stats.pending_sites += 1; }
+            site.state = "pending".into();
+            site.not_before = Self::next_http_origin(tx, &row.site)?.map_or(row.not_before, |(due, _)| due);
+            stats.sequence += 1; site.sequence = stats.sequence;
+            tx.open_table(READY)?.insert((site.not_before, site.sequence), row.site.as_str())?;
+        }
+        put(tx, URLS, key, &row)?;
+        put(tx, ORIGINS, &row.site, &site)?;
+        Ok(true)
+    }
+
+    fn project_manual_urls(&self, directory: &Path) -> Result<()> {
+        use std::io::Read;
+        let mut last = self.manual_projected_at.lock().unwrap();
+        if last.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2)) { return Ok(()); }
+        *last = Some(std::time::Instant::now());
+        let file = match fs::File::open(directory.join("manual-actions.jsonl")) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut bytes = Vec::new(); file.take(1_048_577).read_to_end(&mut bytes)?;
+        anyhow::ensure!(bytes.len() <= 1_048_576, "manual audit exceeds observation budget");
+        let text = String::from_utf8(bytes)?;
+        let tx = self.db.begin_read()?;
+        let urls = tx.open_table(URLS)?;
+        let priorities = tx.open_table(MANUAL_PRIORITY)?;
+        let mut rows = std::collections::BTreeMap::new();
+        for request in text.lines().rev().filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok()).take(50) {
+            for value in request["urls"].as_array().into_iter().flatten().take(16) {
+                let Some(url) = value.as_str() else { continue; };
+                let key = crate::capture::url_key(&Url::parse(url)?)?;
+                if rows.contains_key(&key) { continue; }
+                let row = urls.get(key.as_str())?.map(|value| serde_json::from_slice::<UrlRow>(value.value())).transpose()?;
+                let value = if let Some(row) = row {
+                    let state = match row.state {
+                        State::Pending => "pending", State::Leased => "fetching",
+                        State::Committed => "captured", State::Terminal => "terminal",
+                    };
+                    serde_json::json!({"url":key,"state":state,"reason":row.reason,
+                        "not_before":row.not_before,"capture_id":row.fetch_id,
+                        "continuation_url":row.continuation.map(|value|value.url),
+                        "priority":priorities.get(key.as_str())?.is_some()})
+                } else { serde_json::json!({"url":key,"state":"not_admitted","priority":false}) };
+                rows.insert(key, value);
+            }
+        }
+        let value = serde_json::json!({"version":1,"updated_at":chrono::Utc::now(),"urls":rows,
+            "priority_policy":{"max_pending":MAX_MANUAL_PRIORITY,"priority_turns_before_regular":3,
+                "manual_reserve_per_site":self.metrics.snapshot().manual_reserve_per_site}});
+        let temporary = directory.join("manual-status.tmp");
+        fs::write(&temporary, serde_json::to_vec(&value)?)?;
+        fs::rename(temporary, directory.join("manual-status.json"))?;
         Ok(())
     }
     pub fn candidate_count(&self) -> Result<u64> {
@@ -1542,6 +1689,13 @@ impl Frontier {
         url: &Url,
         internal: bool,
     ) -> Result<bool> {
+        self.admit_capped(tx, stats, url, internal, self.budget, false)
+    }
+
+    fn admit_capped(
+        &self, tx: &WriteTransaction, stats: &mut Stats, url: &Url, internal: bool,
+        limit: u64, manual: bool,
+    ) -> Result<bool> {
         if !Self::admissible(url) {
             return Ok(false);
         }
@@ -1565,8 +1719,16 @@ impl Frontier {
             .max(old.as_ref().map_or(0, |r| r.not_before));
         let mut origin: OriginRow = match read::<OriginRow>(tx, ORIGINS, &site)? {
             Some(row) if row.round == stats.round => {
-                if !internal || row.admitted >= self.budget || row.state == "done" {
+                if !internal || row.admitted >= limit || (row.state == "done" && !manual) {
                     return Ok(false);
+                }
+                let mut row = row;
+                if row.state == "done" {
+                    if stats.pending_sites + stats.active_sites >= self.capacity as u64 { return Ok(false); }
+                    stats.sequence += 1; row.sequence=stats.sequence;
+                    row.not_before=row.not_before.max(due); row.state="pending".into();
+                    stats.pending_sites += 1;
+                    tx.open_table(READY)?.insert((row.not_before,row.sequence),site.as_str())?;
                 }
                 row
             }
@@ -1627,6 +1789,14 @@ impl Frontier {
         Self::queue_http_origin(tx, stats, &row)?;
         put(tx, ORIGINS, &site, &origin)?;
         Ok(true)
+    }
+
+    pub fn configure_manual_reserve(&self, reserve: u64) -> Result<()> {
+        anyhow::ensure!(reserve <= 16, "manual reserve must be at most 16 URLs per site/round");
+        if self.metrics.snapshot().manual_reserve_per_site != reserve {
+            self.transaction(|_, stats| { stats.manual_reserve_per_site=reserve; Ok(()) })?;
+        }
+        Ok(())
     }
 
     pub fn discover(&self, urls: impl IntoIterator<Item = Url>) -> Result<()> {
@@ -1895,10 +2065,20 @@ impl Frontier {
             return Ok(None);
         }
         self.transaction(|tx, stats| {
+            let streak: u64 = read(tx, META, "manual-priority-streak.v1")?.unwrap_or(0);
+            let priority = if turn && streak < 3 {
+                Self::manual_candidate(tx, stats.round, millis(now))?
+            } else { None };
+            let priority_url = priority.as_ref().map(|(_, url)| url.clone());
             let next = {
-                let ready = tx.open_table(READY)?;
-                let first = ready.iter()?.next().transpose()?;
-                first.map(|(key, value)| (key.value().0, value.value().to_owned()))
+                if let Some((site, _)) = &priority {
+                    let row: OriginRow = read(tx, ORIGINS, site)?.context("missing priority site")?;
+                    Some((row.not_before, site.clone()))
+                } else {
+                    let ready = tx.open_table(READY)?;
+                    let first = ready.iter()?.next().transpose()?;
+                    first.map(|(key, value)| (key.value().0, value.value().to_owned()))
+                }
             };
             let Some((due, site)) = next else {
                 return Ok(None);
@@ -1909,17 +2089,20 @@ impl Frontier {
             let mut origin: OriginRow =
                 read(tx, ORIGINS, &site)?.context("missing scheduled origin")?;
             let pending: Vec<String> = if turn {
-                let (due, http_origin) = Self::next_http_origin(tx, &site)?
-                    .context("ready site has no queued HTTP origin")?;
+                let (due, http_origin) = if let Some(key) = &priority_url {
+                    let row: UrlRow = read(tx, URLS, key)?.context("missing priority URL")?;
+                    let origin: HttpOriginRow = read(tx, HTTP_ORIGINS, &row.origin)?.context("missing priority HTTP origin")?;
+                    (origin.not_before, row.origin)
+                } else { Self::next_http_origin(tx, &site)?.context("ready site has no queued HTTP origin")? };
                 if due > millis(now) {
                     anyhow::bail!("site eligibility precedes its HTTP origins");
                 }
-                let pending = tx
+                let pending = if let Some(key) = &priority_url { vec![key.clone()] } else { tx
                     .open_table(HTTP_URLS)?
                     .range((http_origin.as_str(), "")..=(http_origin.as_str(), "\u{10ffff}"))?
                     .take(1)
                     .map(|entry| Ok(entry?.0.value().1.to_owned()))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()? };
                 let row: HttpOriginRow =
                     read(tx, HTTP_ORIGINS, &http_origin)?.context("missing queued HTTP origin")?;
                 tx.open_table(HTTP_READY)?
@@ -1955,6 +2138,7 @@ impl Frontier {
                     weight: 1.0,
                 });
             }
+            put(tx, META, "manual-priority-streak.v1", &if priority_url.is_some() { streak + 1 } else { 0 })?;
             tx.open_table(READY)?.remove((due, origin.sequence))?;
             origin.state = "active".into();
             put(tx, ORIGINS, &site, &origin)?;

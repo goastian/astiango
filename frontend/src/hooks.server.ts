@@ -1,3 +1,4 @@
+import '$lib/server/search-observation';
 import type { Handle } from '@sveltejs/kit';
 import { languageParameter, resolveLocale } from '../../packages/i18n';
 

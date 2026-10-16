@@ -6,12 +6,14 @@ import type { PublicSearch, PublicResult } from '$lib/public-search';
 import { resolveLocale } from '../../../../packages/i18n';
 import { recordSearch } from './search-observation';
 
-const token = (() => {
+function readProbeToken() {
   try { return readFileSync(resolve(env.SEARCH_PROBE_TOKEN_FILE || '../data/search-api/control-token'),'utf8').trim(); }
   catch { return ''; }
-})();
+}
 export function trafficFor(request: Request) {
-  const expected=Buffer.from(token), actual=Buffer.from(request.headers.get('x-frontend-probe')??'');
+  const supplied=request.headers.get('x-frontend-probe');
+  if(!supplied)return 'user';
+  const expected=Buffer.from(readProbeToken()), actual=Buffer.from(supplied);
   return expected.length>0 && expected.length===actual.length && timingSafeEqual(expected,actual) ? 'probe' : 'user';
 }
 
@@ -33,8 +35,8 @@ export async function realSearch(params: URLSearchParams, signal: AbortSignal, t
     target.search = new URLSearchParams({ q:query, count:'10', page:String(page-1), safe_search:params.get('ss') ?? 'false', language:resolveLocale(params.get('ui_lang')) }).toString();
     const headers: Record<string,string> = {};
     // A local integration runner may label probes; normal browsers cannot choose traffic.
-    if (traffic === 'probe' && token) {
-      headers.Authorization=`Bearer ${token}`;
+    if (traffic === 'probe' && readProbeToken()) {
+      headers.Authorization=`Bearer ${readProbeToken()}`;
       headers['X-Search-Traffic']='probe';
     }
     const response = await fetch(target,{signal:AbortSignal.any([signal,AbortSignal.timeout(3000)]),headers});
@@ -63,7 +65,9 @@ export async function realSearch(params: URLSearchParams, signal: AbortSignal, t
     metadata={engineRequestId:payload.id,generation:payload.generation,nativeCpuMs:payload.native_cpu_ms,allocatedBytes:payload.allocated_bytes,responseBytes:bytes,results:results.length,cache:payload.cache,stagesMs:payload.stages_ms};
     return {version:1,id,generation:payload.generation,query,page,results,total,
       hasMore:page>=21 ? false : (typeof payload.has_more==='boolean' ? payload.has_more : total.kind==='exact' ? (total.value??0)>page*10 : null),
-      durationMs:payload.wall_ms,cache:payload.cache};
+      durationMs:payload.wall_ms,cache:payload.cache,
+      navigationHost:payload.query_interpretation?.kind==='domain_navigation' && typeof payload.query_interpretation.host==='string' ? (typeof payload.query_interpretation.effective_host==='string' ? payload.query_interpretation.effective_host : payload.query_interpretation.host) : undefined,
+      navigationFrom:payload.query_interpretation?.redirect_evidence==='serving_generation_capture' && typeof payload.query_interpretation.host==='string' ? payload.query_interpretation.host : undefined};
   } catch(error) {
     status=error instanceof SearchFailure ? error.status : signal.aborted ? 499 : error instanceof Error && ['TimeoutError','AbortError'].includes(error.name)?504:503;
     outcome=error instanceof SearchFailure ? error.code : status===499?'cancelled':status===504?'deadline':'api_unavailable';

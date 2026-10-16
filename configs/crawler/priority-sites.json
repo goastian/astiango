@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "provenance": "Operator-selected initial coverage. This is not a measured traffic ranking or a claim of global coverage.",
+  "sites": [
+    {"name": "Wikipedia", "urls": ["https://www.wikipedia.org/", "https://es.wikipedia.org/wiki/Wikipedia:Portada", "https://en.wikipedia.org/wiki/Main_Page"]},
+    {"name": "Amazon", "urls": ["https://amazon.com/"]},
+    {"name": "Facebook", "urls": ["https://www.facebook.com/"]},
+    {"name": "Instagram", "urls": ["https://www.instagram.com/"]},
+    {"name": "YouTube", "urls": ["https://youtube.com/"]}
+  ]
+}

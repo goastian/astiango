@@ -13,6 +13,7 @@
   import SystemOverview from "./SystemOverview.svelte";
   import SearchStatus from "./SearchStatus.svelte";
   import FrontendStatus from "./FrontendStatus.svelte";
+  import ManualSeeds from "./ManualSeeds.svelte";
   import type { SearchResponse } from "./search-api";
   import { consumerActivity } from "./work-status";
   import Pagination from "./Pagination.svelte";
@@ -519,6 +520,8 @@
         <SystemOverview flow={usableFlow} {snapshot} {indexing} {indexingLive} {webgraph} {webgraphLive} search={searchApi} {searchLive} connected={live} status={statusText} readingPaused={paused} inventory={view === "components"} />
         {#if view === "overview"}<SearchStatus response={searchApi} {now} mode="summary" /><a class="button" href="#/frontend/overview">{$t("Web frontend")} · {$t(frontendLive ? "Running" : "State unavailable or stale")} →</a>{/if}
         {#if view === "overview"}<GenerationStorage storage={generationStorage} {indexing} {webgraph} {now} />{/if}
+      {:else if view === "manual-seeds"}
+        <ManualSeeds {paused} />
       {:else if view.startsWith("frontend")}
         <FrontendStatus {paused} searchReady={searchLive && !!searchApi?.snapshot.ready} mode={view === "frontend" ? "overview" : view.slice("frontend-".length)} />
       {:else if searchView}
