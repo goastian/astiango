@@ -12,6 +12,7 @@
   import type { ComponentFlow } from "./component-flow";
   import SystemOverview from "./SystemOverview.svelte";
   import SearchStatus from "./SearchStatus.svelte";
+  import FrontendStatus from "./FrontendStatus.svelte";
   import type { SearchResponse } from "./search-api";
   import { consumerActivity } from "./work-status";
   import Pagination from "./Pagination.svelte";
@@ -48,6 +49,8 @@
   let webgraphError = $state("");
   let searchApi = $state<SearchResponse | null>(null);
   let searchError = $state("");
+  let frontend = $state<any>(null);
+  let frontendError = $state("");
   let indexingError = $state("");
   let loading = $state(false);
   let paused = $state(false);
@@ -58,14 +61,16 @@
   let selectedHost = $state("");
   let windowMinutes = $state(15);
   let view = $state(resolveView(window.location.hash));
+  const frontendView = $derived(view.startsWith("frontend"));
+  const frontendLive = $derived(!!frontend && !frontendError && frontend.meta.process_alive && now-Date.parse(frontend.snapshot.updated_at)<10000);
   const indexingView = $derived(view.startsWith("indexing"));
   const indexingLive = $derived(!!indexing && !indexingError && indexing.meta.process_alive === true && now - Date.parse(indexing.snapshot.updated_at) <= 10_000 && indexing.snapshot.phase !== "stopped");
   const webgraphView = $derived(view.startsWith("webgraph"));
   const searchView = $derived(view.startsWith("search"));
   const searchLive = $derived(!!searchApi && !searchError && searchApi.meta.process_alive && now-Date.parse(searchApi.snapshot.updated_at)<=10000);
   const webgraphLive = $derived(!!webgraph && !webgraphError && webgraph.meta.process_alive === true && now-Date.parse(webgraph.snapshot.updated_at) <= 10_000 && webgraph.snapshot.phase !== "stopped");
-  const selectedResponse = $derived(searchView ? searchApi : webgraphView ? webgraph : indexingView ? indexing : response);
-  const componentName = $derived(searchView ? "Search & API" : webgraphView ? "Webgraph" : indexingView ? "Indexing" : "Crawler");
+  const selectedResponse = $derived(frontendView ? frontend : searchView ? searchApi : webgraphView ? webgraph : indexingView ? indexing : response);
+  const componentName = $derived(view.startsWith("frontend") ? "Web frontend" : searchView ? "Search & API" : webgraphView ? "Webgraph" : indexingView ? "Indexing" : "Crawler");
   let flow = $state<ComponentFlow | null>(null);
   let generationStorage = $state<GenerationStorageState | null>(null);
   const usableFlow = $derived(flow && now-Date.parse(flow.updated_at)<=10000 ? {...flow,signals:flow.signals?.generation===webgraph?.snapshot.generation?.id ? flow.signals : null} : null);
@@ -219,8 +224,8 @@
               ? "Telemetría sin actualizar"
               : phases[snapshot.phase],
   );
-  const selectedLive = $derived(searchView ? searchLive : webgraphView ? webgraphLive : indexingView ? indexingLive : live);
-  const selectedStatus = $derived(searchView ? paused ? "Showing the last available sample." : !searchLive ? "State unavailable or stale" : searchApi?.snapshot.ready ? "Ready" : "Waiting for a validated generation" : webgraphView || indexingView ? paused ? "Showing the last available sample." : !selectedLive ? "State unavailable or stale" : consumerActivity(webgraphView ? webgraph?.snapshot : indexing?.snapshot,snapshot).label : statusText);
+  const selectedLive = $derived(frontendView ? frontendLive : searchView ? searchLive : webgraphView ? webgraphLive : indexingView ? indexingLive : live);
+  const selectedStatus = $derived(frontendView ? frontendLive ? "Running" : "State unavailable or stale" : searchView ? paused ? "Showing the last available sample." : !searchLive ? "State unavailable or stale" : searchApi?.snapshot.ready ? "Ready" : "Waiting for a validated generation" : webgraphView || indexingView ? paused ? "Showing the last available sample." : !selectedLive ? "State unavailable or stale" : consumerActivity(webgraphView ? webgraph?.snapshot : indexing?.snapshot,snapshot).label : statusText);
   const elapsed = $derived(
     snapshot
       ? Math.max(
@@ -409,6 +414,7 @@
     };
     // One request per component; a stalled channel cannot suspend the others.
     await Promise.allSettled([
+      refreshComponent("frontend", signal => read("/api/frontend",signal), value=>{frontend=value;frontendError="";},()=>{frontendError="Frontend observation unavailable";},force),
       refreshComponent("search", signal => read("/api/search/status", signal), value => { searchApi=value;searchError=""; }, () => { searchError="Search state is unavailable or stale."; }, force),
       refreshComponent("history", signal => read("/ingestion-retention-live.json", signal), value => { generationStorage = value; }, () => {}, force),
       refreshComponent("flow", signal => read("/component-flow.json", signal), value => { flow = value; }, () => {}, force),
@@ -511,8 +517,10 @@
       {/if}
       {#if view === "overview" || view === "components"}
         <SystemOverview flow={usableFlow} {snapshot} {indexing} {indexingLive} {webgraph} {webgraphLive} search={searchApi} {searchLive} connected={live} status={statusText} readingPaused={paused} inventory={view === "components"} />
-        {#if view === "overview"}<SearchStatus response={searchApi} {now} mode="summary" />{/if}
+        {#if view === "overview"}<SearchStatus response={searchApi} {now} mode="summary" /><a class="button" href="#/frontend/overview">{$t("Web frontend")} · {$t(frontendLive ? "Running" : "State unavailable or stale")} →</a>{/if}
         {#if view === "overview"}<GenerationStorage storage={generationStorage} {indexing} {webgraph} {now} />{/if}
+      {:else if view.startsWith("frontend")}
+        <FrontendStatus {paused} searchReady={searchLive && !!searchApi?.snapshot.ready} mode={view === "frontend" ? "overview" : view.slice("frontend-".length)} />
       {:else if searchView}
         <SearchStatus response={searchApi} {now} error={searchError} mode={view === "search" ? "overview" : view.slice("search-".length)} />
       {:else if webgraphView}

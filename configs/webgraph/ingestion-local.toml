@@ -1,7 +1,7 @@
 # Upgrade alongside the running legacy observer; consumers adopt generations explicitly.
 source_spool = "data/crawler-local/warc/spool"
 state_directory = "data/webgraph-ingestion"
-binary = "data/artifacts/ingestion-runtime/8bb8d773c943e925574dc9ce650c9d777f40a3ac79c9300b26c68fa2468e1f1c/webgraph/astiango-webgraph-runtime"
+binary = "data/artifacts/ingestion-runtime/fd0869e2de99542d068f88387d29ad49a61e65b5166de9995fc94095fd9a75d5/webgraph/astiango-webgraph-runtime"
 poll_seconds = 2
 scan_seconds = 10
 max_pending = 32

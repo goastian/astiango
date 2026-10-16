@@ -1,27 +1,10 @@
-import { shouldShowCaptcha } from '$lib/captcha/rateLimiter';
-import { extractSearchParams, type SearchParams } from '$lib/search';
 import { redirect } from '@sveltejs/kit';
-import type { Actions, PageServerLoadEvent } from './$types';
-
-export const load = async ({ locals, getClientAddress, url, request }: PageServerLoadEvent) => {
-  const searchParams: SearchParams | undefined =
-    (locals['form'] && extractSearchParams(locals['form'])) || undefined;
-
-  const clientAddress = request.headers.get('x-real-ip') || getClientAddress();
-
-  if (await shouldShowCaptcha(clientAddress)) {
-    return redirect(302, `/sorry?redirectTo=${encodeURIComponent(url.toString())}`);
-  }
-
-  return { form: searchParams, clientAddress };
+import { realSearch, SearchFailure, trafficFor } from '$lib/server/public-search';
+import type { PageServerLoad } from './$types';
+export const load: PageServerLoad = async ({ url, request, setHeaders }) => {
+  setHeaders({'Cache-Control':'no-store'});
+  if(!(url.searchParams.get('q')??'').trim()) redirect(303,'/');
+  const query=url.searchParams.get('q')??'';
+  try { return { query, result:await realSearch(url.searchParams,request.signal,trafficFor(request)), failure:null }; }
+  catch(error) { return {query,result:null,failure:{code:error instanceof SearchFailure?error.code:'api_unavailable',status:error instanceof SearchFailure?error.status:503}}; }
 };
-
-export const actions: Actions = {
-  default: async (event) => {
-    const { request } = event;
-
-    event.locals.form = await request.formData();
-
-    return { success: true };
-  },
-} satisfies Actions;

@@ -1,0 +1,43 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { getI18n } from './i18n';
+  import TimeChart from './TimeChart.svelte';
+  const {t,formatLocale}=getI18n();
+  let { mode='overview', paused=false, searchReady=false }: {mode?:string;paused?:boolean;searchReady?:boolean}=$props();
+  let data=$state<any>(null), error=$state(''), page=$state(1), traffic=$state('user');
+  const money=(n:number)=>new Intl.NumberFormat($formatLocale,{maximumSignificantDigits:4}).format(n);
+  const number=(n:number|null|undefined)=>n==null?'—':new Intl.NumberFormat($formatLocale,{maximumFractionDigits:2}).format(n);
+  let refresh=()=>{};
+  onMount(()=>{
+    let busy=false,stopped=false;const controller=new AbortController();
+    const read=async()=>{if(busy || stopped || paused)return;busy=true;try{
+      const response=await fetch(`/api/frontend?page=${page}&traffic=${traffic}`,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(3000)])});
+      if(!response.ok)throw Error('Frontend observation unavailable');
+      const value=await response.json();if(!stopped){data=value;error='';}
+    }catch{if(!stopped)error='Frontend observation unavailable';}finally{busy=false;}};
+    refresh=()=>void read();void read();const timer=setInterval(()=>void read(),2000);
+    return()=>{stopped=true;controller.abort();clearInterval(timer);};
+  });
+  const snapshot=$derived(data?.snapshot);
+  const cost=$derived(snapshot?.cost);
+</script>
+{#if error}<div class="notice" role="status">{$t(error)}</div>{/if}
+<div class="frontend-heading"><div><p>{$t('Web frontend')}</p><h2>{$t(mode==='queries'?'Search queries':mode==='diagnostics'?'User experience':'Live search')}</h2></div><a class="button" href="http://127.0.0.1:8000/" target="_blank" rel="noreferrer">{$t('Open search')} ↗</a></div>
+<section class="frontend-kpis">
+  <article><span>{$t('Status')}</span><strong>{$t(data?.meta?.process_alive && Date.now()-Date.parse(snapshot?.updated_at)<10000?'Running':'State unavailable or stale')}</strong><small>{snapshot?.build?.mode??'—'} · :8000 · {$t(searchReady?'Ready':'Search is temporarily unavailable. Please try again.')}</small></article>
+  <article><span>{$t('Latency')} · p95</span><strong>{number(snapshot?.window?.p95_ms)} <small>ms</small></strong><small>{number(snapshot?.window?.samples)} {$t('Samples')} · 60 s</small></article>
+  <article><span>{$t('Native CPU per query')}</span><strong>{number(cost?.cpu_samples?cost.native_cpu_ms/cost.cpu_samples:null)} <small>ms</small></strong><small>{$t('User queries; probes excluded')}</small></article>
+  <article><span>{$t('Payload per query')}</span><strong>{number(cost?.byte_samples?cost.response_bytes/cost.byte_samples/1024:null)} <small>KiB</small></strong><small>{$t('Measured API JSON bytes')}</small></article>
+</section>
+{#if mode!=='queries'}
+  <div class="frontend-charts"><article class="panel"><header><h3>{$t('Response time')}</h3><span>ms · {$t('Real searches')}</span></header><TimeChart points={(snapshot?.history??[]).map((r:any)=>({at:r.at,value:r.latency_ms}))} label="Response time" color="#326d50" /></article><article class="panel"><header><h3>{$t('Native CPU per query')}</h3><span>ms</span></header><TimeChart points={(snapshot?.history??[]).map((r:any)=>({at:r.at,value:r.cpu_ms}))} label="Native CPU per query" color="#596f87" /></article></div>
+  <section class="panel cost"><header><h3>{$t('Cost of search')}</h3><span>{number(cost?.samples)} {$t('Samples')}</span></header><div><strong>{cost?.price_configured?`${money(cost.estimated_variable_cost)} ${cost.currency}`:$t('Rates not configured')}</strong><span>{$t('Variable estimate: native CPU and response bytes only.')}</span></div><p>{$t('Excludes idle capacity, RAM, storage, ingestion and frontend CPU.')}</p><p>{$t('Local diagnostics retain up to 256 queries for 24 hours. No IPs or cookies are recorded.')}</p></section>
+{/if}
+<section class="panel query-table"><header><h3>{$t('Search queries')}</h3><div><select aria-label={$t('Traffic')} bind:value={traffic} onchange={()=>{page=1;refresh();}}><option value="user">{$t('Real searches')}</option><option value="probe">{$t('Integration probes')}</option></select></div></header><p>{$t('Intent is a lexical inference, not a verified user objective.')}</p>
+<div class="table-scroll"><table><thead><tr>{#each ['Query','Keywords','Inferred intent','Outcome','Latency','Native CPU','Payload bytes','Query results','Cache','Cost of search','Generation'] as label}<th>{$t(label)}</th>{/each}</tr></thead><tbody>{#each data?.queries??[] as row}<tr><td><strong>{row.query}</strong>{#if row.stagesMs}<details><summary>{$t('Engine work')}</summary>{#each Object.entries(row.stagesMs) as [stage,ms]}<small>{stage.replaceAll('_',' ')}: {number(ms as number)} ms</small>{/each}<small>{$t('Allocated bytes')}: {number(row.allocatedBytes)}</small></details>{/if}<time>{new Date(row.at).toLocaleTimeString($formatLocale)}</time></td><td>{row.keywords.join(' · ')}</td><td>{$t(row.intent)}</td><td>{$t(row.outcome)}<small>HTTP {row.status}</small></td><td>{number(row.apiMs)} ms{#if row.domReadyMs!==undefined}<small>DOM {number(row.domReadyMs)} ms</small>{/if}</td><td>{number(row.nativeCpuMs)} ms</td><td>{number(row.responseBytes)}</td><td>{number(row.results)}</td><td>{row.cache??'—'}</td><td>{cost?.price_configured && row.nativeCpuMs!==undefined && row.responseBytes!==undefined ? `${money(row.nativeCpuMs/3600000*cost.rates.cpuHour+row.responseBytes/1073741824*cost.rates.egressGiB)} ${cost.currency}` : '—'}</td><td title={row.generation}>{row.generation?.slice(0,8)??'—'}</td></tr>{/each}</tbody></table></div>
+{#if !data?.queries?.length}<p>{$t('No searches recorded in this traffic class.')}</p>{/if}
+<div class="pages"><button class="button" disabled={page<=1} onclick={()=>{page--;refresh();}}>{$t('Previous page')}</button><span>{$t('Page {p0}',{p0:page})} · {data?.total??0}</span><button class="button" disabled={page*10>=(data?.total??0)} onclick={()=>{page++;refresh();}}>{$t('Next page')}</button></div></section>
+{#if mode==='diagnostics'}<section class="panel"><header><h3>{$t('Diagnostics')}</h3></header><dl><dt>RSS · Vite</dt><dd>{number(snapshot?.resources?.rss_bytes/1048576)} MiB</dd><dt>{$t('Heap memory')}</dt><dd>{number(snapshot?.resources?.heap_bytes/1048576)} MiB</dd><dt>{$t('API contract')}</dt><dd>{snapshot?.build?.api??'—'}</dd><dt>{$t('Telemetry errors')}</dt><dd>{snapshot?.telemetry_error??'—'}</dd></dl><p>{$t('DOM timing includes hydration or navigation after response end; it is not field Core Web Vitals.')}</p></section>{/if}
+<style>
+  .frontend-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.frontend-heading p{font-size:12px;color:#61716a;margin:0 0 8px}.frontend-heading h2{font-size:24px;margin:0}.frontend-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid #dce4de;margin-bottom:24px}.frontend-kpis article{padding:24px;border-right:1px solid #dce4de;min-width:0}.frontend-kpis article:last-child{border:0}.frontend-kpis span{font-size:12px;color:#61716a}.frontend-kpis strong{display:block;font-size:28px;margin:16px 0;font-variant-numeric:tabular-nums}.frontend-kpis small{display:block;font-size:11px;font-weight:400;color:#61716a}.frontend-kpis strong small{display:inline}.frontend-charts{display:grid;grid-template-columns:1fr 1fr;gap:24px}.panel{padding:24px;margin-bottom:24px;min-width:0}header{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:24px}h3{font-size:15px;margin:0}header span,p,dl{font-size:12px;color:#61716a}p{line-height:1.6}.cost>div{display:flex;gap:24px;align-items:center;flex-wrap:wrap}.cost strong{font-size:24px}.cost span{font-size:13px;color:#61716a}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left;font-size:12px}th{font-size:11px;font-weight:500;color:#61716a}th,td{padding:16px 12px;border-bottom:1px solid #e4e9e5;vertical-align:top;min-width:85px}td:first-child{min-width:180px;max-width:300px;overflow-wrap:anywhere}time,td small{display:block;font-size:10px;color:#61716a;margin-top:8px}select{padding:8px;border:1px solid #dce4de;background:white;color:inherit;border-radius:4px}.pages{display:flex;align-items:center;justify-content:space-between;margin-top:24px;font-size:12px}dl{display:grid;grid-template-columns:1fr 1fr;gap:16px}dd{margin:0;color:#283d30;overflow-wrap:anywhere}@media(max-width:1000px){.frontend-kpis{grid-template-columns:1fr 1fr}.frontend-kpis article{border-bottom:1px solid #dce4de}}@media(max-width:650px){.frontend-charts{grid-template-columns:1fr}.frontend-kpis article,.panel{padding:16px}.frontend-kpis strong{font-size:22px}.frontend-heading{flex-wrap:wrap;gap:16px}}
+</style>

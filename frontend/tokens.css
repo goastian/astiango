@@ -14,7 +14,7 @@
   --color-rule: oklch(84% 0.018 185);
   --color-rule-soft: oklch(91% 0.012 185);
   --color-accent: oklch(63% 0.14 185);
-  --color-accent-strong: oklch(54% 0.15 185);
+  --color-accent-strong: oklch(49% 0.15 185);
   --color-accent-soft: oklch(92% 0.055 185);
   --color-coral: oklch(66% 0.16 27);
   --color-link: oklch(44% 0.14 255);
@@ -90,7 +90,7 @@ html.theme-pastel {
   --color-rule: oklch(83% 0.04 45);
   --color-rule-soft: oklch(90% 0.028 45);
   --color-accent: oklch(66% 0.12 185);
-  --color-accent-strong: oklch(56% 0.13 185);
+  --color-accent-strong: oklch(49% 0.13 185);
   --color-accent-soft: oklch(91% 0.07 185);
   --color-coral: oklch(68% 0.12 35);
   --color-link: oklch(45% 0.14 255);
@@ -111,7 +111,7 @@ html.theme-nord-light {
   --color-rule: oklch(80% 0.025 230);
   --color-rule-soft: oklch(88% 0.02 230);
   --color-accent: oklch(64% 0.09 210);
-  --color-accent-strong: oklch(54% 0.1 220);
+  --color-accent-strong: oklch(49% 0.1 220);
   --color-accent-soft: oklch(90% 0.04 210);
   --color-coral: oklch(65% 0.09 35);
   --color-link: oklch(46% 0.1 245);
@@ -132,7 +132,7 @@ html.theme-ugly {
   --color-rule: oklch(73% 0.07 88);
   --color-rule-soft: oklch(81% 0.06 88);
   --color-accent: oklch(63% 0.1 155);
-  --color-accent-strong: oklch(53% 0.11 155);
+  --color-accent-strong: oklch(49% 0.11 155);
   --color-accent-soft: oklch(84% 0.08 155);
   --color-coral: oklch(68% 0.11 40);
   --color-link: oklch(43% 0.13 255);

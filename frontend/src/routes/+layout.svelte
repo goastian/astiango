@@ -22,9 +22,9 @@
 <div class="grid min-h-screen grid-rows-[auto_1fr_auto] font-light">
   <Header />
 
-  <div id="main">
+  <main id="main" tabindex="-1">
     <slot />
-  </div>
+  </main>
 
   <Footer />
 </div>

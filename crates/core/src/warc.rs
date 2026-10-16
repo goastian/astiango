@@ -377,6 +377,11 @@ impl Response {
         let payload = &record.content[separator + 4..];
         let body = if record.header.contains_key("ASTIAN-CAPTURE-VERSION") {
             let headers = String::from_utf8_lossy(&record.content[..separator]);
+            let status = headers
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .and_then(|value| value.parse::<u16>().ok());
             let mut encoding = String::new();
             let mut charset = "UTF-8".to_owned();
             for line in headers.lines().skip(1) {
@@ -393,7 +398,14 @@ impl Response {
                     }
                 }
             }
-            crate::capture::decode(payload, &encoding, &charset, decoded_limit)?
+            // 304 may describe the selected representation's encoding while
+            // carrying no representation body. Do not feed it to a codec.
+            if matches!(status, Some(100..=199 | 204 | 304)) {
+                anyhow::ensure!(payload.is_empty(), "body forbidden for HTTP status");
+                String::new()
+            } else {
+                crate::capture::decode(payload, &encoding, &charset, decoded_limit)?
+            }
         } else {
             anyhow::ensure!(
                 payload.len() <= decoded_limit,

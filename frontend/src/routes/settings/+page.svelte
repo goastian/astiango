@@ -69,7 +69,9 @@
           </div>
           <div class="flex flex-col pr-5 sm:flex-row sm:justify-between sm:space-y-0">
             <div>
-              {#if setting._type == 'safe-search'}
+              {#if ['post','mark-pages-with-ads','mark-pages-with-paywall','show-ranking-signals'].includes(setting._type)}
+                <span class="text-sm">{$t('Unavailable with the current search engine.')}</span>
+              {:else if setting._type == 'safe-search'}
                 <SafeSearchSelect />
               {:else if setting._type == 'theme'}
                 <ThemeSelect />

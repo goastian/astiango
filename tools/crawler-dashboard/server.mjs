@@ -67,6 +67,7 @@ export function createDashboardServer({
     try { return await searchReadPromise; } finally { searchReadPromise=null; }
   }
   const distRoot = resolve(distDirectory);
+  const frontend = snapshotCache(resolve(appDirectory, "../../data/frontend/status.json"), 2 * 1024 * 1024, value => value.schema_version === 1 && value.component === "frontend" && Array.isArray(value.queries) && value.queries.length <= 256);
   const observations = snapshotCache(statePath);
   const series = resourceSeries(seriesPath);
   const generations = snapshotCache(resolve(dirname(indexingPath), "index/generations/status.json"), 256 * 1024, value => value.version === 1 && Array.isArray(value.generations) && value.generations.length <= 32);
@@ -125,6 +126,19 @@ export function createDashboardServer({
       } catch (error) {
         respondJson(response, error.code === "ENOENT" ? 404 : 503, { code: "OPERATIONS_UNAVAILABLE", error: "Operational verification is unavailable." });
       }
+      return;
+    }
+    if (pathname === "/api/frontend") {
+      if (!["127.0.0.1","::1","::ffff:127.0.0.1"].includes(request.socket.remoteAddress)) { respondJson(response,403,{error:"Local observation only"});return; }
+      try {
+        const {snapshot} = await frontend.get();
+        const parameters = new URL(request.url,"http://localhost").searchParams;
+        const page = Math.max(1,Math.min(26,Number(parameters.get("page"))||1));
+        const traffic = parameters.get("traffic")==="probe" ? "probe" : "user";
+        const rows=snapshot.queries.filter(row=>row.traffic===traffic).slice().reverse();
+        const {queries,...summary}=snapshot;
+        respondJson(response,200,{snapshot:summary,queries:rows.slice((page-1)*10,page*10),total:rows.length,page,meta:{process_alive:processAlive(snapshot.pid),read_at:new Date().toISOString()}});
+      } catch { respondJson(response,503,{error:"Frontend observation unavailable"}); }
       return;
     }
     if (pathname.startsWith("/api/search/")) {

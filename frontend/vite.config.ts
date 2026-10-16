@@ -11,9 +11,9 @@ import { normalizePath } from 'vite';
 export default defineConfig({
   plugins: [
     wasm(),
-    wasmPack({
+    ...(process.env.WATCH_WASM === 'true' ? [wasmPack({
       crates: ['../crates/client-wasm/'],
-    }),
+    })] : []),
     topLevelAwait(),
     sveltekit(),
     Icons({ compiler: 'svelte' }),

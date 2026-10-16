@@ -2,9 +2,6 @@
   "name": "frontend",
   "version": "0.0.1",
   "private": true,
-  "workspaces": [
-    "../crates/client-wasm/pkg"
-  ],
   "scripts": {
     "dev": "vite dev --port 8000",
     "build": "vite build",
@@ -16,7 +13,9 @@
     "format": "prettier --plugin prettier-plugin-svelte --plugin prettier-plugin-tailwindcss --write .",
     "openapi": "abeye generate http://localhost:3000/beta/api/docs/openapi.json -t ts --api-prefix /beta/api -o src/lib/api/index.ts && prettier --write src/lib/api/index.ts",
     "test:integration": "playwright test",
-    "test:unit": "vitest"
+    "test:unit": "vitest",
+    "test:public": "node tests/public-search.mjs",
+    "verify:local": "npm run check && npm run build && node tests/public-search.mjs && node tests/failure-recovery.mjs"
   },
   "devDependencies": {
     "@iconify-json/heroicons": "^1.1.16",
@@ -62,7 +61,6 @@
   "dependencies": {
     "@types/uuid": "^10.0.0",
     "async-mutex": "^0.5.0",
-    "client-wasm": "file:../crates/client-wasm/pkg",
     "colord": "^2.9.3",
     "file-saver": "^2.0.5",
     "highlight.js": "^11.9.0",
@@ -72,7 +70,7 @@
     "uuid": "^10.0.0"
   },
   "engines": {
-    "node": "^20.10.x"
+    "node": ">=22.22.2 <23"
   },
   "overrides": {
     "@sveltejs/kit": {

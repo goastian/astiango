@@ -24,6 +24,9 @@ export const views = [
   { id: "search-diagnostics", path: "/search/diagnostics", group: "Search & API", label: "Search diagnostics", icon: "activity", description: "Outcomes, dependency failures and confirmed actions." },
   { id: "search-configuration", path: "/search/configuration", group: "Search & API", label: "Search configuration", icon: "settings", description: "Effective query budgets, build and capabilities." },
   { id: "search-access", path: "/search/access", group: "Search & API", label: "API access", icon: "settings", description: "Commercial API roadmap and current access scope." },
+  { id: "frontend", path: "/frontend/overview", group: "Web frontend", label: "Live search", icon: "search", description: "Real queries, response latency and resource cost." },
+  { id: "frontend-queries", path: "/frontend/queries", group: "Web frontend", label: "Search queries", icon: "activity", description: "Keywords, inferred intent and measured query work." },
+  { id: "frontend-diagnostics", path: "/frontend/diagnostics", group: "Web frontend", label: "User experience", icon: "chart", description: "Browser delivery, memory and API diagnostics." },
   { id: "benchmarks", path: "/tools/benchmarks", group: "Herramientas", label: "Pruebas de capacidad", icon: "experiment", description: "Mediciones locales y comparaciones reproducibles, separadas de la operación." },
 ];
 

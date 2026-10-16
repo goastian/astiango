@@ -19,7 +19,7 @@ const config = {
 
   kit: {
     csrf: {
-      checkOrigin: false,
+      checkOrigin: true,
     },
     // adapter-auto only supports some environments, see https://kit.svelte.dev/docs/adapter-auto for a list.
     // If your environment is not supported or you settled on a specific environment, switch out the adapter.
@@ -31,7 +31,7 @@ const config = {
         'script-src': ['self', 'wasm-unsafe-eval'],
         // NOTE: Disabled in order to fetch optic sources client-side
         // 'connect-src': ["'self'", 'http://localhost:3000/'],
-        'connect-src': ['*'],
+        'connect-src': ['self'],
         'img-src': ['self', 'data:', 'astiango.com', '0.0.0.0:3000', 'localhost:3000'],
         'style-src': ['self', 'unsafe-inline'],
         'media-src': ['data:'],

@@ -41,7 +41,7 @@ export const requestPlain = (
         throw text;
       }
     } else {
-      throw res.text();
+      throw new Error(`API ${res.status}: ${(await res.text()).slice(0,256)}`);
     }
   });
 
